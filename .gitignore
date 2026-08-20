@@ -8,7 +8,7 @@ secrets.toml
 keys.toml
 *.env
 *.state
-.test_home/
+.test/
 .sandbox/
 config.default.toml
 docs/
