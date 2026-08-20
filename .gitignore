@@ -1,0 +1,40 @@
+# =====================================================================
+#  ❖ ABRAXAS | GITIGNORE MAESTRO (SEGURIDAD Y PRIVACIDAD TOTAL)
+# =====================================================================
+
+# Configuración y Secretos Locales del Usuario
+config.toml
+secrets.toml
+keys.toml
+*.env
+*.state
+.test_home/
+.sandbox/
+config.default.toml
+docs/
+
+# Cachés y Archivos de Sesión
+cache/
+logs/
+*.log
+*.tmp
+last_result.txt
+current_dir.txt
+
+# Entornos y Bytecode de Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# Interfaz Gráfica (Tauri / Rust / Node)
+gui/target/
+gui/node_modules/
+gui/dist/
+gui/build/
+
+# Archivos de Sistema y Escritorio
+.DS_Store
+.directory
+Thumbs.db
