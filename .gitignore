@@ -38,3 +38,30 @@ gui/build/
 .DS_Store
 .directory
 Thumbs.db
+
+# Entornos de Pruebas y Cobertura
+.test_home/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Herramientas de Desarrollo, Compilación y Empaquetado Python
+.mypy_cache/
+.ruff_cache/
+.tox/
+dist/
+build/
+*.egg-info/
+
+# Editores y Entornos de Desarrollo (IDEs)
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+*~
+
+# Archivos Temporales y Empaquetados
+.version
+*.tar.gz
+*.zip
