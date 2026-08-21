@@ -16,6 +16,12 @@ RESET='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+if [ -f "$SCRIPT_DIR/VERSION" ]; then
+    VERSION=$(cat "$SCRIPT_DIR/VERSION" | tr -d '[:space:]')
+else
+    VERSION="0.1.1"
+fi
+
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/abraxas"
 SHARE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/abraxas"
 CONFIG_FILE="$CONFIG_DIR/config.toml"
@@ -69,9 +75,9 @@ if [[ "$HAS_DISPLAY" == "true" && "$HAS_PYSIDE" == "true" && "$CLI_MODE" == "fal
 else
     echo -e "\n${C_GOLD}=====================================================================${RESET}"
     if [[ "$PREVIEW_MODE" == "true" ]]; then
-        echo -e "  ${C_AMBER}❖ SIMULANDO INSTALACIÓN DE ABRAXAS (v0.1.0) — MODO TERMINAL (CLI) ❖${RESET}"
+        echo -e "  ${C_AMBER}❖ SIMULANDO INSTALACIÓN DE ABRAXAS (v${VERSION}) — MODO TERMINAL (CLI) ❖${RESET}"
     else
-        echo -e "  ${C_GOLD}❖ INSTALANDO ABRAXAS (v0.1.0) — MODO TERMINAL (CLI) ❖${RESET}"
+        echo -e "  ${C_GOLD}❖ INSTALANDO ABRAXAS (v${VERSION}) — MODO TERMINAL (CLI) ❖${RESET}"
     fi
     echo -e "${C_GOLD}=====================================================================${RESET}\n"
 
@@ -100,6 +106,6 @@ else
         echo -e "\n  ${C_GOLD}Ejecutando diagnóstico inicial del sistema...${RESET}"
         python3 core/doctor.py
 
-        echo -e "  ${C_GREEN}✨ Instalación de ABRAXAS v0.1.0 completada exitosamente.${RESET}\n"
+        echo -e "  ${C_GREEN}✨ Instalación de ABRAXAS v${VERSION} completada exitosamente.${RESET}\n"
     fi
 fi

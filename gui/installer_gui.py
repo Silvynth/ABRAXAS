@@ -22,6 +22,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT_DIR)
 
 from core.setup import write_toml_dict, read_toml_dict, TEMPLATE_PATH, get_target_config_path
+from core import __version__, __app_name__
 
 # =====================================================================
 #  MINIMALIST DESIGN SYSTEM & COLOR TOKENS
@@ -325,9 +326,9 @@ class AbraxasInstallerGUI(QWidget):
         self.is_preview = any(arg in sys.argv for arg in ["--preview", "--dry-run", "-p", "--simulated"])
         
         if self.is_preview:
-            self.setWindowTitle("ABRAXAS — Asistente de Instalación [Vista Previa]")
+            self.setWindowTitle(f"ABRAXAS v{__version__} — Asistente de Instalación [Vista Previa]")
         else:
-            self.setWindowTitle("ABRAXAS — Asistente de Instalación")
+            self.setWindowTitle(f"ABRAXAS v{__version__} — Asistente de Instalación")
             
         self.setFixedSize(780, 580)
         self.setStyleSheet(STYLESHEET)
@@ -361,7 +362,7 @@ class AbraxasInstallerGUI(QWidget):
         lbl_brand = QLabel("ABRAXAS")
         lbl_brand.setProperty("class", "app_brand")
         
-        lbl_ver = QLabel("v0.1.0")
+        lbl_ver = QLabel(f"v{__version__}")
         lbl_ver.setProperty("class", "version_tag")
         
         header_row.addWidget(lbl_brand)
@@ -915,7 +916,7 @@ class AbraxasInstallerGUI(QWidget):
             )
             self.btn_next.setText("Cerrar Simulación")
         else:
-            self.lbl_finish_status.setText("Instalación de ABRAXAS Completada")
+            self.lbl_finish_status.setText(f"Instalación de ABRAXAS v{__version__} Completada")
             summary_text = (
                 f"<b>Configuración Generada:</b><br/><br/>"
                 f"• <b>Archivo:</b> {self.config_target} (chmod 600)<br/>"

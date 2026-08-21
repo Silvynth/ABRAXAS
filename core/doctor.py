@@ -10,6 +10,10 @@ import shutil
 import urllib.request
 import json
 
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT_DIR)
+from core import __version__
+
 C_GOLD = '\x1b[38;2;230;166;200m'
 C_GREEN = '\x1b[38;2;143;208;184m'
 C_WARN = '\x1b[38;2;240;138;155m'
@@ -24,8 +28,9 @@ def check_item(title, ok, detail_ok, detail_warn):
     return ok
 
 def run_doctor():
+    title_line = f"❖ ABRAXAS DOCTOR (v{__version__}) — DIAGNÓSTICO DEL SISTEMA"
     print(f"\n  {C_GOLD}╭─────────────────────────────────────────────────────────────────╮{RESET}")
-    print(f"  {C_GOLD}│{RESET}  ❖ ABRAXAS DOCTOR — DIAGNÓSTICO DE INTEGRIDAD DEL SISTEMA       {C_GOLD}│{RESET}")
+    print(f"  {C_GOLD}│{RESET}  {title_line:<63}{C_GOLD}│{RESET}")
     print(f"  {C_GOLD}╰─────────────────────────────────────────────────────────────────╯{RESET}\n")
 
     # 1. Python Version

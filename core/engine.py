@@ -6,6 +6,10 @@
 import os
 import sys
 
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT_DIR)
+from core import __version__
+
 # Import tomllib (Python 3.11+) with fallback
 try:
     import tomllib
@@ -54,7 +58,7 @@ class AbraxasConfig:
 
     @property
     def version(self):
-        return self.get("abraxas.schema_version", "0.1.0")
+        return self.get("abraxas.schema_version", __version__)
 
     @property
     def is_ai_enabled(self):
