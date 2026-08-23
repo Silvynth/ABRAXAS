@@ -29,8 +29,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE_PATH = os.path.join(ROOT_DIR, "config.default.toml")
 
 def get_target_config_path():
-    home_dir = os.environ.get("HOME", os.path.expanduser("~"))
-    return os.path.join(home_dir, ".config", "abraxas", "config.toml")
+    return os.path.join(ROOT_DIR, "config.toml")
 
 def read_toml_dict(filepath):
     """Lector TOML nativo simple para el esquema de Abraxas"""

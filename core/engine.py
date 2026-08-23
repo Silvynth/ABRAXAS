@@ -20,7 +20,7 @@ except ImportError:
         tomllib = None
 
 class AbraxasConfig:
-    DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/abraxas/config.toml")
+    DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.toml")
     TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.default.toml")
 
     def __init__(self, config_path=None):

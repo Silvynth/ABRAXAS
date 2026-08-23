@@ -22,9 +22,9 @@ else
     VERSION="0.1.1"
 fi
 
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/abraxas"
+CONFIG_DIR="$SCRIPT_DIR"
 SHARE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/abraxas"
-CONFIG_FILE="$CONFIG_DIR/config.toml"
+CONFIG_FILE="$SCRIPT_DIR/config.toml"
 
 # Detectar flags de CLI y Preview (Dry-Run)
 CLI_MODE=false
