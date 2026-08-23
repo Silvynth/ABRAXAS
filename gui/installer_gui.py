@@ -764,40 +764,12 @@ class AbraxasInstallerGUI(QWidget):
         c_ai.addWidget(self.ai_container)
         layout.addWidget(card_ai)
 
-        # Card: Hardware Profile & Appearance
-        card_hw = QFrame()
-        card_hw.setProperty("class", "surface")
-        c_hw = QVBoxLayout(card_hw)
-        c_hw.setSpacing(12)
+        # Card: Appearance / Visual Theme
+        card_theme = QFrame()
+        card_theme.setProperty("class", "surface")
+        c_th = QVBoxLayout(card_theme)
+        c_th.setSpacing(10)
 
-        lbl_prof_t = QLabel("Perfil de Rendimiento:")
-        lbl_prof_t.setProperty("class", "section_title")
-        c_hw.addWidget(lbl_prof_t)
-
-        h_profiles = QHBoxLayout()
-        h_profiles.setSpacing(10)
-
-        self.rb_auto = QRadioButton("Auto (Equilibrado)")
-        self.rb_high = QRadioButton("Alto Rendimiento")
-        self.rb_eco = QRadioButton("Bajo Consumo")
-        
-        if self.hw_info["ram_gb"] >= 16 and self.hw_info["cuda"]:
-            self.rb_high.setChecked(True)
-        else:
-            self.rb_auto.setChecked(True)
-
-        h_profiles.addWidget(self.rb_auto)
-        h_profiles.addWidget(self.rb_high)
-        h_profiles.addWidget(self.rb_eco)
-        c_hw.addLayout(h_profiles)
-
-        # Divider
-        div = QFrame()
-        div.setFrameShape(QFrame.HLine)
-        div.setStyleSheet(f"background-color: {BORDER_BASE}; max-height: 1px; border: none;")
-        c_hw.addWidget(div)
-
-        # Visual Theme
         t_row = QHBoxLayout()
         t_row.setSpacing(8)
         lbl_thm = QLabel("Tema Visual:")
@@ -811,9 +783,9 @@ class AbraxasInstallerGUI(QWidget):
         ])
         t_row.addWidget(lbl_thm)
         t_row.addWidget(self.cmb_theme, 1)
-        c_hw.addLayout(t_row)
+        c_th.addLayout(t_row)
 
-        layout.addWidget(card_hw)
+        layout.addWidget(card_theme)
         layout.addStretch()
 
         # Scan Ollama Models in background
@@ -964,9 +936,7 @@ class AbraxasInstallerGUI(QWidget):
 
         # 2. Hardware
         if "hardware" not in self.cfg: self.cfg["hardware"] = {}
-        if self.rb_high.isChecked(): self.cfg["hardware"]["profile"] = "high_performance"
-        elif self.rb_eco.isChecked(): self.cfg["hardware"]["profile"] = "low_power"
-        else: self.cfg["hardware"]["profile"] = "auto"
+        self.cfg["hardware"]["profile"] = "auto"
 
         # 3. Módulos
         if "modules" not in self.cfg: self.cfg["modules"] = {}
@@ -1010,8 +980,7 @@ class AbraxasInstallerGUI(QWidget):
                 f"• <b>Proyectos Git (LUMEN):</b> {self.cfg['paths']['projects_dir']}<br/>"
                 f"• <b>Bóveda Obsidian (NOUS):</b> {vault_status}<br/>"
                 f"• <b>Protección Btrfs (UMBRA):</b> {btrfs_status}<br/>"
-                f"• <b>Asistente IA Local:</b> {ai_status}<br/>"
-                f"• <b>Perfil de Rendimiento:</b> {self.cfg['hardware']['profile'].upper()}<br/><br/>"
+                f"• <b>Asistente IA Local:</b> {ai_status}<br/><br/>"
                 f"<font color='{SUCCESS}'>✔ No se realizaron modificaciones en el sistema.</font>"
             )
             self.btn_next.setText("Cerrar Simulación")
@@ -1023,8 +992,7 @@ class AbraxasInstallerGUI(QWidget):
                 f"• <b>Proyectos Git (LUMEN):</b> {self.cfg['paths']['projects_dir']}<br/>"
                 f"• <b>Bóveda Obsidian (NOUS):</b> {vault_status}<br/>"
                 f"• <b>Protección Btrfs (UMBRA):</b> {btrfs_status}<br/>"
-                f"• <b>Asistente IA Local:</b> {ai_status}<br/>"
-                f"• <b>Perfil de Rendimiento:</b> {self.cfg['hardware']['profile'].upper()}<br/><br/>"
+                f"• <b>Asistente IA Local:</b> {ai_status}<br/><br/>"
                 f"<font color='{CYAN}'>Todo listo. Inicia tu entorno ejecutando <b>abx</b> en tu terminal.</font>"
             )
             self.btn_next.setText("Finalizar")
