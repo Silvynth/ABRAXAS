@@ -22,7 +22,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT_DIR)
 
 from core.setup import write_toml_dict, read_toml_dict, TEMPLATE_PATH, get_target_config_path
-from core import __version__, __app_name__
+from core import get_version, __app_name__
 
 # =====================================================================
 #  MINIMALIST DESIGN SYSTEM & COLOR TOKENS
@@ -392,10 +392,11 @@ class AbraxasInstallerGUI(QWidget):
         super().__init__()
         self.is_preview = any(arg in sys.argv for arg in ["--preview", "--dry-run", "-p", "--simulated"])
         
+        self.app_version = get_version()
         if self.is_preview:
-            self.setWindowTitle(f"ABRAXAS v{__version__} — Asistente de Instalación [Vista Previa]")
+            self.setWindowTitle(f"ABRAXAS v{self.app_version} — Asistente de Instalación [Vista Previa]")
         else:
-            self.setWindowTitle(f"ABRAXAS v{__version__} — Asistente de Instalación")
+            self.setWindowTitle(f"ABRAXAS v{self.app_version} — Asistente de Instalación")
             
         self.setFixedSize(780, 620)
         self.setStyleSheet(STYLESHEET)
@@ -429,7 +430,7 @@ class AbraxasInstallerGUI(QWidget):
         lbl_brand = QLabel("ABRAXAS")
         lbl_brand.setProperty("class", "app_brand")
         
-        lbl_ver = QLabel(f"v{__version__}")
+        lbl_ver = QLabel(f"v{self.app_version}")
         lbl_ver.setProperty("class", "version_tag")
         
         header_row.addWidget(lbl_brand)
@@ -1015,7 +1016,7 @@ class AbraxasInstallerGUI(QWidget):
             )
             self.btn_next.setText("Cerrar Simulación")
         else:
-            self.lbl_finish_status.setText(f"Instalación de ABRAXAS v{__version__} Completada")
+            self.lbl_finish_status.setText(f"Instalación de ABRAXAS v{self.app_version} Completada")
             summary_text = (
                 f"<b>Configuración Generada:</b><br/><br/>"
                 f"• <b>Archivo:</b> {self.config_target} (chmod 600)<br/>"
