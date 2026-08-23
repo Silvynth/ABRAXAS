@@ -20,32 +20,129 @@ sys.path.insert(0, ROOT_DIR)
 from core.setup import write_toml_dict, read_toml_dict, get_target_config_path
 from core import get_version
 
+import json
+
 # =====================================================================
-#  MINIMALIST DESIGN SYSTEM & COLOR TOKENS
+#  DYNAMIC THEME SYSTEM (COLOR PALETTES)
 # =====================================================================
-BG_MAIN = "#0d0e12"
-BG_SIDEBAR = "#12131a"
-BG_SURFACE = "#15161c"
-BG_SURFACE_HOVER = "#1c1d24"
-BG_INPUT = "#0f1015"
-BORDER_BASE = "#22242e"
-BORDER_FOCUS = "#6366f1"
+def get_system_theme_palette():
+    """Detecta y genera la paleta de colores activa del sistema / Noctalia."""
+    noctalia_file = os.path.expanduser("~/.config/noctalia/colors.json")
+    if os.path.exists(noctalia_file):
+        try:
+            with open(noctalia_file, "r", encoding="utf-8") as f:
+                c = json.load(f)
+                return {
+                    "name": "Sincronizado con Sistema (Noctalia Dinámico)",
+                    "BG_MAIN": c.get("mSurface", "#0d0e12"),
+                    "BG_SIDEBAR": c.get("mSurfaceVariant", "#12131a"),
+                    "BG_SURFACE": c.get("mSurfaceContainer", "#15161c"),
+                    "BG_SURFACE_HOVER": c.get("mSurfaceContainerHigh", "#1c1d24"),
+                    "BG_INPUT": c.get("mSurfaceContainerLowest", "#0f1015"),
+                    "BORDER_BASE": c.get("mOutline", "#22242e"),
+                    "BORDER_FOCUS": c.get("mPrimary", "#6366f1"),
+                    "TEXT_PRIMARY": c.get("mOnSurface", "#f3f4f6"),
+                    "TEXT_SECONDARY": c.get("mOnSurfaceVariant", "#9ca3af"),
+                    "TEXT_MUTED": c.get("mOutlineVariant", "#6b7280"),
+                    "ACCENT": c.get("mPrimary", "#6366f1"),
+                    "ACCENT_HOVER": c.get("mSecondary", "#4f46e5"),
+                    "ACCENT_LIGHT": c.get("mPrimaryContainer", "#e0e7ff"),
+                    "CYAN": c.get("mTertiary", "#06b6d4"),
+                    "SUCCESS": "#10b981",
+                    "WARNING": c.get("mError", "#f59e0b")
+                }
+        except Exception:
+            pass
+    return None
 
-TEXT_PRIMARY = "#f3f4f6"
-TEXT_SECONDARY = "#9ca3af"
-TEXT_MUTED = "#6b7280"
+THEMES = {
+    "system_sync": {
+        "name": "🔄 Sincronizar con Sistema (Auto / Noctalia)",
+        "BG_MAIN": "#0d0e12",
+        "BG_SIDEBAR": "#12131a",
+        "BG_SURFACE": "#15161c",
+        "BG_SURFACE_HOVER": "#1c1d24",
+        "BG_INPUT": "#0f1015",
+        "BORDER_BASE": "#22242e",
+        "BORDER_FOCUS": "#6366f1",
+        "TEXT_PRIMARY": "#f3f4f6",
+        "TEXT_SECONDARY": "#9ca3af",
+        "TEXT_MUTED": "#6b7280",
+        "ACCENT": "#6366f1",
+        "ACCENT_HOVER": "#4f46e5",
+        "ACCENT_LIGHT": "#e0e7ff",
+        "CYAN": "#06b6d4",
+        "SUCCESS": "#10b981",
+        "WARNING": "#f59e0b"
+    },
+    "noctalia": {
+        "name": "Noctalia Minimal (Violeta / Índigo)",
+        "BG_MAIN": "#0d0e12",
+        "BG_SIDEBAR": "#12131a",
+        "BG_SURFACE": "#15161c",
+        "BG_SURFACE_HOVER": "#1c1d24",
+        "BG_INPUT": "#0f1015",
+        "BORDER_BASE": "#22242e",
+        "BORDER_FOCUS": "#6366f1",
+        "TEXT_PRIMARY": "#f3f4f6",
+        "TEXT_SECONDARY": "#9ca3af",
+        "TEXT_MUTED": "#6b7280",
+        "ACCENT": "#6366f1",
+        "ACCENT_HOVER": "#4f46e5",
+        "ACCENT_LIGHT": "#e0e7ff",
+        "CYAN": "#06b6d4",
+        "SUCCESS": "#10b981",
+        "WARNING": "#f59e0b"
+    },
+    "dark_cyberpunk": {
+        "name": "Dark Cyberpunk (Cian Neón / Esmeralda)",
+        "BG_MAIN": "#080c10",
+        "BG_SIDEBAR": "#0d131a",
+        "BG_SURFACE": "#101822",
+        "BG_SURFACE_HOVER": "#182433",
+        "BG_INPUT": "#0a0f16",
+        "BORDER_BASE": "#1e2e3d",
+        "BORDER_FOCUS": "#00f2fe",
+        "TEXT_PRIMARY": "#e0f7fa",
+        "TEXT_SECONDARY": "#80deea",
+        "TEXT_MUTED": "#4ba3b5",
+        "ACCENT": "#00f2fe",
+        "ACCENT_HOVER": "#00c4cc",
+        "ACCENT_LIGHT": "#e0f7fa",
+        "CYAN": "#00f2fe",
+        "SUCCESS": "#00e676",
+        "WARNING": "#ffb300"
+    },
+    "monochrome": {
+        "name": "Monocromo Puro (Gris Neutro & Acero)",
+        "BG_MAIN": "#111111",
+        "BG_SIDEBAR": "#181818",
+        "BG_SURFACE": "#1f1f1f",
+        "BG_SURFACE_HOVER": "#2a2a2a",
+        "BG_INPUT": "#141414",
+        "BORDER_BASE": "#333333",
+        "BORDER_FOCUS": "#e5e5e5",
+        "TEXT_PRIMARY": "#ffffff",
+        "TEXT_SECONDARY": "#b3b3b3",
+        "TEXT_MUTED": "#737373",
+        "ACCENT": "#e5e5e5",
+        "ACCENT_HOVER": "#cccccc",
+        "ACCENT_LIGHT": "#ffffff",
+        "CYAN": "#d4d4d4",
+        "SUCCESS": "#a3e635",
+        "WARNING": "#facc15"
+    }
+}
 
-ACCENT = "#6366f1"
-ACCENT_HOVER = "#4f46e5"
-ACCENT_LIGHT = "#e0e7ff"
-CYAN = "#06b6d4"
-SUCCESS = "#10b981"
-WARNING = "#f59e0b"
-
-STYLESHEET = f"""
+def generate_stylesheet(theme_key="noctalia"):
+    if theme_key == "system_sync":
+        t = get_system_theme_palette() or THEMES["noctalia"]
+    else:
+        t = THEMES.get(theme_key, THEMES["noctalia"])
+    return f"""
 QWidget {{
-    background-color: {BG_MAIN};
-    color: {TEXT_PRIMARY};
+    background-color: {t["BG_MAIN"]};
+    color: {t["TEXT_PRIMARY"]};
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     font-size: 13px;
 }}
@@ -56,8 +153,8 @@ QLabel {{
 
 /* Sidebar Frame */
 QFrame.sidebar {{
-    background-color: {BG_SIDEBAR};
-    border-right: 1px solid {BORDER_BASE};
+    background-color: {t["BG_SIDEBAR"]};
+    border-right: 1px solid {t["BORDER_BASE"]};
 }}
 
 /* Nav Buttons */
@@ -65,7 +162,7 @@ QPushButton.nav_btn {{
     background-color: transparent;
     border: none;
     border-radius: 8px;
-    color: {TEXT_SECONDARY};
+    color: {t["TEXT_SECONDARY"]};
     padding: 10px 14px;
     font-size: 13px;
     font-weight: 600;
@@ -74,38 +171,69 @@ QPushButton.nav_btn {{
 
 QPushButton.nav_btn:hover {{
     background-color: rgba(99, 102, 241, 0.12);
-    color: {ACCENT_LIGHT};
+    color: {t["ACCENT_LIGHT"]};
 }}
 
 QPushButton.nav_btn:checked {{
-    background-color: {ACCENT};
-    color: #ffffff;
+    background-color: {t["ACCENT"]};
+    color: {t["BG_MAIN"] if theme_key == "monochrome" else "#ffffff"};
     font-weight: 700;
 }}
 
 /* Surface Card */
 QFrame.surface {{
-    background-color: {BG_SURFACE};
-    border: 1px solid {BORDER_BASE};
+    background-color: {t["BG_SURFACE"]};
+    border: 1px solid {t["BORDER_BASE"]};
     border-radius: 10px;
     padding: 16px;
 }}
 
 QLabel.page_title {{
-    color: {TEXT_PRIMARY};
+    color: {t["TEXT_PRIMARY"]};
     font-size: 22px;
     font-weight: 700;
     letter-spacing: -0.5px;
 }}
 
 QLabel.page_subtitle {{
-    color: {TEXT_SECONDARY};
+    color: {t["TEXT_SECONDARY"]};
     font-size: 13px;
+}}
+
+QLabel.brand_title {{
+    font-size: 20px;
+    font-weight: 800;
+    color: {t["TEXT_PRIMARY"]};
+    letter-spacing: 1px;
+}}
+
+QLabel.brand_subtitle {{
+    font-size: 11px;
+    color: {t["TEXT_MUTED"]};
+    font-weight: 500;
+}}
+
+QLabel.section_title {{
+    font-size: 14px;
+    font-weight: 700;
+    color: {t["ACCENT"]};
+}}
+
+QLabel.status_ok {{
+    color: {t["SUCCESS"]};
+    font-weight: 600;
+    font-size: 12px;
+}}
+
+QLabel.card_desc {{
+    color: {t["TEXT_SECONDARY"]};
+    font-size: 14px;
+    line-height: 1.5;
 }}
 
 QLabel.version_badge {{
     background-color: #1e1f29;
-    color: {CYAN};
+    color: {t["CYAN"]};
     border: 1px solid rgba(6, 182, 212, 0.3);
     border-radius: 4px;
     padding: 2px 8px;
@@ -115,40 +243,39 @@ QLabel.version_badge {{
 
 /* Input Fields */
 QLineEdit {{
-    background-color: {BG_INPUT};
-    border: 1px solid {BORDER_BASE};
+    background-color: {t["BG_INPUT"]};
+    border: 1px solid {t["BORDER_BASE"]};
     border-radius: 7px;
     padding: 8px 12px;
-    color: {TEXT_PRIMARY};
+    color: {t["TEXT_PRIMARY"]};
     font-size: 13px;
-    selection-background-color: {ACCENT};
+    selection-background-color: {t["ACCENT"]};
 }}
 
 QLineEdit:focus {{
-    border: 1px solid {BORDER_FOCUS};
-    background-color: #12131a;
+    border: 1px solid {t["BORDER_FOCUS"]};
 }}
 
 /* Buttons */
 QPushButton {{
-    background-color: #1e1f29;
-    border: 1px solid {BORDER_BASE};
+    background-color: {t["BG_SURFACE"]};
+    border: 1px solid {t["BORDER_BASE"]};
     border-radius: 7px;
-    color: {TEXT_PRIMARY};
+    color: {t["TEXT_PRIMARY"]};
     padding: 8px 16px;
     font-weight: 600;
     font-size: 13px;
 }}
 
 QPushButton:hover {{
-    background-color: {BG_SURFACE_HOVER};
-    border-color: #3b3e4f;
-    color: #ffffff;
+    background-color: {t["BG_SURFACE_HOVER"]};
+    border-color: {t["BORDER_FOCUS"]};
+    color: {t["TEXT_PRIMARY"]};
 }}
 
 QPushButton.primary {{
-    background-color: {ACCENT};
-    color: #ffffff;
+    background-color: {t["ACCENT"]};
+    color: {t["BG_MAIN"] if theme_key == "monochrome" else "#ffffff"};
     border: none;
     border-radius: 7px;
     padding: 9px 20px;
@@ -157,12 +284,12 @@ QPushButton.primary {{
 }}
 
 QPushButton.primary:hover {{
-    background-color: {ACCENT_HOVER};
+    background-color: {t["ACCENT_HOVER"]};
 }}
 
 QPushButton.browse {{
-    background-color: #1a1b24;
-    border: 1px solid {BORDER_BASE};
+    background-color: {t["BG_SURFACE"]};
+    border: 1px solid {t["BORDER_BASE"]};
     border-radius: 7px;
     padding: 8px 14px;
     font-size: 12px;
@@ -170,13 +297,13 @@ QPushButton.browse {{
 }}
 
 QPushButton.browse:hover {{
-    border-color: {BORDER_FOCUS};
-    color: {ACCENT_LIGHT};
+    border-color: {t["BORDER_FOCUS"]};
+    color: {t["ACCENT_LIGHT"]};
 }}
 
 /* CheckBoxes */
 QCheckBox {{
-    color: {TEXT_PRIMARY};
+    color: {t["TEXT_PRIMARY"]};
     spacing: 10px;
     font-size: 13px;
     font-weight: 500;
@@ -186,35 +313,34 @@ QCheckBox {{
 QCheckBox::indicator {{
     width: 18px;
     height: 18px;
-    border: 1px solid {BORDER_BASE};
+    border: 1px solid {t["BORDER_BASE"]};
     border-radius: 5px;
-    background-color: {BG_INPUT};
+    background-color: {t["BG_INPUT"]};
 }}
 
 QCheckBox::indicator:hover {{
-    border-color: {BORDER_FOCUS};
+    border-color: {t["BORDER_FOCUS"]};
 }}
 
 QCheckBox::indicator:checked {{
-    background-color: {ACCENT};
-    border-color: {ACCENT};
+    background-color: {t["ACCENT"]};
+    border-color: {t["ACCENT"]};
     image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'></polyline></svg>");
 }}
 
 /* Combo Dropdown */
 QComboBox {{
-    background-color: #12131a;
-    border: 1px solid {BORDER_BASE};
+    background-color: {t["BG_INPUT"]};
+    border: 1px solid {t["BORDER_BASE"]};
     border-radius: 8px;
     padding: 8px 14px;
-    color: {TEXT_PRIMARY};
+    color: {t["TEXT_PRIMARY"]};
     font-size: 13px;
     font-weight: 500;
 }}
 
 QComboBox:hover {{
-    border-color: {CYAN};
-    background-color: #161722;
+    border-color: {t["BORDER_FOCUS"]};
 }}
 
 QComboBox::drop-down {{
@@ -225,17 +351,17 @@ QComboBox::drop-down {{
 }}
 
 QComboBox::down-arrow {{
-    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2306b6d4' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>");
+    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236366f1' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>");
     width: 12px;
     height: 12px;
 }}
 
 QComboBox QAbstractItemView {{
-    background-color: #141620;
-    border: 1px solid rgba(6, 182, 212, 0.4);
+    background-color: {t["BG_SURFACE"]};
+    border: 1px solid {t["BORDER_BASE"]};
     border-radius: 8px;
-    color: {TEXT_PRIMARY};
-    selection-background-color: rgba(6, 182, 212, 0.25);
+    color: {t["TEXT_PRIMARY"]};
+    selection-background-color: rgba(99, 102, 241, 0.25);
     selection-color: #ffffff;
     outline: 0px;
     padding: 4px;
@@ -244,18 +370,18 @@ QComboBox QAbstractItemView {{
 QComboBox QAbstractItemView::item {{
     min-height: 28px;
     padding: 6px 10px;
-    color: {TEXT_PRIMARY};
+    color: {t["TEXT_PRIMARY"]};
     border-radius: 4px;
     background-color: transparent;
 }}
 
 QComboBox QAbstractItemView::item:hover {{
-    background-color: rgba(6, 182, 212, 0.20);
-    color: {CYAN};
+    background-color: rgba(99, 102, 241, 0.20);
+    color: {t["ACCENT_LIGHT"]};
 }}
 
 QComboBox QAbstractItemView::item:selected {{
-    background-color: rgba(6, 182, 212, 0.30);
+    background-color: rgba(99, 102, 241, 0.30);
     color: #ffffff;
 }}
 """
@@ -266,10 +392,13 @@ class NeosMainApp(QWidget):
         self.app_version = get_version()
         self.setWindowTitle(f"ABRAXAS | NEOS Control Center (v{self.app_version})")
         self.setMinimumSize(940, 640)
-        self.setStyleSheet(STYLESHEET)
 
         self.config_target = get_target_config_path()
         self.cfg = read_toml_dict(self.config_target)
+
+        # Apply initial active theme
+        initial_theme = self.cfg.get("abraxas", {}).get("theme", "noctalia")
+        self.setStyleSheet(generate_stylesheet(initial_theme))
 
         self.init_ui()
         self.center_window()
@@ -298,10 +427,10 @@ class NeosMainApp(QWidget):
 
         # Brand header
         lbl_brand = QLabel("❖ NEOS")
-        lbl_brand.setStyleSheet(f"font-size: 20px; font-weight: 800; color: {TEXT_PRIMARY}; letter-spacing: 1px;")
+        lbl_brand.setProperty("class", "brand_title")
         
         lbl_subbrand = QLabel("ABRAXAS Control Center")
-        lbl_subbrand.setStyleSheet(f"font-size: 11px; color: {TEXT_MUTED}; font-weight: 500;")
+        lbl_subbrand.setProperty("class", "brand_subtitle")
         
         sb_layout.addWidget(lbl_brand)
         sb_layout.addWidget(lbl_subbrand)
@@ -427,7 +556,7 @@ class NeosMainApp(QWidget):
         l_paths.setSpacing(10)
 
         lbl_sec1 = QLabel("📁 Rutas del Sistema ([paths])")
-        lbl_sec1.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {CYAN};")
+        lbl_sec1.setProperty("class", "section_title")
         l_paths.addWidget(lbl_sec1)
 
         # Projects Dir
@@ -468,7 +597,7 @@ class NeosMainApp(QWidget):
         l_ai.setSpacing(10)
 
         lbl_sec2 = QLabel("🧠 Motor de Asistencia IA Local ([ai])")
-        lbl_sec2.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {ACCENT_LIGHT};")
+        lbl_sec2.setProperty("class", "section_title")
         l_ai.addWidget(lbl_sec2)
 
         self.chk_cfg_ai = QCheckBox("Habilitar Invocación de IA en ABRAXAS (bajo demanda)")
@@ -530,7 +659,7 @@ class NeosMainApp(QWidget):
         l_dev.setSpacing(10)
 
         lbl_sec_dev = QLabel("⚙️ Entornos de Desarrollo ([development])")
-        lbl_sec_dev.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {CYAN};")
+        lbl_sec_dev.setProperty("class", "section_title")
         l_dev.addWidget(lbl_sec_dev)
 
         self.chk_cfg_venv = QCheckBox("Detección automática de entornos virtuales Python (.venv)")
@@ -552,7 +681,7 @@ class NeosMainApp(QWidget):
         l_sys.setSpacing(10)
 
         lbl_sec_sys = QLabel("🛡️ Mantenimiento y Sistema Operativo ([system])")
-        lbl_sec_sys.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {SUCCESS};")
+        lbl_sec_sys.setProperty("class", "section_title")
         l_sys.addWidget(lbl_sec_sys)
 
         self.chk_cfg_btrfs = QCheckBox("Habilitar Instantáneas Atómicas Btrfs (Snapshots antes de cambios)")
@@ -584,17 +713,28 @@ class NeosMainApp(QWidget):
         l_app.setSpacing(10)
 
         lbl_sec3 = QLabel("🎨 Apariencia y Sistema ([abraxas])")
-        lbl_sec3.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {WARNING};")
+        lbl_sec3.setProperty("class", "section_title")
         l_app.addWidget(lbl_sec3)
 
         row_app1 = QHBoxLayout()
         row_app1.addWidget(QLabel("Tema Visual:"))
         self.cmb_cfg_theme = QComboBox()
         self.cmb_cfg_theme.setItemDelegate(QStyledItemDelegate())
-        self.cmb_cfg_theme.addItems(["Noctalia Minimal", "Dark Cyberpunk", "Monocromo Puro"])
-        curr_th = self.cfg.get("abraxas", {}).get("theme", "noctalia")
-        if "cyberpunk" in curr_th: self.cmb_cfg_theme.setCurrentIndex(1)
-        elif "monochrome" in curr_th: self.cmb_cfg_theme.setCurrentIndex(2)
+        self.cmb_cfg_theme.addItems([
+            "🔄 Sincronizar con Sistema (Auto / Noctalia)",
+            "Noctalia Minimal", 
+            "Dark Cyberpunk", 
+            "Monocromo Puro"
+        ])
+        curr_th = self.cfg.get("abraxas", {}).get("theme", "system_sync")
+        if curr_th == "system_sync" or "sync" in curr_th or "auto" in curr_th:
+            self.cmb_cfg_theme.setCurrentIndex(0)
+        elif "cyberpunk" in curr_th:
+            self.cmb_cfg_theme.setCurrentIndex(2)
+        elif "monochrome" in curr_th:
+            self.cmb_cfg_theme.setCurrentIndex(3)
+        else:
+            self.cmb_cfg_theme.setCurrentIndex(1)
         row_app1.addWidget(self.cmb_cfg_theme, 1)
         l_app.addLayout(row_app1)
 
@@ -610,7 +750,7 @@ class NeosMainApp(QWidget):
 
         # Status Label
         self.lbl_cfg_status = QLabel("")
-        self.lbl_cfg_status.setStyleSheet(f"color: {SUCCESS}; font-weight: 600; font-size: 12px;")
+        self.lbl_cfg_status.setProperty("class", "status_ok")
         s_layout.addWidget(self.lbl_cfg_status)
 
         # Bottom Save Button Bar
@@ -664,9 +804,17 @@ class NeosMainApp(QWidget):
         # 5. Abraxas Theme & Interface
         if "abraxas" not in self.cfg: self.cfg["abraxas"] = {}
         theme_raw = self.cmb_cfg_theme.currentText().lower()
-        if "cyberpunk" in theme_raw: self.cfg["abraxas"]["theme"] = "dark_cyberpunk"
-        elif "monocromo" in theme_raw: self.cfg["abraxas"]["theme"] = "monochrome"
-        else: self.cfg["abraxas"]["theme"] = "noctalia"
+        if "sincronizar" in theme_raw or "auto" in theme_raw:
+            theme_key = "system_sync"
+        elif "cyberpunk" in theme_raw: 
+            theme_key = "dark_cyberpunk"
+        elif "monocromo" in theme_raw: 
+            theme_key = "monochrome"
+        else: 
+            theme_key = "noctalia"
+        
+        self.cfg["abraxas"]["theme"] = theme_key
+        self.setStyleSheet(generate_stylesheet(theme_key))
 
         iface_raw = self.cmb_cfg_iface.currentText().lower()
         self.cfg["abraxas"]["default_interface"] = "gui" if "gui" in iface_raw else "tui"
@@ -694,7 +842,7 @@ class NeosMainApp(QWidget):
         c_lay = QVBoxLayout(card)
         
         lbl_desc = QLabel(desc)
-        lbl_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 14px; line-height: 1.5;")
+        lbl_desc.setProperty("class", "card_desc")
         lbl_desc.setWordWrap(True)
         c_lay.addWidget(lbl_desc)
 
