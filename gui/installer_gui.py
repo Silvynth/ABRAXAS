@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QLineEdit, QFileDialog, QStackedWidget, 
     QRadioButton, QCheckBox, QFrame, QProgressBar,
-    QComboBox
+    QComboBox, QStyledItemDelegate
 )
 from PySide6.QtCore import Qt, QTimer
 
@@ -54,6 +54,10 @@ QWidget {{
     font-size: 13px;
 }}
 
+QLabel {{
+    background-color: transparent;
+}}
+
 /* Surface Cards */
 QFrame.surface {{
     background-color: {BG_SURFACE};
@@ -62,11 +66,19 @@ QFrame.surface {{
     padding: 16px;
 }}
 
+QFrame.surface QLabel {{
+    background-color: transparent;
+}}
+
 QFrame.stat_card {{
     background-color: {BG_SURFACE};
     border: 1px solid {BORDER_BASE};
     border-radius: 8px;
     padding: 12px;
+}}
+
+QFrame.stat_card QLabel {{
+    background-color: transparent;
 }}
 
 QFrame.stat_card:hover {{
@@ -209,46 +221,101 @@ QCheckBox, QRadioButton {{
     spacing: 10px;
     font-size: 13px;
     font-weight: 500;
+    background-color: transparent;
 }}
 
 QCheckBox::indicator, QRadioButton::indicator {{
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     border: 1px solid {BORDER_BASE};
-    border-radius: 4px;
+    border-radius: 5px;
     background-color: {BG_INPUT};
 }}
 
 QRadioButton::indicator {{
-    border-radius: 8px;
+    border-radius: 9px;
 }}
 
-QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
+QCheckBox::indicator:hover, QRadioButton::indicator:hover {{
+    border-color: {BORDER_FOCUS};
+}}
+
+QCheckBox::indicator:checked {{
     background-color: {ACCENT};
     border-color: {ACCENT};
+    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'></polyline></svg>");
+}}
+
+QRadioButton::indicator:checked {{
+    background-color: {ACCENT};
+    border-color: {ACCENT};
+    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 24 24' fill='white'><circle cx='12' cy='12' r='8'/></svg>");
+}}
+
+QCheckBox QLabel, QRadioButton QLabel {{
+    background-color: transparent;
+}}
+
+QFrame QWidget {{
+    background-color: transparent;
 }}
 
 /* Combo Dropdown */
 QComboBox {{
-    background-color: {BG_INPUT};
+    background-color: #12131a;
     border: 1px solid {BORDER_BASE};
-    border-radius: 7px;
-    padding: 7px 12px;
+    border-radius: 8px;
+    padding: 8px 14px;
     color: {TEXT_PRIMARY};
     font-size: 13px;
+    font-weight: 500;
 }}
 
 QComboBox:hover {{
-    border-color: #3b3e4f;
-}}
-
-QComboBox:focus {{
-    border-color: {BORDER_FOCUS};
+    border-color: {CYAN};
+    background-color: #161722;
 }}
 
 QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 30px;
     border: none;
-    width: 24px;
+}}
+
+QComboBox::down-arrow {{
+    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2306b6d4' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>");
+    width: 12px;
+    height: 12px;
+}}
+
+QComboBox QAbstractItemView {{
+    background-color: #141620;
+    border: 1px solid rgba(6, 182, 212, 0.4);
+    border-radius: 8px;
+    color: {TEXT_PRIMARY};
+    selection-background-color: rgba(6, 182, 212, 0.25);
+    selection-color: #ffffff;
+    outline: 0px;
+    padding: 4px;
+}}
+
+QComboBox QAbstractItemView::item {{
+    min-height: 28px;
+    padding: 6px 10px;
+    color: {TEXT_PRIMARY};
+    border-radius: 4px;
+    background-color: transparent;
+}}
+
+QComboBox QAbstractItemView::item:hover {{
+    background-color: rgba(6, 182, 212, 0.20);
+    color: {CYAN};
+}}
+
+QComboBox QAbstractItemView::item:selected {{
+    background-color: rgba(6, 182, 212, 0.30);
+    color: #ffffff;
 }}
 
 /* Progress Bar */
@@ -330,7 +397,7 @@ class AbraxasInstallerGUI(QWidget):
         else:
             self.setWindowTitle(f"ABRAXAS v{__version__} — Asistente de Instalación")
             
-        self.setFixedSize(780, 580)
+        self.setFixedSize(780, 620)
         self.setStyleSheet(STYLESHEET)
         
         # Hardware Probe & Config
@@ -579,7 +646,8 @@ class AbraxasInstallerGUI(QWidget):
         card = QFrame()
         card.setProperty("class", "surface")
         c_layout = QVBoxLayout(card)
-        c_layout.setSpacing(14)
+        c_layout.setContentsMargins(16, 14, 16, 16)
+        c_layout.setSpacing(10)
 
         # 1. Projects Directory (LUMEN)
         c_layout.addWidget(QLabel("Directorio raíz para proyectos y repositorios Git:"))
@@ -607,7 +675,7 @@ class AbraxasInstallerGUI(QWidget):
 
         self.vault_container = QWidget()
         v_box = QHBoxLayout(self.vault_container)
-        v_box.setContentsMargins(0, 0, 0, 0)
+        v_box.setContentsMargins(0, 2, 0, 4)
         v_box.setSpacing(8)
         self.txt_vault = QLineEdit(self.cfg.get("paths", {}).get("vault_dir", "~/Vault"))
         btn_browse_vault = QPushButton("Examinar")
@@ -632,7 +700,7 @@ class AbraxasInstallerGUI(QWidget):
         self.btrfs_container = QWidget()
         self.btrfs_container.setVisible(False)
         b_box = QVBoxLayout(self.btrfs_container)
-        b_box.setContentsMargins(0, 0, 0, 0)
+        b_box.setContentsMargins(0, 2, 0, 4)
         b_box.setSpacing(4)
         
         lbl_snap = QLabel("Subvolumen de instantáneas raíz (ej. Snapper):")
@@ -683,6 +751,8 @@ class AbraxasInstallerGUI(QWidget):
         lbl_model_tag = QLabel("Modelo Predeterminado:")
         lbl_model_tag.setProperty("class", "label_muted")
         self.cmb_model = QComboBox()
+        self.cmb_model.setItemDelegate(QStyledItemDelegate())
+
         self.lbl_ai_status = QLabel("● Buscando Ollama...")
         self.lbl_ai_status.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
         
@@ -732,6 +802,7 @@ class AbraxasInstallerGUI(QWidget):
         lbl_thm = QLabel("Tema Visual:")
         lbl_thm.setProperty("class", "section_title")
         self.cmb_theme = QComboBox()
+        self.cmb_theme.setItemDelegate(QStyledItemDelegate())
         self.cmb_theme.addItems([
             "Noctalia Minimal (Sincronizado con el sistema)", 
             "Dark Cyberpunk", 
@@ -793,25 +864,52 @@ class AbraxasInstallerGUI(QWidget):
         self.ai_container.setVisible(checked)
 
     def scan_ollama_models(self):
-        models = []
+        models_info = []
+        # 1. Try local HTTP API (Ollama service)
         try:
             req = urllib.request.Request("http://localhost:11434/api/tags")
-            with urllib.request.urlopen(req, timeout=1.0) as resp:
+            with urllib.request.urlopen(req, timeout=1.2) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
-                models = [m.get('name') for m in data.get('models', [])]
+                for m in data.get('models', []):
+                    name = m.get('name')
+                    size_bytes = m.get('size', 0)
+                    size_gb = f"{round(size_bytes / (1024**3), 1)} GB" if size_bytes else ""
+                    models_info.append((name, size_gb))
         except Exception:
             pass
 
+        # 2. Fallback to CLI `ollama list` if service was not reachable via HTTP
+        if not models_info and shutil.which("ollama"):
+            try:
+                out = subprocess.check_output(["ollama", "list"], text=True, timeout=2.0)
+                lines = out.strip().splitlines()
+                if len(lines) > 1:
+                    for line in lines[1:]:
+                        parts = line.split()
+                        if len(parts) >= 3:
+                            name = parts[0]
+                            size = f"{parts[2]} {parts[3]}" if len(parts) >= 4 else parts[2]
+                            models_info.append((name, size))
+            except Exception:
+                pass
+
         self.cmb_model.clear()
-        if models:
-            self.lbl_ai_status.setText("● En línea")
+        if models_info:
+            self.lbl_ai_status.setText("● Ollama Detectado")
             self.lbl_ai_status.setStyleSheet(f"color: {SUCCESS}; font-size: 11px; font-weight: 600;")
-            for m in models:
-                self.cmb_model.addItem(m)
+            for name, size in models_info:
+                display_label = f"⚡  {name} ({size})" if size else f"⚡  {name}"
+                self.cmb_model.addItem(display_label, userData=name)
         else:
-            self.lbl_ai_status.setText("○ Desconectado")
+            self.lbl_ai_status.setText("○ Ollama No Detectado")
             self.lbl_ai_status.setStyleSheet(f"color: {WARNING}; font-size: 11px;")
-            self.cmb_model.addItems(["qwen2.5-coder:7b", "llama3.1:8b", "qwen2.5-coder:14b"])
+            fallback_models = [
+                ("qwen2.5-coder:14b", "Recomendado 14B"),
+                ("qwen2.5-coder:7b", "Ligero 7B"),
+                ("llama3.1:8b", "Meta Llama 8B")
+            ]
+            for name, note in fallback_models:
+                self.cmb_model.addItem(f"📦  {name}  [{note}]", userData=name)
 
     def browse_folder(self, line_edit):
         curr = os.path.expanduser(line_edit.text())
@@ -880,7 +978,8 @@ class AbraxasInstallerGUI(QWidget):
         # 4. IA
         if "ai" not in self.cfg: self.cfg["ai"] = {}
         self.cfg["ai"]["enabled"] = self.chk_ai.isChecked()
-        self.cfg["ai"]["default_model"] = self.cmb_model.currentText() if self.chk_ai.isChecked() else ""
+        selected_model = self.cmb_model.currentData() or self.cmb_model.currentText()
+        self.cfg["ai"]["default_model"] = selected_model if self.chk_ai.isChecked() else ""
 
         # 5. Tema
         if "abraxas" not in self.cfg: self.cfg["abraxas"] = {}
