@@ -16,6 +16,7 @@ from PySide6.QtCore import Qt, QDir
 from core.projects import list_project_folders, get_projects_dir
 from gui.views.neos.graph_canvas import ProjectGraphCanvas
 from gui.views.neos.create_project_view import CreateProjectView
+from gui.views.neos.sync_projects_view import SyncProjectsView
 
 class ProjectRowWidget(QFrame):
     """Fila interactiva dentro del recuadro unificado de proyectos."""
@@ -184,7 +185,7 @@ class ProjectsView(QWidget):
         root_layout.addWidget(top_card)
 
         # -------------------------------------------------------------
-        # 3. MAIN CENTRAL STACK (PÁGINAS: 0 = EXPLORADOR/GRAFO, 1 = CREAR)
+        # 3. MAIN CENTRAL STACK (PÁGINAS: 0 = EXPLORADOR, 1 = CREAR, 2 = SYNC)
         # -------------------------------------------------------------
         self.main_stack = QStackedWidget()
 
@@ -358,6 +359,14 @@ class ProjectsView(QWidget):
         self.create_page.cancel_requested.connect(lambda: self.set_action_mode("search"))
         self.main_stack.addWidget(self.create_page)
 
+        # =============================================================
+        # PÁGINA 2: SINCRONIZACIÓN Y EXPLORADOR DE GITHUB
+        # =============================================================
+        self.sync_page = SyncProjectsView(self.config_target)
+        self.sync_page.project_synced.connect(self.on_project_synced_success)
+        self.sync_page.back_requested.connect(lambda: self.set_action_mode("search"))
+        self.main_stack.addWidget(self.sync_page)
+
         root_layout.addWidget(self.main_stack)
 
     def set_action_mode(self, mode: str):
@@ -374,13 +383,13 @@ class ProjectsView(QWidget):
             self.main_stack.setCurrentIndex(0)
             self.filter_projects(self.txt_filter.text().strip())
         elif mode == "create":
-            # Ocultar barra de búsqueda y mostrar formulario de creación
             self.search_bar_widget.setVisible(False)
             self.create_page.refresh_base_dir()
             self.main_stack.setCurrentIndex(1)
         elif mode == "sync":
-            self.search_bar_widget.setVisible(True)
-            self.main_stack.setCurrentIndex(0)
+            self.search_bar_widget.setVisible(False)
+            self.sync_page.refresh_dir()
+            self.main_stack.setCurrentIndex(2)
         elif mode == "purge":
             self.search_bar_widget.setVisible(True)
             self.main_stack.setCurrentIndex(0)
@@ -389,6 +398,13 @@ class ProjectsView(QWidget):
         """Callback cuando un proyecto es creado con éxito desde el formulario."""
         self.set_action_mode("search")
         self.selected_path = created_path
+        self.load_projects()
+
+    def on_project_synced_success(self, synced_path: str):
+        """Callback cuando un proyecto de GitHub es clonado o sincronizado."""
+        self.load_projects()
+        self.set_action_mode("search")
+        self.selected_path = synced_path
         self.load_projects()
 
     def adjust_depth(self, delta):
