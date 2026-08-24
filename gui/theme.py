@@ -425,6 +425,99 @@ QPushButton.browse:hover {{
     color: {t["ACCENT_LIGHT"]};
 }}
 
+/* Action Mode Buttons (Verde, Amarillo, Morado, Rojo) */
+QPushButton.btn_mode_green {{
+    background-color: rgba(16, 185, 129, 0.12);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    border-radius: 7px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+}}
+
+QPushButton.btn_mode_green:hover {{
+    background-color: rgba(16, 185, 129, 0.22);
+    border-color: #10b981;
+    color: #34d399;
+}}
+
+QPushButton.btn_mode_green:checked {{
+    background-color: #10b981;
+    color: #ffffff;
+    border-color: #10b981;
+    font-weight: 700;
+}}
+
+QPushButton.btn_mode_yellow {{
+    background-color: rgba(245, 158, 11, 0.12);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    border-radius: 7px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+}}
+
+QPushButton.btn_mode_yellow:hover {{
+    background-color: rgba(245, 158, 11, 0.22);
+    border-color: #f59e0b;
+    color: #fbbf24;
+}}
+
+QPushButton.btn_mode_yellow:checked {{
+    background-color: #f59e0b;
+    color: #0d0e12;
+    border-color: #f59e0b;
+    font-weight: 700;
+}}
+
+QPushButton.btn_mode_purple {{
+    background-color: rgba(168, 85, 247, 0.12);
+    color: #c084fc;
+    border: 1px solid rgba(168, 85, 247, 0.35);
+    border-radius: 7px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+}}
+
+QPushButton.btn_mode_purple:hover {{
+    background-color: rgba(168, 85, 247, 0.22);
+    border-color: #a855f7;
+    color: #e9d5ff;
+}}
+
+QPushButton.btn_mode_purple:checked {{
+    background-color: #a855f7;
+    color: #ffffff;
+    border-color: #a855f7;
+    font-weight: 700;
+}}
+
+QPushButton.btn_mode_red {{
+    background-color: rgba(239, 68, 68, 0.12);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: 7px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+}}
+
+QPushButton.btn_mode_red:hover {{
+    background-color: rgba(239, 68, 68, 0.22);
+    border-color: #ef4444;
+    color: #fca5a5;
+}}
+
+QPushButton.btn_mode_red:checked {{
+    background-color: #ef4444;
+    color: #ffffff;
+    border-color: #ef4444;
+    font-weight: 700;
+}}
+
 /* CheckBoxes */
 QCheckBox {{
     color: {t["TEXT_PRIMARY"]};
