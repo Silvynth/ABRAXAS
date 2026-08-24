@@ -17,6 +17,7 @@ from core.projects import list_project_folders, get_projects_dir
 from gui.views.neos.graph_canvas import ProjectGraphCanvas
 from gui.views.neos.create_project_view import CreateProjectView
 from gui.views.neos.sync_projects_view import SyncProjectsView
+from gui.views.neos.purge_projects_view import PurgeProjectsView
 
 class ProjectRowWidget(QFrame):
     """Fila interactiva dentro del recuadro unificado de proyectos."""
@@ -185,7 +186,7 @@ class ProjectsView(QWidget):
         root_layout.addWidget(top_card)
 
         # -------------------------------------------------------------
-        # 3. MAIN CENTRAL STACK (PÁGINAS: 0 = EXPLORADOR, 1 = CREAR, 2 = SYNC)
+        # 3. MAIN CENTRAL STACK (PÁGINAS: 0 = EXPLORADOR, 1 = CREAR, 2 = SYNC, 3 = PURGAR)
         # -------------------------------------------------------------
         self.main_stack = QStackedWidget()
 
@@ -367,6 +368,14 @@ class ProjectsView(QWidget):
         self.sync_page.back_requested.connect(lambda: self.set_action_mode("search"))
         self.main_stack.addWidget(self.sync_page)
 
+        # =============================================================
+        # PÁGINA 3: PURGA Y ELIMINACIÓN SEGURA DE PROYECTOS
+        # =============================================================
+        self.purge_page = PurgeProjectsView(self.config_target)
+        self.purge_page.project_purged.connect(self.on_project_purged_success)
+        self.purge_page.back_requested.connect(lambda: self.set_action_mode("search"))
+        self.main_stack.addWidget(self.purge_page)
+
         root_layout.addWidget(self.main_stack)
 
     def set_action_mode(self, mode: str):
@@ -391,8 +400,9 @@ class ProjectsView(QWidget):
             self.sync_page.refresh_dir()
             self.main_stack.setCurrentIndex(2)
         elif mode == "purge":
-            self.search_bar_widget.setVisible(True)
-            self.main_stack.setCurrentIndex(0)
+            self.search_bar_widget.setVisible(False)
+            self.purge_page.refresh_folders()
+            self.main_stack.setCurrentIndex(3)
 
     def on_project_created_success(self, created_path: str):
         """Callback cuando un proyecto es creado con éxito desde el formulario."""
@@ -405,6 +415,12 @@ class ProjectsView(QWidget):
         self.load_projects()
         self.set_action_mode("search")
         self.selected_path = synced_path
+        self.load_projects()
+
+    def on_project_purged_success(self, purged_path: str):
+        """Callback cuando un proyecto es purgado del disco."""
+        if self.selected_path == purged_path:
+            self.selected_path = ""
         self.load_projects()
 
     def adjust_depth(self, delta):
