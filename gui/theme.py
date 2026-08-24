@@ -380,6 +380,54 @@ QLineEdit:focus {{
     border: 1px solid {t["BORDER_FOCUS"]};
 }}
 
+/* Text Editor (QTextEdit / QPlainTextEdit) */
+QTextEdit, QPlainTextEdit {{
+    background-color: {t["BG_INPUT"]};
+    border: 1px solid {t["BORDER_BASE"]};
+    border-radius: 7px;
+    padding: 10px 12px;
+    color: {t["TEXT_PRIMARY"]};
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 12.5px;
+    selection-background-color: {t["ACCENT"]};
+}}
+
+QTextEdit:focus, QPlainTextEdit:focus {{
+    border: 1px solid {t["BORDER_FOCUS"]};
+}}
+
+QTextEdit:disabled, QPlainTextEdit:disabled {{
+    background-color: rgba(15, 16, 21, 0.6);
+    color: {t["TEXT_MUTED"]};
+    border-color: rgba(34, 36, 46, 0.6);
+}}
+
+/* Radio Buttons */
+QRadioButton {{
+    color: {t["TEXT_PRIMARY"]};
+    spacing: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    background-color: transparent;
+}}
+
+QRadioButton::indicator {{
+    width: 16px;
+    height: 16px;
+    border: 1px solid {t["BORDER_BASE"]};
+    border-radius: 8px;
+    background-color: {t["BG_INPUT"]};
+}}
+
+QRadioButton::indicator:hover {{
+    border-color: {t["BORDER_FOCUS"]};
+}}
+
+QRadioButton::indicator:checked {{
+    background-color: {t["ACCENT"]};
+    border: 3px solid {t["BG_MAIN"]};
+}}
+
 /* Buttons */
 QPushButton {{
     background-color: {t["BG_SURFACE"]};
@@ -600,6 +648,22 @@ QComboBox QAbstractItemView::item:hover {{
 QComboBox QAbstractItemView::item:selected {{
     background-color: rgba(99, 102, 241, 0.30);
     color: #ffffff;
+}}
+
+/* Progress Bar */
+QProgressBar {{
+    background-color: {t["BG_INPUT"]};
+    border: 1px solid {t["BORDER_BASE"]};
+    border-radius: 4px;
+    min-height: 8px;
+    max-height: 8px;
+    text-align: center;
+    color: transparent;
+}}
+
+QProgressBar::chunk {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6366f1, stop:0.5 #a855f7, stop:1 #ec4899);
+    border-radius: 3px;
 }}
 """
 

@@ -15,6 +15,7 @@ from PySide6.QtCore import Qt, QDir
 
 from core.projects import list_project_folders, get_projects_dir
 from gui.views.neos.graph_canvas import ProjectGraphCanvas
+from gui.views.neos.create_project_view import CreateProjectView
 
 class ProjectRowWidget(QFrame):
     """Fila interactiva dentro del recuadro unificado de proyectos."""
@@ -161,26 +162,40 @@ class ProjectsView(QWidget):
         row_modes.addStretch()
         top_layout.addLayout(row_modes)
 
-        # Fila 3: Campo de Entrada Dinámico y Botón de Ejecución
-        row_actions = QHBoxLayout()
-        self.txt_action_input = QLineEdit()
-        self.txt_action_input.setPlaceholderText("🔍 Filtrar proyectos por nombre...")
-        self.txt_action_input.textChanged.connect(self.on_input_text_changed)
-        
-        self.btn_action_exec = QPushButton("🔄 Recargar")
-        self.btn_action_exec.setProperty("class", "browse")
-        self.btn_action_exec.setCursor(Qt.PointingHandCursor)
-        self.btn_action_exec.clicked.connect(self.on_action_execute)
+        # Fila 3: Barra de búsqueda (visible en modo Buscar)
+        self.search_bar_widget = QWidget()
+        row_search = QHBoxLayout(self.search_bar_widget)
+        row_search.setContentsMargins(0, 0, 0, 0)
+        row_search.setSpacing(8)
 
-        row_actions.addWidget(self.txt_action_input, 1)
-        row_actions.addWidget(self.btn_action_exec)
-        top_layout.addLayout(row_actions)
+        self.txt_filter = QLineEdit()
+        self.txt_filter.setPlaceholderText("🔍 Filtrar proyectos por nombre...")
+        self.txt_filter.textChanged.connect(self.filter_projects)
+        
+        btn_refresh = QPushButton("🔄 Recargar")
+        btn_refresh.setProperty("class", "browse")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
+        btn_refresh.clicked.connect(self.load_projects)
+
+        row_search.addWidget(self.txt_filter, 1)
+        row_search.addWidget(btn_refresh)
+        top_layout.addWidget(self.search_bar_widget)
 
         root_layout.addWidget(top_card)
 
         # -------------------------------------------------------------
-        # 3. SPLITTER VERTICAL (LISTA UNIFICADA ARRIBA + GRAFO/ÁRBOL ABAJO)
+        # 3. MAIN CENTRAL STACK (PÁGINAS: 0 = EXPLORADOR/GRAFO, 1 = CREAR)
         # -------------------------------------------------------------
+        self.main_stack = QStackedWidget()
+
+        # =============================================================
+        # PÁGINA 0: MODO BUSCADOR Y EXPLORADOR CON GRAFO / ÁRBOL
+        # =============================================================
+        self.explorer_page = QWidget()
+        exp_layout = QVBoxLayout(self.explorer_page)
+        exp_layout.setContentsMargins(0, 0, 0, 0)
+        exp_layout.setSpacing(0)
+
         self.splitter = QSplitter(Qt.Vertical)
         self.splitter.setChildrenCollapsible(False)
 
@@ -300,7 +315,7 @@ class ProjectsView(QWidget):
         tree_header_row.addWidget(btn_open)
         bottom_layout.addLayout(tree_header_row)
 
-        # Stack con [0: Grafo Interactivo Canvas, 1: Árbol QTreeView]
+        # Stack interno con [0: Grafo Canvas, 1: Árbol QTreeView]
         self.bottom_stack = QStackedWidget()
 
         # 1. Canvas del Grafo
@@ -331,11 +346,22 @@ class ProjectsView(QWidget):
 
         # Proporción inicial del splitter (35% lista arriba, 65% grafo/árbol abajo)
         self.splitter.setSizes([180, 360])
+        exp_layout.addWidget(self.splitter)
 
-        root_layout.addWidget(self.splitter)
+        self.main_stack.addWidget(self.explorer_page)
+
+        # =============================================================
+        # PÁGINA 1: FORMULARIO DE CREACIÓN DE PROYECTO (CON IA & GIT)
+        # =============================================================
+        self.create_page = CreateProjectView(self.config_target)
+        self.create_page.project_created.connect(self.on_project_created_success)
+        self.create_page.cancel_requested.connect(lambda: self.set_action_mode("search"))
+        self.main_stack.addWidget(self.create_page)
+
+        root_layout.addWidget(self.main_stack)
 
     def set_action_mode(self, mode: str):
-        """Alterna entre los 4 modos de acción: Buscar (Verde), Crear (Amarillo), Sincronizar (Morado), Purgar (Rojo)."""
+        """Alterna entre los modos de acción: Buscar (Verde), Crear (Amarillo), Sincronizar (Morado), Purgar (Rojo)."""
         self.action_mode = mode
 
         self.btn_mode_search.setChecked(mode == "search")
@@ -344,42 +370,26 @@ class ProjectsView(QWidget):
         self.btn_mode_purge.setChecked(mode == "purge")
 
         if mode == "search":
-            self.txt_action_input.setPlaceholderText("🔍 Filtrar proyectos por nombre...")
-            self.btn_action_exec.setText("🔄 Recargar")
-            self.btn_action_exec.setProperty("class", "browse")
-            self.filter_projects(self.txt_action_input.text().strip())
+            self.search_bar_widget.setVisible(True)
+            self.main_stack.setCurrentIndex(0)
+            self.filter_projects(self.txt_filter.text().strip())
         elif mode == "create":
-            self.txt_action_input.setPlaceholderText("✨ Nombre del nuevo proyecto a crear en la ruta...")
-            self.btn_action_exec.setText("➕ Crear")
-            self.btn_action_exec.setProperty("class", "btn_mode_yellow")
+            # Ocultar barra de búsqueda y mostrar formulario de creación
+            self.search_bar_widget.setVisible(False)
+            self.create_page.refresh_base_dir()
+            self.main_stack.setCurrentIndex(1)
         elif mode == "sync":
-            self.txt_action_input.setPlaceholderText("🔄 Repositorio Git remoto o rama a sincronizar...")
-            self.btn_action_exec.setText("⚡ Sincronizar")
-            self.btn_action_exec.setProperty("class", "btn_mode_purple")
+            self.search_bar_widget.setVisible(True)
+            self.main_stack.setCurrentIndex(0)
         elif mode == "purge":
-            self.txt_action_input.setPlaceholderText("🗑️ Nombre de la carpeta a purgar / eliminar...")
-            self.btn_action_exec.setText("⚠️ Purgar")
-            self.btn_action_exec.setProperty("class", "btn_mode_red")
+            self.search_bar_widget.setVisible(True)
+            self.main_stack.setCurrentIndex(0)
 
-        self.btn_action_exec.style().unpolish(self.btn_action_exec)
-        self.btn_action_exec.style().polish(self.btn_action_exec)
-
-    def on_input_text_changed(self, text):
-        if self.action_mode == "search":
-            self.filter_projects(text)
-
-    def on_action_execute(self):
-        if self.action_mode == "search":
-            self.load_projects()
-        elif self.action_mode == "create":
-            # Espacio listo para la creación de proyectos
-            self.load_projects()
-        elif self.action_mode == "sync":
-            # Espacio listo para la sincronización Git
-            pass
-        elif self.action_mode == "purge":
-            # Espacio listo para la purga de carpetas
-            pass
+    def on_project_created_success(self, created_path: str):
+        """Callback cuando un proyecto es creado con éxito desde el formulario."""
+        self.set_action_mode("search")
+        self.selected_path = created_path
+        self.load_projects()
 
     def adjust_depth(self, delta):
         new_depth = self.graph_canvas.change_depth(delta)
@@ -477,8 +487,8 @@ class ProjectsView(QWidget):
         if target_folder and target_row:
             self.on_row_clicked(target_folder, target_row)
 
-        if hasattr(self, "txt_action_input") and self.txt_action_input.text().strip() and self.action_mode == "search":
-            self.filter_projects(self.txt_action_input.text().strip())
+        if hasattr(self, "txt_filter") and self.txt_filter.text().strip() and self.action_mode == "search":
+            self.filter_projects(self.txt_filter.text().strip())
 
     def on_row_clicked(self, folder_data, clicked_row):
         for _, row, _ in self.row_widgets:
