@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# =====================================================================
+#  ❖ ABRAXAS | DESKTOP LAUNCHER WRAPPER
+# =====================================================================
+
+PROJECT_DIR="/home/silvynth/Proyectos/ABRAXAS"
+LOG_FILE="/tmp/abraxas.log"
+
+cd "$PROJECT_DIR" || exit 1
+export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
+
+# Ejecutar y registrar logs de depuración
+exec "$PROJECT_DIR/venv/bin/python" "$PROJECT_DIR/gui/app_main.py" "$@" > "$LOG_FILE" 2>&1

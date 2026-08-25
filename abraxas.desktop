@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=ABRAXAS
+Comment=NEOS Control Center
+Path=/home/silvynth/Proyectos/ABRAXAS
+Exec=/home/silvynth/Proyectos/ABRAXAS/venv/bin/python /home/silvynth/Proyectos/ABRAXAS/gui/app_main.py
+Icon=/home/silvynth/Proyectos/ABRAXAS/assets/abraxas_icon.svg
+Terminal=false
+Categories=Development;System;Utility;
+StartupNotify=false

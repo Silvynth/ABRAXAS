@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/home/silvynth/Proyectos/ABRAXAS/venv/bin/python
 # =====================================================================
 #  ❖ ABRAXAS | NEOS CONTROL CENTER (PySide6 Main GUI)
 # =====================================================================
@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QStackedWidget, QFrame
 )
+from PySide6.QtGui import QIcon
 from PySide6.QtCore import Qt
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,6 +31,11 @@ class NeosMainApp(QWidget):
         self.app_version = get_version()
         self.setWindowTitle(f"ABRAXAS | NEOS Control Center (v{self.app_version})")
         self.setMinimumSize(940, 640)
+
+        # Icono de la ventana
+        icon_path = os.path.join(ROOT_DIR, "assets", "abraxas_icon.svg")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
 
         self.config_target = get_target_config_path()
         self.cfg = read_toml_dict(self.config_target)
@@ -159,6 +165,14 @@ class NeosMainApp(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setApplicationName("ABRAXAS")
+    app.setApplicationDisplayName("ABRAXAS")
+    app.setDesktopFileName("abraxas.desktop")
+    
+    icon_path = os.path.join(ROOT_DIR, "assets", "abraxas_icon.svg")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
+
     window = NeosMainApp()
     window.show()
     sys.exit(app.exec())
