@@ -123,7 +123,7 @@ class NeosMainApp(QWidget):
         self.page_umbra = UmbraView()
         
         # Page 1: LUMEN (views/lumen/)
-        self.page_lumen = LumenView()
+        self.page_lumen = LumenView(self.config_target)
 
         # Page 2: PROYECTOS (views/neos/projects_view.py)
         self.page_proyectos = ProjectsView(self.config_target)
@@ -152,7 +152,9 @@ class NeosMainApp(QWidget):
         self.stacked.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
-        if index == 2 and hasattr(self, "page_proyectos"):
+        if index == 1 and hasattr(self, "page_lumen"):
+            self.page_lumen.load_projects()
+        elif index == 2 and hasattr(self, "page_proyectos"):
             self.page_proyectos.load_projects()
 
     def apply_theme(self, theme_key):
@@ -160,6 +162,8 @@ class NeosMainApp(QWidget):
 
     def on_config_saved(self, new_cfg):
         self.cfg = new_cfg
+        if hasattr(self, "page_lumen"):
+            self.page_lumen.load_projects()
         if hasattr(self, "page_proyectos"):
             self.page_proyectos.load_projects()
 
