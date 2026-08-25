@@ -7,12 +7,14 @@ import os
 import json
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QPushButton, QLineEdit, QFrame, QScrollArea
+    QPushButton, QLineEdit, QFrame, QScrollArea,
+    QStackedWidget
 )
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QPoint, QEasingCurve, QSize
 
 from core.projects import list_project_folders, get_projects_dir
 from core.setup import get_target_config_path
+from gui.views.lumen.workspace_view import LumenProjectWorkspaceView
 
 
 def get_lumen_order_file():
@@ -62,13 +64,11 @@ class LumenDragHandle(QLabel):
                 font-weight: 900;
                 padding: 4px 2px;
                 border-radius: 5px;
-                background-color: rgba(255, 255, 255, 0.03);
-                border: 1px solid rgba(255, 255, 255, 0.08);
+                background-color: rgba(255, 255, 255, 0.02);
             }
             QLabel:hover {
                 color: #818cf8;
-                background-color: rgba(99, 102, 241, 0.20);
-                border-color: #6366f1;
+                background-color: rgba(99, 102, 241, 0.18);
             }
         """)
 
@@ -101,12 +101,13 @@ class LumenDragHandle(QLabel):
 class LumenProjectRowWidget(QFrame):
     """Fila interactiva para seleccionar y reordenar un proyecto dentro de Lumen."""
     
-    def __init__(self, folder_data, rank, container, on_select_cb, parent=None):
+    def __init__(self, folder_data, rank, container, on_select_cb, on_double_click_cb, parent=None):
         super().__init__(parent or container)
         self.folder_data = folder_data
         self.rank = rank
         self.container = container
         self.on_select_cb = on_select_cb
+        self.on_double_click_cb = on_double_click_cb
         self.is_selected = False
         self.is_dragging = False
 
@@ -200,58 +201,58 @@ class LumenProjectRowWidget(QFrame):
             self.lbl_rank.setText("👑 #1 TOP")
             self.lbl_rank.setStyleSheet(
                 "QLabel {"
-                "  background-color: rgba(245, 158, 11, 0.16); "
+                "  background-color: rgba(245, 158, 11, 0.20); "
                 "  color: #fbbf24; "
-                "  border: 1px solid rgba(245, 158, 11, 0.5); "
-                "  border-radius: 5px; "
+                "  border: 1px solid rgba(245, 158, 11, 0.6); "
+                "  border-radius: 6px; "
                 "  padding: 0px 9px; "
                 "  min-height: 24px; "
                 "  max-height: 24px; "
-                "  font-weight: 800; "
+                "  font-weight: 900; "
                 "  font-size: 12px;"
                 "}"
             )
-            self.lbl_name.setStyleSheet("color: #fbbf24; font-size: 14.5px; font-weight: 800;")
-            border_css = "border-left: 4px solid #f59e0b;"
-            bg_css = "background-color: rgba(245, 158, 11, 0.05);"
+            self.lbl_name.setStyleSheet("color: #fbbf24; font-size: 15px; font-weight: 800;")
+            border_css = "border-left: 5px solid #f59e0b; border: 1px solid rgba(245, 158, 11, 0.25);"
+            bg_css = "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(245, 158, 11, 0.12), stop:1 rgba(245, 158, 11, 0.02));"
         elif self.rank == 2:
             # 2do Lugar: Cian Eléctrico Vibrante
             self.lbl_rank.setText("⚡ #2")
             self.lbl_rank.setStyleSheet(
                 "QLabel {"
-                "  background-color: rgba(56, 189, 248, 0.16); "
+                "  background-color: rgba(56, 189, 248, 0.20); "
                 "  color: #38bdf8; "
-                "  border: 1px solid rgba(56, 189, 248, 0.5); "
-                "  border-radius: 5px; "
+                "  border: 1px solid rgba(56, 189, 248, 0.6); "
+                "  border-radius: 6px; "
                 "  padding: 0px 9px; "
                 "  min-height: 24px; "
                 "  max-height: 24px; "
-                "  font-weight: 800; "
+                "  font-weight: 900; "
                 "  font-size: 12px;"
                 "}"
             )
-            self.lbl_name.setStyleSheet("color: #38bdf8; font-size: 14.5px; font-weight: 700;")
-            border_css = "border-left: 4px solid #0ea5e9;"
-            bg_css = "background-color: rgba(56, 189, 248, 0.04);"
+            self.lbl_name.setStyleSheet("color: #38bdf8; font-size: 15px; font-weight: 800;")
+            border_css = "border-left: 5px solid #0ea5e9; border: 1px solid rgba(14, 165, 233, 0.25);"
+            bg_css = "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(14, 165, 233, 0.12), stop:1 rgba(14, 165, 233, 0.02));"
         elif self.rank == 3:
             # 3er Lugar: Violeta / Púrpura Neón
             self.lbl_rank.setText("🔮 #3")
             self.lbl_rank.setStyleSheet(
                 "QLabel {"
-                "  background-color: rgba(192, 132, 252, 0.16); "
+                "  background-color: rgba(192, 132, 252, 0.20); "
                 "  color: #c084fc; "
-                "  border: 1px solid rgba(192, 132, 252, 0.5); "
-                "  border-radius: 5px; "
+                "  border: 1px solid rgba(192, 132, 252, 0.6); "
+                "  border-radius: 6px; "
                 "  padding: 0px 9px; "
                 "  min-height: 24px; "
                 "  max-height: 24px; "
-                "  font-weight: 800; "
+                "  font-weight: 900; "
                 "  font-size: 12px;"
                 "}"
             )
-            self.lbl_name.setStyleSheet("color: #c084fc; font-size: 14.5px; font-weight: 700;")
-            border_css = "border-left: 4px solid #a855f7;"
-            bg_css = "background-color: rgba(168, 85, 247, 0.04);"
+            self.lbl_name.setStyleSheet("color: #c084fc; font-size: 15px; font-weight: 800;")
+            border_css = "border-left: 5px solid #a855f7; border: 1px solid rgba(168, 85, 247, 0.25);"
+            bg_css = "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(168, 85, 247, 0.12), stop:1 rgba(168, 85, 247, 0.02));"
         else:
             # Resto de proyectos: Color blanco estándar
             self.lbl_rank.setText(f"📄 #{self.rank}")
@@ -259,34 +260,34 @@ class LumenProjectRowWidget(QFrame):
                 "QLabel {"
                 "  background-color: rgba(255, 255, 255, 0.05); "
                 "  color: #9ca3af; "
-                "  border: 1px solid rgba(255, 255, 255, 0.12); "
-                "  border-radius: 5px; "
+                "  border: 1px solid rgba(255, 255, 255, 0.15); "
+                "  border-radius: 6px; "
                 "  padding: 0px 9px; "
                 "  min-height: 24px; "
                 "  max-height: 24px; "
-                "  font-weight: 600; "
+                "  font-weight: 700; "
                 "  font-size: 12px;"
                 "}"
             )
             self.lbl_name.setStyleSheet("color: #ffffff; font-size: 14.5px; font-weight: 600;")
-            border_css = "border-left: 4px solid transparent;"
-            bg_css = "background-color: transparent;"
+            border_css = "border-left: 5px solid rgba(255, 255, 255, 0.15); border: 1px solid rgba(255, 255, 255, 0.06);"
+            bg_css = "background-color: rgba(255, 255, 255, 0.02);"
 
         if self.is_dragging:
             self.setStyleSheet(
                 "QFrame.project_row { "
-                "  border: 1px solid #6366f1; "
-                "  border-left: 5px solid #818cf8; "
-                "  background-color: rgba(99, 102, 241, 0.28); "
-                "  border-radius: 8px; "
+                "  border: 1px solid #818cf8; "
+                "  border-left: 6px solid #6366f1; "
+                "  background-color: rgba(99, 102, 241, 0.32); "
+                "  border-radius: 10px; "
                 "}"
             )
         elif self.is_selected:
             self.setStyleSheet(
                 f"QFrame.project_row {{ "
                 f"  {border_css} "
-                f"  background-color: rgba(99, 102, 241, 0.20); "
-                f"  border-bottom: 1px solid #22242e; "
+                f"  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(99, 102, 241, 0.25), stop:1 rgba(99, 102, 241, 0.06)); "
+                f"  border-radius: 10px; "
                 f"}}"
             )
         else:
@@ -294,7 +295,7 @@ class LumenProjectRowWidget(QFrame):
                 f"QFrame.project_row {{ "
                 f"  {border_css} "
                 f"  {bg_css} "
-                f"  border-bottom: 1px solid #22242e; "
+                f"  border-radius: 10px; "
                 f"}}"
             )
 
@@ -311,6 +312,11 @@ class LumenProjectRowWidget(QFrame):
         if event.button() == Qt.LeftButton:
             self.on_select_cb(self.folder_data, self)
         super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.on_double_click_cb(self.folder_data)
+        super().mouseDoubleClickEvent(event)
 
 
 class LumenProjectListContainer(QWidget):
@@ -446,7 +452,7 @@ class LumenProjectListContainer(QWidget):
 
 
 class LumenView(QWidget):
-    """Vista principal del dominio LUMEN con Selector de Proyectos y reordenamiento con animación vertical."""
+    """Vista principal del dominio LUMEN con Selector de Proyectos y Workspace Dashboard interactivo."""
     
     project_selected = Signal(dict)
 
@@ -462,23 +468,30 @@ class LumenView(QWidget):
     def init_ui(self):
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
-        root_layout.setSpacing(12)
+        root_layout.setSpacing(0)
 
-        # -------------------------------------------------------------
-        # 1. ENCABEZADO
-        # -------------------------------------------------------------
+        # Main Stacked Widget (Página 0: Selector de proyectos, Página 1: Workspace Dashboard)
+        self.main_stack = QStackedWidget(self)
+
+        # =============================================================
+        # PÁGINA 0: SELECTOR DE PROYECTOS
+        # =============================================================
+        self.selector_page = QWidget()
+        sel_layout = QVBoxLayout(self.selector_page)
+        sel_layout.setContentsMargins(0, 0, 0, 0)
+        sel_layout.setSpacing(12)
+
+        # Encabezado
         lbl_t = QLabel("💻 LUMEN")
         lbl_t.setProperty("class", "page_title")
         
         lbl_sub = QLabel("Motor Dev & IA Local — Espacio de Trabajo")
         lbl_sub.setProperty("class", "page_subtitle")
         
-        root_layout.addWidget(lbl_t)
-        root_layout.addWidget(lbl_sub)
+        sel_layout.addWidget(lbl_t)
+        sel_layout.addWidget(lbl_sub)
 
-        # -------------------------------------------------------------
-        # 2. BARRA DE CONTROL & BÚSQUEDA (SIN BOTONES DE CREAR/SYNC/PURGAR)
-        # -------------------------------------------------------------
+        # Barra de Control y Búsqueda
         top_card = QFrame()
         top_card.setProperty("class", "surface")
         top_layout = QVBoxLayout(top_card)
@@ -514,14 +527,12 @@ class LumenView(QWidget):
         row_search.addWidget(btn_refresh)
         top_layout.addLayout(row_search)
 
-        root_layout.addWidget(top_card)
+        sel_layout.addWidget(top_card)
 
-        # -------------------------------------------------------------
-        # 3. SELECTOR DE PROYECTOS (LISTA EXPANDIDA CON REORDENAMIENTO ☰)
-        # -------------------------------------------------------------
-        lbl_list_header = QLabel("📦 Proyectos Disponibles (Arrastra las ☰ de la izquierda para subir/bajar prioridad):")
+        # Selector de proyectos scrollable
+        lbl_list_header = QLabel("📦 Proyectos Disponibles (Doble clic para entrar • Arrastra ☰ para priorizar):")
         lbl_list_header.setStyleSheet("font-weight: 700; font-size: 12px; color: #9ca3af;")
-        root_layout.addWidget(lbl_list_header)
+        sel_layout.addWidget(lbl_list_header)
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
@@ -532,7 +543,17 @@ class LumenView(QWidget):
         self.list_container.order_changed.connect(self.on_order_changed)
         self.scroll_area.setWidget(self.list_container)
 
-        root_layout.addWidget(self.scroll_area, 1)
+        sel_layout.addWidget(self.scroll_area, 1)
+        self.main_stack.addWidget(self.selector_page)
+
+        # =============================================================
+        # PÁGINA 1: WORKSPACE DASHBOARD DEL PROYECTO SELECCIONADO
+        # =============================================================
+        self.workspace_page = LumenProjectWorkspaceView()
+        self.workspace_page.back_requested.connect(self.go_back_to_selector)
+        self.main_stack.addWidget(self.workspace_page)
+
+        root_layout.addWidget(self.main_stack)
 
     def load_projects(self):
         """Carga proyectos del disco y los ordena según la preferencia guardada del usuario."""
@@ -574,7 +595,8 @@ class LumenView(QWidget):
                 folder_data=folder,
                 rank=rank,
                 container=self.list_container,
-                on_select_cb=self.on_row_clicked
+                on_select_cb=self.on_row_clicked,
+                on_double_click_cb=self.open_project_workspace
             )
             row.show()
             self.list_container.rows.append(row)
@@ -605,6 +627,18 @@ class LumenView(QWidget):
         if hasattr(self, "txt_filter") and self.txt_filter.text().strip():
             self.filter_projects(self.txt_filter.text().strip())
 
+    def open_project_workspace(self, folder_data: dict):
+        """Abre el espacio de trabajo del proyecto al hacer doble clic."""
+        self.selected_project = folder_data
+        self.selected_path = folder_data.get("path", "")
+        self.workspace_page.set_project(folder_data)
+        self.main_stack.setCurrentIndex(1)
+
+    def go_back_to_selector(self):
+        """Regresa a la pantalla del selector de proyectos."""
+        self.main_stack.setCurrentIndex(0)
+        self.load_projects()
+
     def on_order_changed(self, new_folders):
         """Callback cuando el usuario reordena arrastrando verticalmente."""
         pass
@@ -627,6 +661,7 @@ class LumenView(QWidget):
             r.setVisible(match)
             if match:
                 visible_count += 1
+
 
 
 
