@@ -1215,7 +1215,7 @@ class LumenProjectWorkspaceView(QWidget):
         self.lbl_commit_loading_title.setStyleSheet("font-size: 14px; font-weight: 900; color: #c084fc; letter-spacing: 0.8px;")
         c_l_lay.addWidget(self.lbl_commit_loading_title)
 
-        self.lbl_commit_loading_sub = QLabel("Analizando git diff, clasificación de impacto y directivas de Artemis...")
+        self.lbl_commit_loading_sub = QLabel("Analizando git diff, clasificación de impacto y directivas de IA...")
         self.lbl_commit_loading_sub.setAlignment(Qt.AlignCenter)
         self.lbl_commit_loading_sub.setStyleSheet("font-size: 12px; color: #9ca3af;")
         c_l_lay.addWidget(self.lbl_commit_loading_sub)
@@ -1667,7 +1667,7 @@ class LumenProjectWorkspaceView(QWidget):
         self.sector1_sub_stack.setCurrentIndex(4)
 
         self.terminal_display.log("IA-COMMIT", f"Invocando red neuronal <b>{model_name}</b> ({id_prefix}) con impacto <b style='color:#fbbf24;'>{self.selected_impact}</b>...", tag_color="#ec4899", prefix="⏳")
-        self.terminal_display.log_info("AI-ENGINE", "Extrayendo git diff en staging y aplicando directivas de razonamiento de Artemis...")
+        self.terminal_display.log_info("AI-ENGINE", "Extrayendo git diff en staging y aplicando directivas de razonamiento de IA...")
 
         self.commit_thread = IACommitThread(
             project_path=path,
@@ -1694,7 +1694,7 @@ class LumenProjectWorkspaceView(QWidget):
         impact = res.get("impact_type", "GAMMA")
         ver = res.get("target_ver", "v0.1.0")
 
-        # Proyectar en la terminal inferior el resultado con diseño idéntico a Artemis
+        # Proyectar en la terminal inferior el resultado
         self.terminal_display.log("IA-COMMIT", f"Propuesta de commit generada exitosamente por <b>{model_name}</b>:", tag_color="#34d399", prefix="✔")
 
         report_box = (
@@ -1702,7 +1702,7 @@ class LumenProjectWorkspaceView(QWidget):
             f"padding: 10px 14px; margin: 8px 0; border-radius: 4px; font-family: monospace; font-size: 12px; "
             f"color: #f3f4f6; line-height: 1.5;'>"
             f"<div style='font-weight: 800; color: #fbbf24; margin-bottom: 4px;'>"
-            f"❖ PROPUESTA DE COMMIT YoRHa ({id_prefix}) ❖"
+            f"❖ PROPUESTA DE COMMIT ABRAXAS ({id_prefix}) ❖"
             f"</div>"
             f"<div style='margin-bottom: 2px;'><b style='color: #38bdf8;'>TÍTULO:</b> {commit_header} | {title}</div>"
             f"<div style='margin-bottom: 6px;'><b style='color: #c084fc;'>IMPACTO:</b> {impact} (Versión: {ver})</div>"

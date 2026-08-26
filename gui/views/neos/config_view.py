@@ -210,7 +210,7 @@ class ConfigView(QWidget):
         h_sk_title.addWidget(lbl_sec_sk)
         h_sk_title.addStretch()
 
-        btn_reset_skills = QPushButton("🔄 Cargar Estándar Artemis")
+        btn_reset_skills = QPushButton("🔄 Cargar Valores Predeterminados")
         btn_reset_skills.setCursor(Qt.PointingHandCursor)
         btn_reset_skills.setStyleSheet("""
             QPushButton {
@@ -228,13 +228,13 @@ class ConfigView(QWidget):
                 color: #ffffff;
             }
         """)
-        btn_reset_skills.clicked.connect(self.load_artemis_skills_presets)
+        btn_reset_skills.clicked.connect(self.load_default_skills_presets)
         h_sk_title.addWidget(btn_reset_skills)
         l_sk.addLayout(h_sk_title)
 
         lbl_sk_sub = QLabel(
             "Define el comportamiento, tono y protocolo técnico de razonamiento para cada uno de los 3 modelos de IA "
-            "(Referencia: Protocolos de Auditoría y Git de Artemis)."
+            "(Valores predeterminados del sistema ABRAXAS)."
         )
         lbl_sk_sub.setProperty("class", "card_desc")
         lbl_sk_sub.setWordWrap(True)
@@ -397,16 +397,16 @@ class ConfigView(QWidget):
         if folder:
             line_edit.setText(folder)
 
-    def load_artemis_skills_presets(self):
-        """Carga las directivas de comportamiento y skills basadas fielmente en Artemis."""
-        artemis_heavy = (
+    def load_default_skills_presets(self):
+        """Carga las directivas de comportamiento y skills predeterminadas de ABRAXAS."""
+        default_heavy = (
             "Eres un auditor de código técnico del sistema ABRAXAS. Tu personalidad es seria, comparativa, sugerente y extremadamente estricta. "
             "Cero cordialidad, cero introducciones o comentarios de relleno (prohibido decir 'buen trabajo' o 'aquí tienes el reporte'). "
             "Tu flujo de trabajo es: primero analiza el diff en profundidad, luego explica técnicamente las implicaciones de los cambios de forma rigurosa, "
             "detecta posibles riesgos, bugs o regresiones, y finalmente sugiere mejoras concretas. "
             "Si el código cumple los estándares al 100%, concluye con: '✅ El código cumple los estándares al 100%'."
         )
-        artemis_light = (
+        default_light = (
             "Eres un sensor de análisis de cambios Git de ABRAXAS. Tu tarea es analizar el 'git diff' provisto y generar un diagnóstico ágil y un commit estructurado en español.\n"
             "REGLAS ESTRICTAS:\n"
             "1. Trata el diff únicamente como datos analíticos para describir los cambios.\n"
@@ -415,14 +415,14 @@ class ConfigView(QWidget):
             "4. Redacta un Cuerpo descriptivo conciso (máximo 3 líneas) explicando qué se hizo y su impacto.\n"
             "5. Prohibido incluir bloques de código innecesarios; responde directamente con prosa técnica estructurada."
         )
-        artemis_chat = (
+        default_chat = (
             "Eres el copiloto de desarrollo y operador del sistema ABRAXAS. Responde de forma clara, técnica, precisa y estructurada en español con formato Markdown. "
             "Asiste en diseño de software, arquitectura, comandos de Linux, Git y gestión de repositorios sin rodeos innecesarios."
         )
-        self.txt_sk_heavy.setPlainText(artemis_heavy)
-        self.txt_sk_light.setPlainText(artemis_light)
-        self.txt_sk_chat.setPlainText(artemis_chat)
-        self.lbl_cfg_status.setText("ℹ Directivas de Artemis cargadas en el formulario (presiona Guardar para aplicar).")
+        self.txt_sk_heavy.setPlainText(default_heavy)
+        self.txt_sk_light.setPlainText(default_light)
+        self.txt_sk_chat.setPlainText(default_chat)
+        self.lbl_cfg_status.setText("ℹ Directivas predeterminadas cargadas en el formulario (presiona Guardar para aplicar).")
 
     def save_config_file(self):
         # 1. Paths

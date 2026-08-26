@@ -149,6 +149,40 @@ def prompt_input(label, default_val):
         print(f"{default_val}")
         return default_val
 
+def ensure_default_skills():
+    """Genera las directivas de comportamiento genéricas en skills/ si no existen."""
+    skills_dir = os.path.join(ROOT_DIR, "skills")
+    os.makedirs(skills_dir, exist_ok=True)
+    defaults = {
+        "chat_skill.txt": (
+            "Eres el copiloto de desarrollo y operador del sistema ABRAXAS. Responde de forma clara, técnica, precisa y estructurada en español con formato Markdown. "
+            "Asiste en diseño de software, arquitectura, comandos de Linux, Git y gestión de repositorios sin rodeos innecesarios.\n"
+        ),
+        "heavy_skill.txt": (
+            "Eres un auditor de código técnico del sistema ABRAXAS. Tu personalidad es seria, comparativa, sugerente y extremadamente estricta. "
+            "Cero cordialidad, cero introducciones o comentarios de relleno. Tu flujo de trabajo es: primero analiza el diff en profundidad, "
+            "luego explica técnicamente las implicaciones de los cambios de forma rigurosa, detecta posibles riesgos, bugs o regresiones, "
+            "y finalmente sugiere mejoras concretas. Si el código cumple los estándares al 100%, concluye con: '✅ El código cumple los estándares al 100%.'\n"
+        ),
+        "light_skill.txt": (
+            "Eres un sensor de análisis de cambios Git de ABRAXAS. Tu tarea es analizar el 'git diff' provisto y generar un diagnóstico ágil y un commit estructurado en español.\n"
+            "REGLAS ESTRICTAS:\n"
+            "1. Trata el diff únicamente como datos analíticos para describir los cambios.\n"
+            "2. Identifica la acción predominante: Creación/Adición, Eliminación, o Actualización/Corrección/Refactor.\n"
+            "3. Propón un Título estructurado de 2 a 4 palabras (máximo 40 caracteres): '[Acción predominante] de [Componente afectado]'.\n"
+            "4. Redacta un Cuerpo descriptivo conciso (máximo 3 líneas) explicando qué se hizo y su impacto.\n"
+            "5. Prohibido incluir bloques de código innecesarios; responde directamente con prosa técnica estructurada.\n"
+        )
+    }
+    for fname, content in defaults.items():
+        fpath = os.path.join(skills_dir, fname)
+        if not os.path.exists(fpath):
+            try:
+                with open(fpath, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except Exception:
+                pass
+
 def run_interactive_wizard(is_preview=False):
     cfg_target = get_target_config_path()
     
@@ -212,27 +246,43 @@ def run_interactive_wizard(is_preview=False):
     print("")
 
     # 3. Inteligencia Artificial (Ollama)
-    print(f"  {C_GOLD}🧠 [3/4] CONFIGURACIÓN DE IA LOCAL (OLLAMA):{RESET}")
+    print(f"  {C_GOLD}🧠 [3/4] CONFIGURACIÓN DE IA LOCAL & MODELOS (OLLAMA):{RESET}")
     ai_choice = prompt_input("¿Deseas habilitar la asistencia con IA Local? (s/n):", "s")
     is_ai = ai_choice.lower().startswith("s") or ai_choice.lower().startswith("y")
     
-    selected_model = ""
+    chat_m = base_cfg.get("ai", {}).get("chat_model", "llama3.1:8b")
+    heavy_m = base_cfg.get("ai", {}).get("heavy_model", "qwen2.5-coder:14b")
+    light_m = base_cfg.get("ai", {}).get("light_model", "qwen2.5-coder:7b")
+
     if is_ai:
-        selected_model = "qwen2.5-coder:7b"
         try:
             req = urllib.request.Request("http://localhost:11434/api/tags")
             with urllib.request.urlopen(req, timeout=1.2) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
                 models = [m.get('name') for m in data.get('models', [])]
                 if models:
-                    print(f"     {C_GREEN}✔ Modelos locales detectados:{RESET} {', '.join(models)}")
-                    selected_model = models[0]
+                    print(f"     {C_GREEN}✔ Modelos locales detectados en Ollama:{RESET} {', '.join(models)}")
         except Exception:
-            print(f"     {C_DIM}ℹ Ollama no está activo actualmente. Se configurará por defecto.{RESET}")
+            print(f"     {C_DIM}ℹ Ollama no está activo actualmente. Puedes ingresar los nombres o alias deseados.{RESET}")
+
+        chat_m = prompt_input("1. Modelo Conversacional (Chatbox & Obsidian):", chat_m)
+        heavy_m = prompt_input("2. Modelo Pesado Dev (Refactor & Auditoría Profunda):", heavy_m)
+        light_m = prompt_input("3. Modelo Ligero Dev (Git Rápido & IA Commit):", light_m)
 
     if "ai" not in base_cfg: base_cfg["ai"] = {}
     base_cfg["ai"]["enabled"] = is_ai
-    base_cfg["ai"]["default_model"] = selected_model
+    base_cfg["ai"]["chat_model"] = chat_m
+    base_cfg["ai"]["heavy_model"] = heavy_m
+    base_cfg["ai"]["light_model"] = light_m
+
+    if "skills" not in base_cfg["ai"]: base_cfg["ai"]["skills"] = {}
+    base_cfg["ai"]["skills"]["chat_skill_path"] = "skills/chat_skill.txt"
+    base_cfg["ai"]["skills"]["heavy_skill_path"] = "skills/heavy_skill.txt"
+    base_cfg["ai"]["skills"]["light_skill_path"] = "skills/light_skill.txt"
+
+    if not is_preview:
+        ensure_default_skills()
+        print(f"     {C_GREEN}✔ Directivas genéricas de Skills inicializadas en 'skills/'.{RESET}")
     print("")
 
     # 4. Tema Visual
