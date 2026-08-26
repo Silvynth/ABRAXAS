@@ -9,22 +9,28 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QFrame, QScrollArea, QGridLayout,
-    QTextEdit, QApplication, QStackedWidget, QSizePolicy
+    QTextEdit, QApplication, QStackedWidget, QSizePolicy,
+    QProgressBar
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread
 
 from core import get_version
 from core.lumen_sync import get_full_project_sync
 from core.ai import get_configured_model, audit_git_diff
+from core.git_workflow import (
+    get_project_semver, bump_semver, 
+    generate_ia_commit_proposal, execute_commit_and_tag
+)
 
 
 class GitPushThread(QThread):
     """Hilo para ejecutar git push origin <branch> sin congelar la GUI."""
     finished_push = Signal(bool, str, str)
 
-    def __init__(self, project_path: str):
+    def __init__(self, project_path: str, follow_tags: bool = False):
         super().__init__()
         self.project_path = project_path
+        self.follow_tags = follow_tags
 
     def run(self):
         try:
@@ -34,18 +40,49 @@ class GitPushThread(QThread):
             )
             branch = b_proc.stdout.strip() or "main"
 
+            cmd = ["git", "push", "--follow-tags", "origin", branch] if self.follow_tags else ["git", "push", "origin", branch]
             p_proc = subprocess.run(
-                ["git", "push", "origin", branch],
+                cmd,
                 cwd=self.project_path, capture_output=True, text=True, timeout=45
             )
             if p_proc.returncode == 0:
                 out = p_proc.stdout.strip() or p_proc.stderr.strip() or "Todo sincronizado con el repositorio remoto."
                 self.finished_push.emit(True, branch, out)
             else:
+                if self.follow_tags:
+                    p1 = subprocess.run(["git", "push", "origin", branch], cwd=self.project_path, capture_output=True, text=True, timeout=45)
+                    p2 = subprocess.run(["git", "push", "--tags"], cwd=self.project_path, capture_output=True, text=True, timeout=45)
+                    if p1.returncode == 0:
+                        self.finished_push.emit(True, branch, f"{p1.stdout}\n{p2.stdout}".strip())
+                        return
                 err = p_proc.stderr.strip() or p_proc.stdout.strip() or "Error desconocido durante git push."
                 self.finished_push.emit(False, branch, err)
         except Exception as e:
             self.finished_push.emit(False, "unknown", str(e))
+
+
+class IACommitThread(QThread):
+    """Hilo para generar la propuesta de commit con IA (Protocolo Artemis) sin congelar la GUI."""
+    finished_commit = Signal(bool, str, dict)
+
+    def __init__(self, project_path: str, model_type: str, impact_type: str, target_ver: str):
+        super().__init__()
+        self.project_path = project_path
+        self.model_type = model_type
+        self.impact_type = impact_type
+        self.target_ver = target_ver
+
+    def run(self):
+        try:
+            res = generate_ia_commit_proposal(
+                self.project_path,
+                self.model_type,
+                self.impact_type,
+                self.target_ver
+            )
+            self.finished_commit.emit(True, "", res)
+        except Exception as e:
+            self.finished_commit.emit(False, str(e), {})
 
 
 class IAAuditThread(QThread):
@@ -158,6 +195,10 @@ class LumenCyberActionButton(QFrame):
             }}
         """)
 
+    def set_title(self, title: str):
+        self.action_title = title
+        self.lbl_title.setText(title)
+
     def set_subtitle(self, subtitle: str):
         self.lbl_sub.setText(subtitle)
 
@@ -251,6 +292,12 @@ class LumenProjectWorkspaceView(QWidget):
         self.project_data = {}
         self.push_thread = None
         self.audit_thread = None
+        self.commit_thread = None
+        self.selected_impact = "GAMMA"
+        self.selected_target_ver = "v0.1.0"
+        self.selected_model_type = "light"
+        self.current_commit_proposal = {}
+        self.cur_semver_options = {}
         self.init_ui()
 
         # Temporizador para la hora en vivo
@@ -859,8 +906,8 @@ class LumenProjectWorkspaceView(QWidget):
         w_lay.addWidget(btn_ia_audit)
 
         # Botón 3: IA Commit (Generar commit)
-        btn_ia_commit = LumenCyberActionButton("🤖", "IA Commit (Generar commit)", "Generación semántica de mensaje de commit estructurado", accent_color="#c084fc")
-        btn_ia_commit.clicked.connect(lambda: self.handle_action_click("IA Commit (Generar commit)"))
+        btn_ia_commit = LumenCyberActionButton("🤖", "IA Commit (Generar commit)", "Generación semántica de mensaje de commit estructurado con SemVer", accent_color="#c084fc")
+        btn_ia_commit.clicked.connect(self.start_ia_commit_workflow)
         w_lay.addWidget(btn_ia_commit)
 
         # Botón 4: Commit Manual
@@ -959,6 +1006,365 @@ class LumenProjectWorkspaceView(QWidget):
 
         ia_lay.addStretch()
         self.sector1_sub_stack.addWidget(page_ia_audit)
+
+        # =============================================================
+        # SUB-PÁGINA 2: CONTROL DE VERSIONES (SemVer - Protocolo Artemis)
+        # =============================================================
+        page_semver = QWidget()
+        semver_lay = QVBoxLayout(page_semver)
+        semver_lay.setContentsMargins(0, 0, 0, 0)
+        semver_lay.setSpacing(10)
+
+        head_semver = QHBoxLayout()
+        head_semver.setSpacing(12)
+
+        btn_back_semver = QPushButton("◀  Volver a Ciclos de Trabajo")
+        btn_back_semver.setCursor(Qt.PointingHandCursor)
+        btn_back_semver.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.15);
+                color: #c7d2fe;
+                border: 1px solid rgba(99, 102, 241, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(99, 102, 241, 0.30);
+                border-color: #818cf8;
+                color: #ffffff;
+            }
+        """)
+        btn_back_semver.clicked.connect(self.go_back_to_work_cycles)
+        head_semver.addWidget(btn_back_semver)
+
+        self.lbl_semver_title = QLabel("❖ CONTROL DE VERSIONES (SemVer: v0.1.0) ❖")
+        self.lbl_semver_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #fbbf24; letter-spacing: 0.5px;")
+        head_semver.addWidget(self.lbl_semver_title)
+        head_semver.addStretch()
+
+        lbl_step1_pill = QLabel("[PASO 1 / 3: CLASIFICACIÓN]")
+        lbl_step1_pill.setFixedHeight(24)
+        lbl_step1_pill.setAlignment(Qt.AlignCenter)
+        lbl_step1_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #fbbf24; background-color: rgba(251, 191, 36, 0.12); border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 4px; padding: 2px 8px;")
+        head_semver.addWidget(lbl_step1_pill)
+        semver_lay.addLayout(head_semver)
+
+        lbl_semver_desc = QLabel("Selecciona el nivel de impacto de los cambios a registrar según los estándares SemVer:")
+        lbl_semver_desc.setStyleSheet("font-size: 11.5px; color: #9ca3af; margin-bottom: 2px;")
+        semver_lay.addWidget(lbl_semver_desc)
+
+        # 1. GAMMA (Patch)
+        self.btn_gamma = LumenCyberActionButton(
+            "🟢", "1. GAMMA (Patch) ➔ v0.1.1", 
+            "Fix, ajuste menor, corrección puntual o documentación", 
+            accent_color="#34d399"
+        )
+        self.btn_gamma.clicked.connect(lambda: self.select_semver_impact("GAMMA"))
+        semver_lay.addWidget(self.btn_gamma)
+
+        # 2. BETA (Minor)
+        self.btn_beta = LumenCyberActionButton(
+            "🟡", "2. BETA (Minor) ➔ v0.2.0", 
+            "Nuevo módulo, funcionalidad o capacidad agregada", 
+            accent_color="#fbbf24"
+        )
+        self.btn_beta.clicked.connect(lambda: self.select_semver_impact("BETA"))
+        semver_lay.addWidget(self.btn_beta)
+
+        # 3. ALPHA (Major)
+        self.btn_alpha = LumenCyberActionButton(
+            "🔴", "3. ALPHA (Major) ➔ v1.0.0", 
+            "Reestructuración masiva, cambio mayor o de arquitectura", 
+            accent_color="#f87171"
+        )
+        self.btn_alpha.clicked.connect(lambda: self.select_semver_impact("ALPHA"))
+        semver_lay.addWidget(self.btn_alpha)
+
+        # 4. Omitir bump
+        self.btn_omit = LumenCyberActionButton(
+            "⚪", "4. Omitir bump ➔ v0.1.0", 
+            "Mantener versión actual sin incrementar etiqueta SemVer", 
+            accent_color="#9ca3af"
+        )
+        self.btn_omit.clicked.connect(lambda: self.select_semver_impact("OMIT"))
+        semver_lay.addWidget(self.btn_omit)
+
+        # 5. Cancelar Commit
+        btn_cancel_sem = LumenCyberActionButton(
+            "◀", "Cancelar Commit", 
+            "Regresar al menú de Ciclos de Trabajo", 
+            accent_color="#6b7280"
+        )
+        btn_cancel_sem.clicked.connect(self.go_back_to_work_cycles)
+        semver_lay.addWidget(btn_cancel_sem)
+
+        semver_lay.addStretch()
+        self.sector1_sub_stack.addWidget(page_semver)
+
+        # =============================================================
+        # SUB-PÁGINA 3: MOTOR IA PARA PROCESAMIENTO (Protocolo Artemis)
+        # =============================================================
+        page_ia_model = QWidget()
+        ia_mod_lay = QVBoxLayout(page_ia_model)
+        ia_mod_lay.setContentsMargins(0, 0, 0, 0)
+        ia_mod_lay.setSpacing(10)
+
+        head_mod = QHBoxLayout()
+        head_mod.setSpacing(12)
+
+        btn_back_to_sem = QPushButton("◀  Volver a Selección de Versión")
+        btn_back_to_sem.setCursor(Qt.PointingHandCursor)
+        btn_back_to_sem.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.15);
+                color: #c7d2fe;
+                border: 1px solid rgba(99, 102, 241, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(99, 102, 241, 0.30);
+                border-color: #818cf8;
+                color: #ffffff;
+            }
+        """)
+        btn_back_to_sem.clicked.connect(lambda: self.sector1_sub_stack.setCurrentIndex(2))
+        head_mod.addWidget(btn_back_to_sem)
+
+        lbl_mod_title = QLabel("❖ MOTOR IA PARA PROCESAMIENTO ❖")
+        lbl_mod_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #ec4899; letter-spacing: 0.5px;")
+        head_mod.addWidget(lbl_mod_title)
+        head_mod.addStretch()
+
+        lbl_step2_pill = QLabel("[PASO 2 / 3: MOTOR IA]")
+        lbl_step2_pill.setFixedHeight(24)
+        lbl_step2_pill.setAlignment(Qt.AlignCenter)
+        lbl_step2_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #ec4899; background-color: rgba(236, 72, 153, 0.12); border: 1px solid rgba(236, 72, 153, 0.35); border-radius: 4px; padding: 2px 8px;")
+        head_mod.addWidget(lbl_step2_pill)
+        ia_mod_lay.addLayout(head_mod)
+
+        lbl_mod_desc = QLabel("Selecciona la red neuronal local para sintetizar el commit:")
+        lbl_mod_desc.setStyleSheet("font-size: 11.5px; color: #9ca3af; margin-bottom: 2px;")
+        ia_mod_lay.addWidget(lbl_mod_desc)
+
+        # 1. HEX (Modelo Ligero - Rápido)
+        self.btn_commit_hex = LumenCyberActionButton(
+            "🤖", "1. HEX (Qwen 7B - Rápido)", 
+            "Generación ágil y concisa de título y cuerpo semántico", 
+            accent_color="#38bdf8"
+        )
+        self.btn_commit_hex.clicked.connect(lambda: self.start_commit_model_generation("light"))
+        ia_mod_lay.addWidget(self.btn_commit_hex)
+
+        # 2. HENDRIX (Modelo Pesado - Pesado/Inteligente)
+        self.btn_commit_hen = LumenCyberActionButton(
+            "🧠", "2. HENDRIX (Qwen 14B - Pesado/Inteligente)", 
+            "Análisis exhaustivo del diff y redacción técnica profunda", 
+            accent_color="#c084fc"
+        )
+        self.btn_commit_hen.clicked.connect(lambda: self.start_commit_model_generation("heavy"))
+        ia_mod_lay.addWidget(self.btn_commit_hen)
+
+        # 3. Volver
+        btn_back_mod = LumenCyberActionButton(
+            "◀", "Volver a Selección de Versión", 
+            "Regresar para modificar el nivel de impacto SemVer", 
+            accent_color="#9ca3af"
+        )
+        btn_back_mod.clicked.connect(lambda: self.sector1_sub_stack.setCurrentIndex(2))
+        ia_mod_lay.addWidget(btn_back_mod)
+
+        ia_mod_lay.addStretch()
+        self.sector1_sub_stack.addWidget(page_ia_model)
+
+        # =============================================================
+        # SUB-PÁGINA 4: ANIMACIÓN DE CARGA Y SÍNTESIS CON IA
+        # =============================================================
+        page_loading = QWidget()
+        load_lay = QVBoxLayout(page_loading)
+        load_lay.setContentsMargins(0, 20, 0, 20)
+        load_lay.setSpacing(14)
+        load_lay.setAlignment(Qt.AlignCenter)
+
+        card_loader = QFrame()
+        card_loader.setProperty("class", "surface")
+        card_loader.setStyleSheet("""
+            QFrame.surface {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(26, 22, 38, 0.95), stop:1 rgba(15, 12, 25, 0.95));
+                border: 1px solid rgba(192, 132, 252, 0.35);
+                border-radius: 12px;
+                padding: 24px;
+            }
+        """)
+        c_l_lay = QVBoxLayout(card_loader)
+        c_l_lay.setSpacing(12)
+        c_l_lay.setAlignment(Qt.AlignCenter)
+
+        lbl_pulse_icon = QLabel("⏳")
+        lbl_pulse_icon.setAlignment(Qt.AlignCenter)
+        lbl_pulse_icon.setStyleSheet("font-size: 32px;")
+        c_l_lay.addWidget(lbl_pulse_icon)
+
+        self.lbl_commit_loading_title = QLabel("GENERANDO PROPUESTA DE COMMIT CON IA...")
+        self.lbl_commit_loading_title.setAlignment(Qt.AlignCenter)
+        self.lbl_commit_loading_title.setStyleSheet("font-size: 14px; font-weight: 900; color: #c084fc; letter-spacing: 0.8px;")
+        c_l_lay.addWidget(self.lbl_commit_loading_title)
+
+        self.lbl_commit_loading_sub = QLabel("Analizando git diff, clasificación de impacto y directivas de Artemis...")
+        self.lbl_commit_loading_sub.setAlignment(Qt.AlignCenter)
+        self.lbl_commit_loading_sub.setStyleSheet("font-size: 12px; color: #9ca3af;")
+        c_l_lay.addWidget(self.lbl_commit_loading_sub)
+
+        # Progress bar indeterminada con estilo Cyber
+        self.commit_progress_bar = QProgressBar()
+        self.commit_progress_bar.setRange(0, 0)
+        self.commit_progress_bar.setFixedHeight(8)
+        self.commit_progress_bar.setTextVisible(False)
+        self.commit_progress_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: #0b0c13;
+                border: 1px solid rgba(192, 132, 252, 0.30);
+                border-radius: 4px;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #6366f1, stop:0.5 #c084fc, stop:1 #38bdf8);
+                border-radius: 4px;
+            }
+        """)
+        c_l_lay.addWidget(self.commit_progress_bar)
+
+        load_lay.addWidget(card_loader)
+        load_lay.addStretch()
+        self.sector1_sub_stack.addWidget(page_loading)
+
+        # =============================================================
+        # SUB-PÁGINA 5: CONFIRMAR REGISTRO DE COMMIT (Protocolo Artemis)
+        # =============================================================
+        page_confirm = QWidget()
+        conf_lay = QVBoxLayout(page_confirm)
+        conf_lay.setContentsMargins(0, 0, 0, 0)
+        conf_lay.setSpacing(10)
+
+        head_conf = QHBoxLayout()
+        head_conf.setSpacing(12)
+
+        lbl_conf_head = QLabel("❖ CONFIRMAR REGISTRO DE COMMIT ❖")
+        lbl_conf_head.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #34d399; letter-spacing: 0.5px;")
+        head_conf.addWidget(lbl_conf_head)
+        head_conf.addStretch()
+
+        lbl_step3_pill = QLabel("[PASO 3 / 3: CONFIRMACIÓN]")
+        lbl_step3_pill.setFixedHeight(24)
+        lbl_step3_pill.setAlignment(Qt.AlignCenter)
+        lbl_step3_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #34d399; background-color: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 4px; padding: 2px 8px;")
+        head_conf.addWidget(lbl_step3_pill)
+        conf_lay.addLayout(head_conf)
+
+        # Tarjeta resumen de la propuesta
+        card_prop = QFrame()
+        card_prop.setProperty("class", "surface")
+        card_prop.setStyleSheet("""
+            QFrame.surface {
+                background-color: rgba(15, 17, 24, 0.85);
+                border: 1px solid rgba(99, 102, 241, 0.30);
+                border-left: 4px solid #34d399;
+                border-radius: 8px;
+                padding: 10px 14px;
+            }
+        """)
+        cp_lay = QVBoxLayout(card_prop)
+        cp_lay.setSpacing(6)
+
+        self.lbl_prop_title = QLabel("TÍTULO: HEX:0001 [v0.1.0] | Inicialización")
+        self.lbl_prop_title.setStyleSheet("font-family: monospace; font-size: 12.5px; font-weight: 800; color: #fbbf24;")
+        cp_lay.addWidget(self.lbl_prop_title)
+
+        self.lbl_prop_impact = QLabel("IMPACTO: GAMMA (Versión: v0.1.0)")
+        self.lbl_prop_impact.setStyleSheet("font-family: monospace; font-size: 11.5px; color: #a5b4fc;")
+        cp_lay.addWidget(self.lbl_prop_impact)
+
+        self.lbl_prop_body = QLabel("CUERPO: ...")
+        self.lbl_prop_body.setWordWrap(True)
+        self.lbl_prop_body.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.lbl_prop_body.setStyleSheet("font-size: 12px; color: #e5e7eb; line-height: 1.4;")
+        cp_lay.addWidget(self.lbl_prop_body)
+
+        conf_lay.addWidget(card_prop)
+
+        # Botón Confirmar y Registrar Commit
+        self.btn_confirm_commit = LumenCyberActionButton(
+            "✅", "1. Confirmar y Registrar Commit", 
+            "Escribir commit en Git y crear etiqueta SemVer en el repositorio", 
+            accent_color="#34d399"
+        )
+        self.btn_confirm_commit.clicked.connect(self.confirm_and_record_commit)
+        conf_lay.addWidget(self.btn_confirm_commit)
+
+        # Botón Descartar / Volver
+        self.btn_discard_commit = LumenCyberActionButton(
+            "❌", "2. Descartar / Volver", 
+            "Descartar propuesta de commit y regresar al Ciclo de Trabajo", 
+            accent_color="#f87171"
+        )
+        self.btn_discard_commit.clicked.connect(self.discard_commit_proposal)
+        conf_lay.addWidget(self.btn_discard_commit)
+
+        conf_lay.addStretch()
+        self.sector1_sub_stack.addWidget(page_confirm)
+
+        # =============================================================
+        # SUB-PÁGINA 6: POST-COMMIT (OPCIÓN A PUSH O DESCARTAR)
+        # =============================================================
+        page_post_push = QWidget()
+        pp_lay = QVBoxLayout(page_post_push)
+        pp_lay.setContentsMargins(0, 0, 0, 0)
+        pp_lay.setSpacing(10)
+
+        head_pp = QHBoxLayout()
+        head_pp.setSpacing(12)
+
+        lbl_pp_head = QLabel("❖ COMMIT REGISTRADO EXITOSAMENTE ❖")
+        lbl_pp_head.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #60a5fa; letter-spacing: 0.5px;")
+        head_pp.addWidget(lbl_pp_head)
+        head_pp.addStretch()
+
+        lbl_sync_pill = QLabel("[SINCRONIZACIÓN REMOTA]")
+        lbl_sync_pill.setFixedHeight(24)
+        lbl_sync_pill.setAlignment(Qt.AlignCenter)
+        lbl_sync_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #60a5fa; background-color: rgba(96, 165, 250, 0.12); border: 1px solid rgba(96, 165, 250, 0.35); border-radius: 4px; padding: 2px 8px;")
+        head_pp.addWidget(lbl_sync_pill)
+        pp_lay.addLayout(head_pp)
+
+        lbl_pp_desc = QLabel("El commit y la etiqueta han sido grabados localmente en Git. ¿Deseas sincronizarlos con GitHub?")
+        lbl_pp_desc.setStyleSheet("font-size: 11.5px; color: #9ca3af; margin-bottom: 2px;")
+        pp_lay.addWidget(lbl_pp_desc)
+
+        # Botón 1: Push Ahora
+        self.btn_post_push = LumenCyberActionButton(
+            "🚀", "1. Hacer Push Ahora (Enviar cambios y tags a GitHub)", 
+            "Ejecutar git push --follow-tags hacia la rama remota origin", 
+            accent_color="#60a5fa"
+        )
+        self.btn_post_push.clicked.connect(self.execute_post_commit_push)
+        pp_lay.addWidget(self.btn_post_push)
+
+        # Botón 2: Descartar / Finalizar
+        self.btn_post_skip = LumenCyberActionButton(
+            "❌", "2. Descartar / Finalizar (No hacer push)", 
+            "Mantener cambios en local y regresar al menú de Ciclos de Trabajo", 
+            accent_color="#9ca3af"
+        )
+        self.btn_post_skip.clicked.connect(self.discard_post_commit_push)
+        pp_lay.addWidget(self.btn_post_skip)
+
+        pp_lay.addStretch()
+        self.sector1_sub_stack.addWidget(page_post_push)
 
         layout.addWidget(self.sector1_sub_stack)
         return card
@@ -1091,7 +1497,7 @@ class LumenProjectWorkspaceView(QWidget):
         except Exception as e:
             self.terminal_display.log_error("GIT-ADD", f"Excepción al ejecutar git add: {e}")
 
-    def run_git_push(self):
+    def run_git_push(self, follow_tags: bool = False):
         """Ejecuta git push origin <rama> en segundo plano y proyecta los resultados en la terminal."""
         path = self.project_data.get("path")
         if not path or not os.path.exists(path):
@@ -1102,9 +1508,10 @@ class LumenProjectWorkspaceView(QWidget):
             self.terminal_display.log_warn("GIT-PUSH", "Ya hay una operación de push en curso.")
             return
 
-        self.terminal_display.log("GIT-PUSH", "Iniciando envío de commits hacia el repositorio remoto (origin)...", tag_color="#60a5fa", prefix="🚀")
+        tag_str = " (con etiquetas --follow-tags)" if follow_tags else ""
+        self.terminal_display.log("GIT-PUSH", f"Iniciando envío de commits{tag_str} hacia el repositorio remoto (origin)...", tag_color="#60a5fa", prefix="🚀")
         
-        self.push_thread = GitPushThread(path)
+        self.push_thread = GitPushThread(path, follow_tags=follow_tags)
         self.push_thread.finished_push.connect(self.on_push_finished)
         self.push_thread.start()
 
@@ -1115,7 +1522,7 @@ class LumenProjectWorkspaceView(QWidget):
             if msg:
                 for line in msg.splitlines()[:5]:
                     self.terminal_display.log("REMOTE", line, tag_color="#60a5fa", prefix="🌐")
-            self.refresh_current_project()
+            self.refresh_current_project(reset_terminal=False)
         else:
             self.terminal_display.log_error("GIT-PUSH", f"Fallo al realizar push a origin/{branch}: {msg}")
 
@@ -1154,7 +1561,6 @@ class LumenProjectWorkspaceView(QWidget):
         
         # Formatear el reporte de auditoría en un recuadro estilizado en la terminal
         formatted_html = audit_text.replace("\n", "<br>").replace("### ", "<b>").replace("## ", "<b>").replace("**", "<b>").replace("* ", "• ")
-        now = datetime.now().strftime("%H:%M:%S")
         box_html = (
             f"<div style='background-color: rgba(99, 102, 241, 0.08); border-left: 4px solid #818cf8; "
             f"padding: 10px 14px; margin: 8px 0; border-radius: 4px; font-family: sans-serif; font-size: 12px; "
@@ -1167,6 +1573,206 @@ class LumenProjectWorkspaceView(QWidget):
         )
         self.terminal_display.append(box_html)
         self.terminal_display.verticalScrollBar().setValue(self.terminal_display.verticalScrollBar().maximum())
+
+    # -----------------------------------------------------------------
+    # PROTOCOLO ARTEMIS: FLUJO DE IA COMMIT (VERSIONS ➔ MODEL ➔ CONFIRM ➔ PUSH)
+    # -----------------------------------------------------------------
+    def start_ia_commit_workflow(self):
+        """Inicia el flujo de commit semántico con IA según los protocolos de Artemis."""
+        path = self.project_data.get("path")
+        if not path or not os.path.exists(path):
+            self.terminal_display.log_error("IA-COMMIT", "No hay un proyecto activo seleccionado.")
+            return
+
+        # 1. Comprobar si hay cambios preparados (staged)
+        st_proc = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=path, capture_output=True, text=True, timeout=5)
+        staged_files = st_proc.stdout.strip().splitlines() if st_proc.stdout.strip() else []
+        
+        if not staged_files:
+            # Comprobar si hay cambios sin preparar para dar mensaje orientativo
+            u_proc = subprocess.run(["git", "diff", "--name-only"], cwd=path, capture_output=True, text=True, timeout=5)
+            unstaged_files = u_proc.stdout.strip().splitlines() if u_proc.stdout.strip() else []
+            if unstaged_files:
+                self.terminal_display.log("IA-COMMIT", "❌ <b>Stage vacío</b>. Tienes archivos modificados pero no preparados. Ejecuta <b>➕ Add (Preparar Cambios)</b> primero.", tag_color="#f87171", prefix="⚠️")
+            else:
+                self.terminal_display.log("IA-COMMIT", "❌ <b>Árbol de trabajo limpio</b>. No hay modificaciones pendientes para confirmar en commit.", tag_color="#f87171", prefix="⚠️")
+            return
+
+        # 2. Calcular versiones SemVer
+        cur_ver = get_project_semver(path)
+        next_gamma = bump_semver(cur_ver, "GAMMA")
+        next_beta = bump_semver(cur_ver, "BETA")
+        next_alpha = bump_semver(cur_ver, "ALPHA")
+
+        self.lbl_semver_title.setText(f"❖ CONTROL DE VERSIONES (SemVer: {cur_ver}) ❖")
+        self.btn_gamma.set_title(f"1. GAMMA (Patch) ➔ {next_gamma}")
+        self.btn_gamma.set_subtitle(f"Fix, ajuste menor, docs • Siguiente versión: {next_gamma}")
+
+        self.btn_beta.set_title(f"2. BETA (Minor) ➔ {next_beta}")
+        self.btn_beta.set_subtitle(f"Nuevo módulo, funcionalidad • Siguiente versión: {next_beta}")
+
+        self.btn_alpha.set_title(f"3. ALPHA (Major) ➔ {next_alpha}")
+        self.btn_alpha.set_subtitle(f"Reestructuración masiva o cambio mayor • Siguiente versión: {next_alpha}")
+
+        self.btn_omit.set_title(f"4. Omitir bump ➔ {cur_ver}")
+        self.btn_omit.set_subtitle(f"Mantener versión actual {cur_ver} sin generar nuevo tag")
+
+        self.cur_semver_options = {
+            "GAMMA": next_gamma,
+            "BETA": next_beta,
+            "ALPHA": next_alpha,
+            "OMIT": cur_ver
+        }
+
+        self.sector1_sub_stack.setCurrentIndex(2)
+        self.terminal_display.log("IA-COMMIT", f"Iniciando protocolo de commit. Versión base detectada: <b style='color:#fbbf24;'>{cur_ver}</b>.", tag_color="#c084fc", prefix="🤖")
+        self.terminal_display.log("STAGE", f"{len(staged_files)} archivo(s) preparados en staging listos para sintetizar.", tag_color="#34d399", prefix="📦")
+
+    def select_semver_impact(self, impact_type: str):
+        """Maneja la selección del nivel de impacto SemVer y pasa a seleccionar el motor de IA."""
+        self.selected_impact = impact_type
+        self.selected_target_ver = self.cur_semver_options.get(impact_type, "v0.1.0")
+
+        # Cargar nombres de modelos configurados
+        light_name = get_configured_model("light")
+        heavy_name = get_configured_model("heavy")
+
+        self.btn_commit_hex.set_title(f"1. HEX ({light_name} - Rápido)")
+        self.btn_commit_hex.set_subtitle(f"Generación ágil y concisa de título y cuerpo semántico • {light_name}")
+
+        self.btn_commit_hen.set_title(f"2. HENDRIX ({heavy_name} - Pesado/Inteligente)")
+        self.btn_commit_hen.set_subtitle(f"Análisis exhaustivo del diff y redacción técnica profunda • {heavy_name}")
+
+        self.sector1_sub_stack.setCurrentIndex(3)
+        self.terminal_display.log("SEMVER", f"Impacto seleccionado: <b style='color:#34d399;'>{impact_type}</b> ➔ <b>{self.selected_target_ver}</b>.", tag_color="#34d399", prefix="🟢")
+
+    def start_commit_model_generation(self, model_type: str):
+        """Inicia la generación de la propuesta de commit con el modelo seleccionado (HEX o HENDRIX)."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+
+        if self.commit_thread and self.commit_thread.isRunning():
+            self.terminal_display.log_warn("IA-COMMIT", "Ya hay una generación de commit en curso. Por favor espera.")
+            return
+
+        self.selected_model_type = model_type
+        model_name = get_configured_model(model_type)
+        id_prefix = "HEX" if model_type == "light" else "HEN"
+
+        # Actualizar textos de carga
+        self.lbl_commit_loading_title.setText(f"GENERANDO PROPUESTA DE COMMIT CON {model_name.upper()}...")
+        self.lbl_commit_loading_sub.setText(f"Motor: {id_prefix} ({model_type.upper()}) | Nivel de impacto: {self.selected_impact} [{self.selected_target_ver}]")
+
+        self.sector1_sub_stack.setCurrentIndex(4)
+
+        self.terminal_display.log("IA-COMMIT", f"Invocando red neuronal <b>{model_name}</b> ({id_prefix}) con impacto <b style='color:#fbbf24;'>{self.selected_impact}</b>...", tag_color="#ec4899", prefix="⏳")
+        self.terminal_display.log_info("AI-ENGINE", "Extrayendo git diff en staging y aplicando directivas de razonamiento de Artemis...")
+
+        self.commit_thread = IACommitThread(
+            project_path=path,
+            model_type=model_type,
+            impact_type=self.selected_impact,
+            target_ver=self.selected_target_ver
+        )
+        self.commit_thread.finished_commit.connect(self.on_commit_proposal_generated)
+        self.commit_thread.start()
+
+    def on_commit_proposal_generated(self, success: bool, err_msg: str, res: dict):
+        """Callback al recibir la propuesta de commit generada por la IA."""
+        if not success:
+            self.terminal_display.log_error("IA-COMMIT", f"Error al generar commit con IA: {err_msg}")
+            self.sector1_sub_stack.setCurrentIndex(3)
+            return
+
+        self.current_commit_proposal = res
+        model_name = res.get("model_name", "Ollama")
+        id_prefix = res.get("id_prefix", "HEX")
+        commit_header = res.get("commit_header", "HEX:0001")
+        title = res.get("title", "")
+        body = res.get("body", "")
+        impact = res.get("impact_type", "GAMMA")
+        ver = res.get("target_ver", "v0.1.0")
+
+        # Proyectar en la terminal inferior el resultado con diseño idéntico a Artemis
+        self.terminal_display.log("IA-COMMIT", f"Propuesta de commit generada exitosamente por <b>{model_name}</b>:", tag_color="#34d399", prefix="✔")
+
+        report_box = (
+            f"<div style='background-color: rgba(16, 185, 129, 0.08); border-left: 4px solid #34d399; "
+            f"padding: 10px 14px; margin: 8px 0; border-radius: 4px; font-family: monospace; font-size: 12px; "
+            f"color: #f3f4f6; line-height: 1.5;'>"
+            f"<div style='font-weight: 800; color: #fbbf24; margin-bottom: 4px;'>"
+            f"❖ PROPUESTA DE COMMIT YoRHa ({id_prefix}) ❖"
+            f"</div>"
+            f"<div style='margin-bottom: 2px;'><b style='color: #38bdf8;'>TÍTULO:</b> {commit_header} | {title}</div>"
+            f"<div style='margin-bottom: 6px;'><b style='color: #c084fc;'>IMPACTO:</b> {impact} (Versión: {ver})</div>"
+            f"<div><b style='color: #34d399;'>CUERPO:</b><br>{body}</div>"
+            f"</div>"
+        )
+        self.terminal_display.append(report_box)
+        self.terminal_display.verticalScrollBar().setValue(self.terminal_display.verticalScrollBar().maximum())
+
+        # Actualizar tarjeta de confirmación en la UI
+        self.lbl_prop_title.setText(f"TÍTULO: {commit_header} | {title}")
+        self.lbl_prop_impact.setText(f"IMPACTO: {impact} (Versión: {ver})")
+        self.lbl_prop_body.setText(f"CUERPO:\n{body}")
+
+        # Pasar a la pantalla de confirmación (Página 5)
+        self.sector1_sub_stack.setCurrentIndex(5)
+
+    def confirm_and_record_commit(self):
+        """Confirma y graba el commit y etiqueta SemVer en Git."""
+        path = self.project_data.get("path")
+        if not path or not self.current_commit_proposal:
+            self.terminal_display.log_error("COMMIT", "No hay una propuesta de commit válida para confirmar.")
+            return
+
+        res = self.current_commit_proposal
+        commit_header = res.get("commit_header", "HEX:0001")
+        title = res.get("title", "")
+        body = res.get("body", "")
+        impact = res.get("impact_type", "GAMMA")
+        ver = res.get("target_ver", "v0.1.0")
+
+        self.terminal_display.log("COMMIT", f"Registrando commit en Git (<code>{commit_header} | {title}</code>)...", tag_color="#34d399", prefix="💾")
+
+        ok, output = execute_commit_and_tag(
+            project_path=path,
+            commit_header=commit_header,
+            title=title,
+            body=body,
+            impact_type=impact,
+            target_ver=ver
+        )
+
+        if ok:
+            self.terminal_display.log_success("COMMIT", f"Commit registrado con éxito en Git: <b>{commit_header} | {title}</b>")
+            if impact != "OMIT" and ver:
+                self.terminal_display.log("TAG", f"Etiqueta de versión SemVer <b>{ver}</b> creada.", tag_color="#818cf8", prefix="🏷️")
+
+            # Refrescar el HUD sin borrar la salida de la terminal
+            self.refresh_current_project(reset_terminal=False)
+
+            # Pasar a la pantalla post-commit (Página 6: Opción a Push)
+            self.sector1_sub_stack.setCurrentIndex(6)
+        else:
+            self.terminal_display.log_error("COMMIT", f"Error al ejecutar commit: {output}")
+
+    def discard_commit_proposal(self):
+        """Descarta la propuesta de commit generada y regresa a Ciclos de Trabajo."""
+        self.current_commit_proposal = {}
+        self.terminal_display.log("COMMIT", "Propuesta de commit descartada por el operador. No se realizaron cambios.", tag_color="#9ca3af", prefix="❌")
+        self.sector1_sub_stack.setCurrentIndex(0)
+
+    def execute_post_commit_push(self):
+        """Ejecuta git push --follow-tags hacia el repositorio remoto y vuelve al menú."""
+        self.sector1_sub_stack.setCurrentIndex(0)
+        self.run_git_push(follow_tags=True)
+
+    def discard_post_commit_push(self):
+        """Omite el push y regresa directamente al menú principal de Ciclos de Trabajo."""
+        self.terminal_display.log("PUSH", "Push remoto omitido. Los commits y etiquetas quedan guardados localmente.", tag_color="#9ca3af", prefix="ℹ")
+        self.sector1_sub_stack.setCurrentIndex(0)
 
     # -----------------------------------------------------------------
     # MÉTODOS DE RELOJ, LOGS Y ACCIONES GENÉRICAS

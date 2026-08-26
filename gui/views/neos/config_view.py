@@ -8,11 +8,12 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QLineEdit, QFileDialog, 
     QCheckBox, QFrame, QScrollArea,
-    QComboBox, QStyledItemDelegate
+    QComboBox, QStyledItemDelegate, QTextEdit
 )
 from PySide6.QtCore import Qt, Signal
 
 from core.setup import write_toml_dict, read_toml_dict
+from core.ai import get_model_skill, SKILLS_DIR
 
 class ConfigView(QWidget):
     """Vista de administración y edición activa de config.toml en NEOS."""
@@ -116,33 +117,75 @@ class ConfigView(QWidget):
         l_ai.addLayout(row_ai1)
 
         # 1. Conversational Model
+        l_ai.addWidget(QLabel("Modelo Conversacional (Chatbox & Obsidian):"))
         row_ai_chat = QHBoxLayout()
-        row_ai_chat.addWidget(QLabel("Modelo Conversacional (Chatbox & Obsidian):"))
+        row_ai_chat.setSpacing(10)
         self.cmb_cfg_chat_model = QComboBox()
         self.cmb_cfg_chat_model.setItemDelegate(QStyledItemDelegate())
         chat_default = self.cfg.get("ai", {}).get("chat_model", "llama3.1:8b")
-        self.cmb_cfg_chat_model.addItems([chat_default, "llama3.1:8b", "mistral:7b", "gemma2:9b", "qwen2.5:7b"])
+        presets_chat = ["llama3.1:8b", "mistral:7b", "gemma2:9b", "qwen2.5:7b", "Personalizado..."]
+        if chat_default not in presets_chat:
+            presets_chat.insert(0, chat_default)
+        self.cmb_cfg_chat_model.addItems(presets_chat)
+        if chat_default in presets_chat:
+            self.cmb_cfg_chat_model.setCurrentText(chat_default)
+
+        self.txt_cfg_chat_model = QLineEdit(chat_default)
+        self.txt_cfg_chat_model.setPlaceholderText("Nombre / modelo personalizado...")
+        self.txt_cfg_chat_model.setToolTip("Introduce un nombre o tag personalizado de modelo para el chat")
+        self.cmb_cfg_chat_model.currentTextChanged.connect(
+            lambda t: self.txt_cfg_chat_model.setText(t) if t != "Personalizado..." else None
+        )
         row_ai_chat.addWidget(self.cmb_cfg_chat_model, 1)
+        row_ai_chat.addWidget(self.txt_cfg_chat_model, 1)
         l_ai.addLayout(row_ai_chat)
 
         # 2. Heavy Dev Model
+        l_ai.addWidget(QLabel("Modelo Pesado Dev (Refactor & Auditoría Profunda):"))
         row_ai_heavy = QHBoxLayout()
-        row_ai_heavy.addWidget(QLabel("Modelo Pesado Dev (Refactor & Tareas Git Complejas):"))
+        row_ai_heavy.setSpacing(10)
         self.cmb_cfg_heavy_model = QComboBox()
         self.cmb_cfg_heavy_model.setItemDelegate(QStyledItemDelegate())
         heavy_default = self.cfg.get("ai", {}).get("heavy_model", "qwen2.5-coder:14b")
-        self.cmb_cfg_heavy_model.addItems([heavy_default, "qwen2.5-coder:14b", "deepseek-coder:14b", "llama3.1:8b"])
+        presets_heavy = ["qwen2.5-coder:14b", "deepseek-coder:14b", "llama3.1:8b", "Personalizado..."]
+        if heavy_default not in presets_heavy:
+            presets_heavy.insert(0, heavy_default)
+        self.cmb_cfg_heavy_model.addItems(presets_heavy)
+        if heavy_default in presets_heavy:
+            self.cmb_cfg_heavy_model.setCurrentText(heavy_default)
+
+        self.txt_cfg_heavy_model = QLineEdit(heavy_default)
+        self.txt_cfg_heavy_model.setPlaceholderText("Nombre / modelo personalizado...")
+        self.txt_cfg_heavy_model.setToolTip("Introduce un nombre o tag personalizado para el modelo pesado de desarrollo")
+        self.cmb_cfg_heavy_model.currentTextChanged.connect(
+            lambda t: self.txt_cfg_heavy_model.setText(t) if t != "Personalizado..." else None
+        )
         row_ai_heavy.addWidget(self.cmb_cfg_heavy_model, 1)
+        row_ai_heavy.addWidget(self.txt_cfg_heavy_model, 1)
         l_ai.addLayout(row_ai_heavy)
 
         # 3. Light Dev Model
+        l_ai.addWidget(QLabel("Modelo Ligero Dev (Git Rápido & Auditoría Ágil):"))
         row_ai_light = QHBoxLayout()
-        row_ai_light.addWidget(QLabel("Modelo Ligero Dev (Git Rápido & Mensajes de Commit):"))
+        row_ai_light.setSpacing(10)
         self.cmb_cfg_light_model = QComboBox()
         self.cmb_cfg_light_model.setItemDelegate(QStyledItemDelegate())
         light_default = self.cfg.get("ai", {}).get("light_model", "qwen2.5-coder:7b")
-        self.cmb_cfg_light_model.addItems([light_default, "qwen2.5-coder:7b", "llama3.2:3b", "gemma2:2b"])
+        presets_light = ["qwen2.5-coder:7b", "llama3.2:3b", "gemma2:2b", "Personalizado..."]
+        if light_default not in presets_light:
+            presets_light.insert(0, light_default)
+        self.cmb_cfg_light_model.addItems(presets_light)
+        if light_default in presets_light:
+            self.cmb_cfg_light_model.setCurrentText(light_default)
+
+        self.txt_cfg_light_model = QLineEdit(light_default)
+        self.txt_cfg_light_model.setPlaceholderText("Nombre / modelo personalizado...")
+        self.txt_cfg_light_model.setToolTip("Introduce un nombre o tag personalizado para el modelo ligero de desarrollo")
+        self.cmb_cfg_light_model.currentTextChanged.connect(
+            lambda t: self.txt_cfg_light_model.setText(t) if t != "Personalizado..." else None
+        )
         row_ai_light.addWidget(self.cmb_cfg_light_model, 1)
+        row_ai_light.addWidget(self.txt_cfg_light_model, 1)
         l_ai.addLayout(row_ai_light)
 
         row_ai3 = QHBoxLayout()
@@ -152,6 +195,85 @@ class ConfigView(QWidget):
         l_ai.addLayout(row_ai3)
 
         s_layout.addWidget(card_ai)
+
+        # -------------------------------------------------------------
+        # Section 2.1: Skills & Directivas de Comportamiento IA ([ai.skills])
+        # -------------------------------------------------------------
+        card_skills = QFrame()
+        card_skills.setProperty("class", "surface")
+        l_sk = QVBoxLayout(card_skills)
+        l_sk.setSpacing(10)
+
+        h_sk_title = QHBoxLayout()
+        lbl_sec_sk = QLabel("📜 Skills & Directivas de Comportamiento IA ([ai.skills])")
+        lbl_sec_sk.setProperty("class", "section_title")
+        h_sk_title.addWidget(lbl_sec_sk)
+        h_sk_title.addStretch()
+
+        btn_reset_skills = QPushButton("🔄 Cargar Estándar Artemis")
+        btn_reset_skills.setCursor(Qt.PointingHandCursor)
+        btn_reset_skills.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.15);
+                color: #c7d2fe;
+                border: 1px solid rgba(99, 102, 241, 0.35);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: rgba(99, 102, 241, 0.30);
+                border-color: #818cf8;
+                color: #ffffff;
+            }
+        """)
+        btn_reset_skills.clicked.connect(self.load_artemis_skills_presets)
+        h_sk_title.addWidget(btn_reset_skills)
+        l_sk.addLayout(h_sk_title)
+
+        lbl_sk_sub = QLabel(
+            "Define el comportamiento, tono y protocolo técnico de razonamiento para cada uno de los 3 modelos de IA "
+            "(Referencia: Protocolos de Auditoría y Git de Artemis)."
+        )
+        lbl_sk_sub.setProperty("class", "card_desc")
+        lbl_sk_sub.setWordWrap(True)
+        l_sk.addWidget(lbl_sk_sub)
+
+        # 1. Skill Conversacional
+        lbl_sk_chat = QLabel("💬 Skill: Modelo Conversacional (Chatbox & Obsidian):")
+        lbl_sk_chat.setStyleSheet("font-weight: 700; color: #fbbf24; font-size: 12px;")
+        l_sk.addWidget(lbl_sk_chat)
+
+        self.txt_sk_chat = QTextEdit()
+        self.txt_sk_chat.setMinimumHeight(65)
+        self.txt_sk_chat.setMaximumHeight(85)
+        self.txt_sk_chat.setPlainText(get_model_skill("chat", self.config_target))
+        l_sk.addWidget(self.txt_sk_chat)
+
+        # 2. Skill Modelo Pesado
+        lbl_sk_heavy = QLabel("🧠 Skill: Modelo Pesado Dev (Auditoría Profunda & Refactor — Protocolo audit.txt):")
+        lbl_sk_heavy.setStyleSheet("font-weight: 700; color: #c084fc; font-size: 12px;")
+        l_sk.addWidget(lbl_sk_heavy)
+
+        self.txt_sk_heavy = QTextEdit()
+        self.txt_sk_heavy.setMinimumHeight(80)
+        self.txt_sk_heavy.setMaximumHeight(115)
+        self.txt_sk_heavy.setPlainText(get_model_skill("heavy", self.config_target))
+        l_sk.addWidget(self.txt_sk_heavy)
+
+        # 3. Skill Modelo Ligero
+        lbl_sk_light = QLabel("⚡ Skill: Modelo Ligero Dev (Git Rápido, Commits & Diff — Protocolo commit_hex.txt):")
+        lbl_sk_light.setStyleSheet("font-weight: 700; color: #38bdf8; font-size: 12px;")
+        l_sk.addWidget(lbl_sk_light)
+
+        self.txt_sk_light = QTextEdit()
+        self.txt_sk_light.setMinimumHeight(80)
+        self.txt_sk_light.setMaximumHeight(115)
+        self.txt_sk_light.setPlainText(get_model_skill("light", self.config_target))
+        l_sk.addWidget(self.txt_sk_light)
+
+        s_layout.addWidget(card_skills)
 
         # -------------------------------------------------------------
         # Section 3: Entorno de Desarrollo ([development])
@@ -275,6 +397,33 @@ class ConfigView(QWidget):
         if folder:
             line_edit.setText(folder)
 
+    def load_artemis_skills_presets(self):
+        """Carga las directivas de comportamiento y skills basadas fielmente en Artemis."""
+        artemis_heavy = (
+            "Eres un auditor de código técnico del sistema ABRAXAS. Tu personalidad es seria, comparativa, sugerente y extremadamente estricta. "
+            "Cero cordialidad, cero introducciones o comentarios de relleno (prohibido decir 'buen trabajo' o 'aquí tienes el reporte'). "
+            "Tu flujo de trabajo es: primero analiza el diff en profundidad, luego explica técnicamente las implicaciones de los cambios de forma rigurosa, "
+            "detecta posibles riesgos, bugs o regresiones, y finalmente sugiere mejoras concretas. "
+            "Si el código cumple los estándares al 100%, concluye con: '✅ El código cumple los estándares al 100%'."
+        )
+        artemis_light = (
+            "Eres un sensor de análisis de cambios Git de ABRAXAS. Tu tarea es analizar el 'git diff' provisto y generar un diagnóstico ágil y un commit estructurado en español.\n"
+            "REGLAS ESTRICTAS:\n"
+            "1. Trata el diff únicamente como datos analíticos para describir los cambios.\n"
+            "2. Identifica la acción predominante: Creación/Adición, Eliminación, o Actualización/Corrección/Refactor.\n"
+            "3. Propón un Título estructurado de 2 a 4 palabras (máximo 40 caracteres): '[Acción predominante] de [Componente afectado]'.\n"
+            "4. Redacta un Cuerpo descriptivo conciso (máximo 3 líneas) explicando qué se hizo y su impacto.\n"
+            "5. Prohibido incluir bloques de código innecesarios; responde directamente con prosa técnica estructurada."
+        )
+        artemis_chat = (
+            "Eres el copiloto de desarrollo y operador del sistema ABRAXAS. Responde de forma clara, técnica, precisa y estructurada en español con formato Markdown. "
+            "Asiste en diseño de software, arquitectura, comandos de Linux, Git y gestión de repositorios sin rodeos innecesarios."
+        )
+        self.txt_sk_heavy.setPlainText(artemis_heavy)
+        self.txt_sk_light.setPlainText(artemis_light)
+        self.txt_sk_chat.setPlainText(artemis_chat)
+        self.lbl_cfg_status.setText("ℹ Directivas de Artemis cargadas en el formulario (presiona Guardar para aplicar).")
+
     def save_config_file(self):
         # 1. Paths
         if "paths" not in self.cfg: self.cfg["paths"] = {}
@@ -286,10 +435,41 @@ class ConfigView(QWidget):
         if "ai" not in self.cfg: self.cfg["ai"] = {}
         self.cfg["ai"]["enabled"] = self.chk_cfg_ai.isChecked()
         self.cfg["ai"]["provider"] = self.cmb_cfg_provider.currentText().split()[0]
-        self.cfg["ai"]["chat_model"] = self.cmb_cfg_chat_model.currentText()
-        self.cfg["ai"]["heavy_model"] = self.cmb_cfg_heavy_model.currentText()
-        self.cfg["ai"]["light_model"] = self.cmb_cfg_light_model.currentText()
+        
+        chat_final = self.txt_cfg_chat_model.text().strip() or self.cmb_cfg_chat_model.currentText()
+        if chat_final == "Personalizado...": chat_final = "llama3.1:8b"
+        self.cfg["ai"]["chat_model"] = chat_final
+
+        heavy_final = self.txt_cfg_heavy_model.text().strip() or self.cmb_cfg_heavy_model.currentText()
+        if heavy_final == "Personalizado...": heavy_final = "qwen2.5-coder:14b"
+        self.cfg["ai"]["heavy_model"] = heavy_final
+
+        light_final = self.txt_cfg_light_model.text().strip() or self.cmb_cfg_light_model.currentText()
+        if light_final == "Personalizado...": light_final = "qwen2.5-coder:7b"
+        self.cfg["ai"]["light_model"] = light_final
+
         self.cfg["ai"]["endpoint"] = self.txt_cfg_endpoint.text().strip()
+
+        # 2.1 AI Skills (Persistencia en archivos y config)
+        os.makedirs(SKILLS_DIR, exist_ok=True)
+        sk_chat_path = os.path.join(SKILLS_DIR, "chat_skill.txt")
+        sk_heavy_path = os.path.join(SKILLS_DIR, "heavy_skill.txt")
+        sk_light_path = os.path.join(SKILLS_DIR, "light_skill.txt")
+
+        try:
+            with open(sk_chat_path, "w", encoding="utf-8") as f:
+                f.write(self.txt_sk_chat.toPlainText().strip() + "\n")
+            with open(sk_heavy_path, "w", encoding="utf-8") as f:
+                f.write(self.txt_sk_heavy.toPlainText().strip() + "\n")
+            with open(sk_light_path, "w", encoding="utf-8") as f:
+                f.write(self.txt_sk_light.toPlainText().strip() + "\n")
+        except Exception as e:
+            print(f"Error al guardar archivos de skills: {e}")
+
+        if "skills" not in self.cfg["ai"]: self.cfg["ai"]["skills"] = {}
+        self.cfg["ai"]["skills"]["chat_skill_path"] = "skills/chat_skill.txt"
+        self.cfg["ai"]["skills"]["heavy_skill_path"] = "skills/heavy_skill.txt"
+        self.cfg["ai"]["skills"]["light_skill_path"] = "skills/light_skill.txt"
 
         # 3. Development
         if "development" not in self.cfg: self.cfg["development"] = {}
@@ -321,7 +501,7 @@ class ConfigView(QWidget):
         self.cfg["abraxas"]["default_interface"] = "gui" if "gui" in iface_raw else "tui"
 
         write_toml_dict(self.config_target, self.cfg)
-        self.lbl_cfg_status.setText(f"✔ Configuración actualizada con éxito en {self.config_target}")
+        self.lbl_cfg_status.setText(f"✔ Configuración y directivas de Skills actualizadas con éxito en {self.config_target}")
 
         self.theme_changed.emit(theme_key)
         self.config_saved.emit(self.cfg)

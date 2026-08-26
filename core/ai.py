@@ -3,6 +3,7 @@
 #  ❖ ABRAXAS CORE | AI CLIENT & MODEL GENERATOR
 # =====================================================================
 
+import os
 import json
 import urllib.request
 import urllib.error
@@ -20,6 +21,43 @@ def get_configured_model(model_type: str = "chat", config_path: str = None) -> s
         return cfg.get("ai.chat_model", "llama3.1:8b")
 
 
+def resolve_model_name(target_model: str, endpoint: str) -> str:
+    """Resuelve el nombre del modelo contra la lista de Ollama o busca alternativas válidas."""
+    try:
+        req = urllib.request.Request(f"{endpoint}/api/tags")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            available = [m.get("name", "") for m in data.get("models", [])]
+            
+            # Coincidencia exacta
+            if target_model in available:
+                return target_model
+                
+            # Coincidencia con :latest
+            if f"{target_model}:latest" in available:
+                return f"{target_model}:latest"
+
+            # Coincidencia case-insensitive
+            for m in available:
+                if m.lower() == target_model.lower() or m.lower().startswith(f"{target_model.lower()}:"):
+                    return m
+
+            # Mapeos conocidos de Artemis
+            t_low = target_model.lower()
+            if "hex" in t_low:
+                for m in available:
+                    if "qwen2.5-coder:7b" in m or "7b" in m: return m
+            elif "hendrix" in t_low:
+                for m in available:
+                    if "qwen2.5-coder:14b" in m or "14b" in m: return m
+            elif "hestia" in t_low:
+                for m in available:
+                    if "llama3.1:8b" in m or "llama" in m: return m
+    except Exception:
+        pass
+    return target_model
+
+
 def generate_with_model(prompt: str, model_name: str = None, model_type: str = "chat", system_prompt: str = "", config_path: str = None) -> str:
     """Envía un prompt a Ollama usando el modelo especificado o configurado."""
     cfg = AbraxasConfig(config_path)
@@ -28,7 +66,8 @@ def generate_with_model(prompt: str, model_name: str = None, model_type: str = "
         raise RuntimeError("La IA está deshabilitada en config.toml ([ai].enabled = false)")
 
     endpoint = cfg.get("ai.endpoint", "http://localhost:11434").rstrip("/")
-    target_model = model_name or get_configured_model(model_type, config_path)
+    raw_model = model_name or get_configured_model(model_type, config_path)
+    target_model = resolve_model_name(raw_model, endpoint)
     temperature = float(cfg.get("ai.temperature", 0.2))
 
     sys_text = system_prompt or "Eres un asistente de ingeniería de software para el sistema ABRAXAS. Responde de forma clara, directa y estructurada."
@@ -99,26 +138,61 @@ def generate_with_chat_model(prompt: str, system_prompt: str = "", config_path: 
     return generate_with_model(prompt, model_type="chat", system_prompt=system_prompt, config_path=config_path)
 
 
-def audit_git_diff(diff_content: str, model_type: str = "light", config_path: str = None) -> dict:
-    """Realiza una auditoría inteligente del diff utilizando el modelo de IA seleccionado ('light' o 'heavy')."""
-    model_name = get_configured_model(model_type, config_path)
+SKILLS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "skills")
+
+
+def get_model_skill(model_type: str = "chat", config_path: str = None) -> str:
+    """Obtiene el prompt de comportamiento / skill configurado para el modelo ('chat', 'heavy', 'light')."""
+    cfg = AbraxasConfig(config_path)
     
-    system_prompt = (
-        "Eres un auditor y revisor senior de código experto en Git y buenas prácticas de desarrollo. "
-        "Tu tarea es analizar el diff de código proporcionado y devolver una auditoría técnica en español, "
-        "con viñetas claras, concisa y sin rodeos."
-    )
+    # 1. Comprobar si está definido directamente en config.toml
+    inline_skill = cfg.get(f"ai.skills.{model_type}_skill", "")
+    if inline_skill and inline_skill.strip():
+        return inline_skill.strip()
 
-    user_prompt = f"""Analiza el siguiente git diff y genera una auditoría estructurada con estas secciones:
+    # 2. Comprobar si hay archivo en skills/
+    skill_file_map = {
+        "heavy": "heavy_skill.txt",
+        "light": "light_skill.txt",
+        "chat": "chat_skill.txt"
+    }
+    fname = skill_file_map.get(model_type, "chat_skill.txt")
+    fpath = os.path.join(SKILLS_DIR, fname)
+    if os.path.exists(fpath):
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    return content
+        except Exception:
+            pass
 
-1. 📦 RESUMEN DE CAMBIOS:
-(Qué archivos y funcionalidades se agregaron, modificaron o eliminaron)
+    # 3. Fallbacks con estilo Artemis
+    defaults = {
+        "heavy": (
+            "Eres un auditor de código técnico del sistema ABRAXAS. Tu personalidad es seria, comparativa, sugerente y extremadamente estricta. "
+            "Cero cordialidad, cero introducciones o comentarios de relleno. Tu flujo de trabajo es: analiza el diff en profundidad, "
+            "explica técnicamente las implicaciones de los cambios de forma rigurosa, detecta riesgos o bugs, y sugiere mejoras concretas. "
+            "Si el código cumple los estándares al 100%, concluye con: '✅ El código cumple los estándares al 100%'."
+        ),
+        "light": (
+            "Eres un sensor de análisis de cambios Git de ABRAXAS. Tu tarea es analizar el git diff y generar un diagnóstico ágil y un commit estructurado: "
+            "1. Resumen del cambio predominante. 2. Título semántico estructurado de 2 a 4 palabras ('Acción de Componente'). "
+            "3. Cuerpo descriptivo conciso en español (máximo 3 líneas) sin bloques de código."
+        ),
+        "chat": (
+            "Eres el copiloto de desarrollo y operador del sistema ABRAXAS. Responde de forma clara, técnica, precisa y estructurada en español con formato Markdown."
+        )
+    }
+    return defaults.get(model_type, defaults["chat"])
 
-2. 🔍 CALIDAD Y POSIBLES RIESGOS:
-(Verificación de lógica, posibles bugs, manejo de errores, variables no usadas o sintaxis)
 
-3. 💡 SUGERENCIA DE COMMIT:
-(Propuesta de mensaje semántico tipo feat(...):, fix(...):, refactor(...): según los cambios)
+def audit_git_diff(diff_content: str, model_type: str = "light", config_path: str = None) -> dict:
+    """Realiza una auditoría inteligente del diff utilizando el modelo de IA seleccionado y su skill configurada."""
+    model_name = get_configured_model(model_type, config_path)
+    system_prompt = get_model_skill(model_type, config_path)
+
+    user_prompt = f"""Analiza el siguiente git diff y genera una auditoría estructurada conforme a tus directivas de comportamiento:
 
 --- INICIO GIT DIFF ---
 {diff_content[:12000]}
@@ -135,5 +209,6 @@ def audit_git_diff(diff_content: str, model_type: str = "light", config_path: st
     return {
         "model_name": model_name,
         "model_type": model_type,
-        "audit_text": audit_text
+        "audit_text": audit_text,
+        "system_prompt": system_prompt
     }
