@@ -7,26 +7,31 @@ import os
 from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QPushButton, QFrame, QScrollArea, QGridLayout
+    QPushButton, QFrame, QScrollArea, QGridLayout,
+    QTextEdit, QApplication, QStackedWidget, QSizePolicy
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 
 from core import get_version
+from core.lumen_sync import get_full_project_sync
 
 
 class LumenCyberActionButton(QFrame):
     """Botón interactivo de diseño ciber-ilustre con icono, título, subtítulo y efectos de hover."""
     
-    clicked = Signal()
+    clicked = Signal(str)
 
     def __init__(self, icon: str, title: str, subtitle: str, accent_color="#6366f1", parent=None):
         super().__init__(parent)
+        self.action_title = title
         self.accent_color = accent_color
         self.setCursor(Qt.PointingHandCursor)
         self.setProperty("class", "cyber_action_card")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setFixedHeight(56)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setContentsMargins(14, 8, 14, 8)
         layout.setSpacing(12)
 
         # Icono con contenedor estilizado
@@ -77,12 +82,85 @@ class LumenCyberActionButton(QFrame):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.clicked.emit()
+            self.clicked.emit(self.action_title)
         super().mousePressEvent(event)
 
 
+class LumenTerminalDisplay(QTextEdit):
+    """Visor de terminal de SOLO LECTURA con soporte de colores HTML ricos, tags ciberpunk y diseño estético."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setMinimumHeight(150)
+        self.setCursor(Qt.IBeamCursor)
+        self.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.setStyleSheet("""
+            QTextEdit {
+                background-color: #07090e;
+                color: #e5e7eb;
+                font-family: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', 'Consolas', monospace;
+                font-size: 12.5px;
+                line-height: 1.5;
+                border: none;
+                padding: 14px 18px;
+                selection-background-color: #4f46e5;
+                selection-color: #ffffff;
+            }
+            QScrollBar:vertical {
+                background: #090b10;
+                width: 10px;
+                margin: 0px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background: #1f2430;
+                min-height: 24px;
+                border-radius: 4px;
+                border: 1px solid rgba(255, 255, 255, 0.05);
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #6366f1;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
+    def log(self, tag: str, message: str, tag_color: str = "#38bdf8", text_color: str = "#e5e7eb", prefix: str = "◈"):
+        """Imprime una línea coloreada en la terminal con timestamp."""
+        now = datetime.now().strftime("%H:%M:%S")
+        html = (
+            f"<div style='margin-bottom: 4px; font-family: monospace;'>"
+            f"<span style='color: #6b7280; font-weight: 500;'>[{now}]</span> "
+            f"<span style='color: {tag_color}; font-weight: 800;'>{prefix} [{tag}]</span> "
+            f"<span style='color: {text_color};'>{message}</span>"
+            f"</div>"
+        )
+        self.append(html)
+        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+
+    def log_success(self, tag: str, message: str):
+        self.log(tag, message, tag_color="#34d399", text_color="#a7f3d0", prefix="✔")
+
+    def log_info(self, tag: str, message: str):
+        self.log(tag, message, tag_color="#38bdf8", text_color="#e0e7ff", prefix="ℹ")
+
+    def log_git(self, tag: str, message: str):
+        self.log(tag, message, tag_color="#c084fc", text_color="#f3e8ff", prefix="🌿")
+
+    def log_env(self, tag: str, message: str):
+        self.log(tag, message, tag_color="#fbbf24", text_color="#fef3c7", prefix="⚡")
+
+    def log_warn(self, tag: str, message: str):
+        self.log(tag, message, tag_color="#f59e0b", text_color="#fed7aa", prefix="⚠")
+
+    def log_error(self, tag: str, message: str):
+        self.log(tag, message, tag_color="#f87171", text_color="#fecaca", prefix="✖")
+
+
 class LumenProjectWorkspaceView(QWidget):
-    """Vista ilustre y épica de control de desarrollo y HUD de proyecto en LUMEN."""
+    """Vista modular de control de desarrollo y HUD con navegación directa (1-clic) a ventanas de sector."""
     
     back_requested = Signal()
 
@@ -91,6 +169,12 @@ class LumenProjectWorkspaceView(QWidget):
         self.app_version = get_version()
         self.project_data = {}
         self.init_ui()
+
+        # Temporizador para la hora en vivo
+        self.clock_timer = QTimer(self)
+        self.clock_timer.setInterval(1000)
+        self.clock_timer.timeout.connect(self.update_clock)
+        self.clock_timer.start()
 
     def init_ui(self):
         root_layout = QVBoxLayout(self)
@@ -147,6 +231,28 @@ class LumenProjectWorkspaceView(QWidget):
 
         tb_layout.addStretch()
 
+        # Botón de refresco manual
+        self.btn_refresh = QPushButton("🔄 Sincronizar")
+        self.btn_refresh.setProperty("class", "browse")
+        self.btn_refresh.setCursor(Qt.PointingHandCursor)
+        self.btn_refresh.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.04);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-size: 11.5px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                color: #ffffff;
+                border-color: #6366f1;
+            }
+        """)
+        self.btn_refresh.clicked.connect(self.refresh_current_project)
+        tb_layout.addWidget(self.btn_refresh)
+
         # Status Pill
         self.lbl_status_pill = QLabel("🟢 SISTEMA CONECTADO")
         self.lbl_status_pill.setStyleSheet("""
@@ -173,7 +279,7 @@ class LumenProjectWorkspaceView(QWidget):
         content_layout.setSpacing(14)
 
         # -------------------------------------------------------------
-        # 2. HUD GENERAL DEL PROYECTO (UN SOLO CUADRO LIMPIO)
+        # 2. HUD GENERAL DEL PROYECTO (CONSERVADO EN LA PARTE SUPERIOR)
         # -------------------------------------------------------------
         self.hud_card = QFrame()
         self.hud_card.setProperty("class", "surface")
@@ -196,7 +302,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         lbl_p_tag = QLabel("📁 Proyecto:")
         lbl_p_tag.setStyleSheet("font-weight: 700; color: #9ca3af; font-size: 13.5px;")
-        self.lbl_proj_title = QLabel("ABRAXAS (v0.1.0)")
+        self.lbl_proj_title = QLabel("Cargando...")
         self.lbl_proj_title.setStyleSheet("font-weight: 800; color: #fbbf24; font-size: 14px;")
 
         sep1 = QLabel(" | ")
@@ -232,7 +338,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         lbl_e_tag = QLabel("⚡ Entorno:")
         lbl_e_tag.setStyleSheet("font-weight: 700; color: #9ca3af; font-size: 13px;")
-        self.lbl_env_status = QLabel("Activado (.venv)")
+        self.lbl_env_status = QLabel("Detectando...")
         self.lbl_env_status.setStyleSheet("font-weight: 800; color: #34d399; font-size: 13px;")
 
         sep3 = QLabel(" | ")
@@ -240,7 +346,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         lbl_d_tag = QLabel("🐳 Contenedores Docker:")
         lbl_d_tag.setStyleSheet("font-weight: 700; color: #9ca3af; font-size: 13px;")
-        self.lbl_docker_status = QLabel("2 activos")
+        self.lbl_docker_status = QLabel("0 activos")
         self.lbl_docker_status.setStyleSheet("font-weight: 800; color: #60a5fa; font-size: 13px;")
 
         sep4 = QLabel(" | ")
@@ -274,7 +380,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         lbl_m_tag = QLabel("📝 Git Mod:")
         lbl_m_tag.setStyleSheet("font-weight: 700; color: #9ca3af; font-size: 13px;")
-        self.lbl_git_mod = QLabel("3 archivos modificados")
+        self.lbl_git_mod = QLabel("0 modificados")
         self.lbl_git_mod.setStyleSheet("font-weight: 700; color: #fbbf24; font-size: 13px;")
 
         sep6 = QLabel(" | ")
@@ -282,7 +388,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         lbl_u_tag = QLabel("❓ Untracked:")
         lbl_u_tag.setStyleSheet("font-weight: 700; color: #9ca3af; font-size: 13px;")
-        self.lbl_git_untracked = QLabel("1 no rastreado")
+        self.lbl_git_untracked = QLabel("0 no rastreados")
         self.lbl_git_untracked.setStyleSheet("font-weight: 700; color: #38bdf8; font-size: 13px;")
 
         sep7 = QLabel(" | ")
@@ -317,61 +423,91 @@ class LumenProjectWorkspaceView(QWidget):
         lbl_hist_head.setStyleSheet("font-size: 13px; font-weight: 800; color: #e5e7eb;")
         hud_layout.addWidget(lbl_hist_head)
 
-        demo_commits = [
-            ("Hace 25 min", "feat: arquitectura de navegación y selector de proyectos", "Silvynth", "main", "#38bdf8"),
-            ("Hace 2 horas", "refactor: optimización de temas y estilos visuales", "Silvynth", "main", "#c084fc"),
-            ("Hace 5 horas", "fix: corrección de dimensiones de tarjetas y clipping", "Silvynth", "main", "#fbbf24"),
-            ("Hace 1 día", "init: estructura base y controlador de motor dev", "Silvynth", "main", "#34d399")
-        ]
-
-        for time_s, title_s, author_s, branch_s, color_accent in demo_commits:
-            row_c = QHBoxLayout()
-            row_c.setSpacing(8)
-
-            lbl_dot = QLabel("◈")
-            lbl_dot.setStyleSheet(f"color: {color_accent}; font-size: 12px;")
-            row_c.addWidget(lbl_dot)
-
-            lbl_time = QLabel(time_s)
-            lbl_time.setStyleSheet("font-family: monospace; font-size: 12px; color: #9ca3af; font-weight: 600; min-width: 85px;")
-            row_c.addWidget(lbl_time)
-
-            lbl_c_title = QLabel(title_s)
-            lbl_c_title.setStyleSheet("font-size: 12.5px; color: #f3f4f6; font-weight: 600;")
-            row_c.addWidget(lbl_c_title, 1)
-
-            lbl_author = QLabel(f"👤 {author_s}")
-            lbl_author.setStyleSheet("font-size: 12px; color: #9ca3af;")
-            row_c.addWidget(lbl_author)
-
-            lbl_br = QLabel(f"[{branch_s}]")
-            lbl_br.setStyleSheet("font-family: monospace; font-size: 11.5px; color: #818cf8; font-weight: 700;")
-            row_c.addWidget(lbl_br)
-
-            hud_layout.addLayout(row_c)
+        # Contenedor dinámico de commits
+        self.history_items_container = QWidget()
+        self.history_items_layout = QVBoxLayout(self.history_items_container)
+        self.history_items_layout.setContentsMargins(0, 0, 0, 0)
+        self.history_items_layout.setSpacing(6)
+        hud_layout.addWidget(self.history_items_container)
 
         content_layout.addWidget(self.hud_card)
 
         # -------------------------------------------------------------
-        # 3. LOS CUATRO SECTORES DE HERRAMIENTAS (UN CUADRO POR SECTOR)
+        # 3. ZONA MODULAR DE SECTORES (QStackedWidget)
         # -------------------------------------------------------------
-        sectors_grid = QGridLayout()
-        sectors_grid.setSpacing(14)
+        self.sectors_stack = QStackedWidget()
 
-        # SECTOR 1: Ciclos de Trabajo
-        card_s1 = self.create_cyber_sector_card(
+        # =============================================================
+        # PÁGINA 0: VISTA GENERAL DE LOS 4 SECTORES
+        # =============================================================
+        self.page_overview = QWidget()
+        overview_layout = QGridLayout(self.page_overview)
+        overview_layout.setContentsMargins(0, 0, 0, 0)
+        overview_layout.setSpacing(14)
+
+        # Sector 1 Card
+        card_s1 = self.create_overview_sector_card(
             title="🔄  PRIMER SECTOR : CICLOS DE TRABAJO",
             accent_color="#38bdf8",
+            sector_idx=1,
             actions=[
-                ("🌿", "Control de ramas", "Crear, cambiar y listar ramas locales y remotas"),
-                ("🔀", "Fusión de ramas", "Merge, rebase y resolución de conflictos"),
-                ("🔄", "Estado y sincronización", "Fetch, pull, push y sincronización con origin")
+                ("🔄", "Ciclos de Trabajo", "ADD / IA Commit / IA Audit / Push"),
+                ("🌿", "Control de Ramas", "Checkout / Crear / Borrar"),
+                ("🔀", "Fusión de Ramas", "git merge"),
+                ("⚡", "Estado y Sincronización", "Status / Fetch / Pull")
             ]
         )
-        sectors_grid.addWidget(card_s1, 0, 0)
+        overview_layout.addWidget(card_s1, 0, 0)
 
-        # SECTOR 2: Entornos y Ejecución
-        card_s2 = self.create_cyber_sector_card(
+        # Sector 2 Card
+        card_s2 = self.create_overview_sector_card(
+            title="🚀  SEGUNDO SECTOR : ENTORNOS Y EJECUCIÓN",
+            accent_color="#10b981",
+            sector_idx=2,
+            actions=[
+                ("💻", "Ejecutar proyecto en editor", "Lanzar espacio de trabajo en VS Code / IDE"),
+                ("🐍", "Entornos python", "Gestor de paquetes, dependencias y virtualenv"),
+                ("🐳", "Docker y puertos", "Control de contenedores, compose y mapeos")
+            ]
+        )
+        overview_layout.addWidget(card_s2, 0, 1)
+
+        # Sector 3 Card
+        card_s3 = self.create_overview_sector_card(
+            title="🧠  TERCER SECTOR : HERRAMIENTAS & IA",
+            accent_color="#c084fc",
+            sector_idx=3,
+            actions=[
+                ("🛡️", "Gestor de gitignore", "Plantillas inteligentes y reglas de exclusión"),
+                ("📖", "Lector de documentación", "Visor interactivo de Markdown, README y APIs"),
+                ("🤖", "Utilidades IA", "Asistente Ollama local, refactor y ayuda dev")
+            ]
+        )
+        overview_layout.addWidget(card_s3, 1, 0)
+
+        # Sector 4 Card
+        card_s4 = self.create_overview_sector_card(
+            title="👤  SECTOR CUATRO : USUARIO GIT",
+            accent_color="#fbbf24",
+            sector_idx=4,
+            actions=[
+                ("🏷️", "Usuario Git", "Nombre, correo y firma de autor para commits")
+            ]
+        )
+        overview_layout.addWidget(card_s4, 1, 1)
+
+        self.sectors_stack.addWidget(self.page_overview)
+
+        # =============================================================
+        # PÁGINA 1: VENTANA DEDICADA Y LIMPIA DEL SECTOR 1 (CICLOS DE TRABAJO)
+        # =============================================================
+        self.page_sector1_view = self.create_sector1_dedicated_view()
+        self.sectors_stack.addWidget(self.page_sector1_view)
+
+        # =============================================================
+        # PÁGINA 2: VENTANA DEDICADA DEL SECTOR 2 (ENTORNOS Y EJECUCIÓN)
+        # =============================================================
+        self.page_sector2_view = self.create_simple_sector_view(
             title="🚀  SEGUNDO SECTOR : ENTORNOS Y EJECUCIÓN",
             accent_color="#10b981",
             actions=[
@@ -380,10 +516,12 @@ class LumenProjectWorkspaceView(QWidget):
                 ("🐳", "Docker y puertos", "Control de contenedores, compose y mapeos")
             ]
         )
-        sectors_grid.addWidget(card_s2, 0, 1)
+        self.sectors_stack.addWidget(self.page_sector2_view)
 
-        # SECTOR 3: Herramientas & IA
-        card_s3 = self.create_cyber_sector_card(
+        # =============================================================
+        # PÁGINA 3: VENTANA DEDICADA DEL SECTOR 3 (HERRAMIENTAS & IA)
+        # =============================================================
+        self.page_sector3_view = self.create_simple_sector_view(
             title="🧠  TERCER SECTOR : HERRAMIENTAS & IA",
             accent_color="#c084fc",
             actions=[
@@ -392,33 +530,35 @@ class LumenProjectWorkspaceView(QWidget):
                 ("🤖", "Utilidades IA", "Asistente Ollama local, refactor y ayuda dev")
             ]
         )
-        sectors_grid.addWidget(card_s3, 1, 0)
+        self.sectors_stack.addWidget(self.page_sector3_view)
 
-        # SECTOR 4: Usuario Git
-        card_s4 = self.create_cyber_sector_card(
+        # =============================================================
+        # PÁGINA 4: VENTANA DEDICADA DEL SECTOR 4 (USUARIO GIT)
+        # =============================================================
+        self.page_sector4_view = self.create_simple_sector_view(
             title="👤  SECTOR CUATRO : USUARIO GIT",
             accent_color="#fbbf24",
             actions=[
                 ("🏷️", "Usuario Git", "Nombre, correo y firma de autor para commits")
             ]
         )
-        sectors_grid.addWidget(card_s4, 1, 1)
+        self.sectors_stack.addWidget(self.page_sector4_view)
 
-        content_layout.addLayout(sectors_grid)
+        content_layout.addWidget(self.sectors_stack)
 
         # -------------------------------------------------------------
-        # 4. RECUADRO INFERIOR (INTERFAZ DE RESULTADOS & SALIDA TERMINAL)
+        # 4. RECUADRO INFERIOR (CONSERVADO EN LA PARTE INFERIOR)
         # -------------------------------------------------------------
-        self.bottom_empty_card = QFrame()
-        self.bottom_empty_card.setProperty("class", "surface")
-        self.bottom_empty_card.setStyleSheet("""
+        self.terminal_frame = QFrame()
+        self.terminal_frame.setProperty("class", "surface")
+        self.terminal_frame.setStyleSheet("""
             QFrame.surface {
-                background-color: #0c0e14;
-                border: 1px solid rgba(255, 255, 255, 0.08);
+                background-color: #07090e;
+                border: 1px solid rgba(99, 102, 241, 0.25);
                 border-radius: 10px;
             }
         """)
-        b_layout = QVBoxLayout(self.bottom_empty_card)
+        b_layout = QVBoxLayout(self.terminal_frame)
         b_layout.setContentsMargins(0, 0, 0, 0)
         b_layout.setSpacing(0)
 
@@ -426,14 +566,14 @@ class LumenProjectWorkspaceView(QWidget):
         term_bar = QFrame()
         term_bar.setStyleSheet("""
             background-color: rgba(255, 255, 255, 0.03);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
             border-top-left-radius: 10px;
             border-top-right-radius: 10px;
             padding: 4px 10px;
         """)
         t_bar_layout = QHBoxLayout(term_bar)
-        t_bar_layout.setContentsMargins(12, 6, 12, 6)
-        t_bar_layout.setSpacing(8)
+        t_bar_layout.setContentsMargins(12, 7, 12, 7)
+        t_bar_layout.setSpacing(10)
 
         # Dots de ventana Unix
         lbl_dots = QLabel("🔴  🟡  🟢")
@@ -441,42 +581,75 @@ class LumenProjectWorkspaceView(QWidget):
         t_bar_layout.addWidget(lbl_dots)
 
         self.lbl_t_title = QLabel("lumen-terminal@abraxas:~$")
-        self.lbl_t_title.setStyleSheet("font-family: monospace; font-size: 12px; font-weight: 700; color: #9ca3af;")
+        self.lbl_t_title.setStyleSheet("font-family: monospace; font-size: 12px; font-weight: 700; color: #a5b4fc;")
         t_bar_layout.addWidget(self.lbl_t_title)
 
         t_bar_layout.addStretch()
 
-        lbl_t_status = QLabel("⚡ INTERFAZ DE RESULTADOS & SALIDA")
-        lbl_t_status.setStyleSheet("font-size: 10.5px; font-weight: 800; color: #6366f1; letter-spacing: 0.5px;")
+        # Botón Copiar Log
+        btn_copy = QPushButton("📋 Copiar")
+        btn_copy.setCursor(Qt.PointingHandCursor)
+        btn_copy.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.04);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 4px;
+                padding: 3px 9px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                color: #ffffff;
+                border-color: #6366f1;
+                background-color: rgba(99, 102, 241, 0.20);
+            }
+        """)
+        btn_copy.clicked.connect(self.copy_terminal_output)
+        t_bar_layout.addWidget(btn_copy)
+
+        # Botón Limpiar Visor
+        btn_clear = QPushButton("🧹 Limpiar")
+        btn_clear.setCursor(Qt.PointingHandCursor)
+        btn_clear.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.04);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 4px;
+                padding: 3px 9px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                color: #f87171;
+                border-color: #ef4444;
+                background-color: rgba(239, 68, 68, 0.15);
+            }
+        """)
+        btn_clear.clicked.connect(self.clear_terminal_output)
+        t_bar_layout.addWidget(btn_clear)
+
+        lbl_t_status = QLabel("⚡ VISOR DE SALIDA [READ-ONLY]")
+        lbl_t_status.setStyleSheet("font-size: 10px; font-weight: 800; color: #38bdf8; background-color: rgba(6, 182, 212, 0.12); border: 1px solid rgba(6, 182, 212, 0.35); border-radius: 4px; padding: 2px 8px; letter-spacing: 0.5px;")
         t_bar_layout.addWidget(lbl_t_status)
 
         b_layout.addWidget(term_bar)
 
-        # Cuerpo del espacio de salida
-        term_body = QFrame()
-        term_body.setMinimumHeight(150)
-        tb_layout_body = QVBoxLayout(term_body)
-        tb_layout_body.setContentsMargins(18, 16, 18, 16)
-        tb_layout_body.setSpacing(6)
+        # Visor de texto (QTextEdit de Solo Lectura con soporte HTML coloreado)
+        self.terminal_display = LumenTerminalDisplay()
+        b_layout.addWidget(self.terminal_display)
 
-        self.lbl_prompt1 = QLabel("❯  Kernel Lumen v0.3.0 listo para ejecución.")
-        self.lbl_prompt1.setStyleSheet("font-family: monospace; font-size: 12px; color: #34d399;")
-        tb_layout_body.addWidget(self.lbl_prompt1)
-
-        self.lbl_prompt2 = QLabel("❯  Selecciona una acción en los sectores superiores para ejecutar y visualizar resultados...")
-        self.lbl_prompt2.setStyleSheet("font-family: monospace; font-size: 12px; color: #6b7280;")
-        tb_layout_body.addWidget(self.lbl_prompt2)
-
-        tb_layout_body.addStretch()
-        b_layout.addWidget(term_body)
-
-        content_layout.addWidget(self.bottom_empty_card)
+        content_layout.addWidget(self.terminal_frame)
 
         scroll_area.setWidget(scroll_content)
         root_layout.addWidget(scroll_area, 1)
 
-    def create_cyber_sector_card(self, title: str, accent_color: str, actions: list) -> QFrame:
-        """Crea una tarjeta única por sector con botones ilustres."""
+    # -----------------------------------------------------------------
+    # CREACIÓN DE VISTAS DE SECTORES (DISEÑO PRECISO & COMPACTO)
+    # -----------------------------------------------------------------
+    def create_overview_sector_card(self, title: str, accent_color: str, sector_idx: int, actions: list) -> QFrame:
+        """Crea una tarjeta para la vista general que permite entrar a la ventana limpia del sector."""
         card = QFrame()
         card.setProperty("class", "surface")
         card.setStyleSheet(f"""
@@ -492,36 +665,347 @@ class LumenProjectWorkspaceView(QWidget):
         c_layout.setContentsMargins(16, 14, 16, 14)
         c_layout.setSpacing(10)
 
-        # Header del Sector
+        # Header del Sector con botón de abrir
+        h_layout = QHBoxLayout()
         lbl_title = QLabel(title)
         lbl_title.setStyleSheet(f"font-size: 12.5px; font-weight: 900; color: {accent_color}; letter-spacing: 0.5px;")
-        c_layout.addWidget(lbl_title)
+        h_layout.addWidget(lbl_title)
+        h_layout.addStretch()
+
+        btn_enter = QPushButton("Abrir Sector ›")
+        btn_enter.setCursor(Qt.PointingHandCursor)
+        btn_enter.setStyleSheet(f"""
+            QPushButton {{
+                background-color: rgba(255, 255, 255, 0.04);
+                color: {accent_color};
+                border: 1px solid {accent_color};
+                border-radius: 5px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-weight: 700;
+            }}
+            QPushButton:hover {{
+                background-color: {accent_color};
+                color: #07090e;
+            }}
+        """)
+        btn_enter.clicked.connect(lambda: self.open_sector_view(sector_idx, title))
+        h_layout.addWidget(btn_enter)
+        c_layout.addLayout(h_layout)
 
         for icon, act_title, act_sub in actions:
             btn = LumenCyberActionButton(icon, act_title, act_sub, accent_color=accent_color)
+            btn.clicked.connect(lambda t=act_title, s=sector_idx, st=title: self.open_sector_and_handle(s, st, t))
             c_layout.addWidget(btn)
 
         c_layout.addStretch()
         return card
 
-    def set_project(self, folder_data: dict):
-        """Carga la información del proyecto en el HUD."""
-        self.project_data = folder_data
-        p_name = folder_data.get("name", "Proyecto")
-        p_path = folder_data.get("path", "")
-        
+    def create_sector1_dedicated_view(self) -> QFrame:
+        """Crea la ventana limpia y dedicada para el Sector 1 (Ciclos de Trabajo)."""
+        card = QFrame()
+        card.setProperty("class", "surface")
+        card.setStyleSheet("""
+            QFrame.surface {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(22, 24, 34, 0.95), stop:1 rgba(16, 18, 25, 0.95));
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-top: 3px solid #38bdf8;
+                border-radius: 10px;
+            }
+        """)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        # Encabezado único de Ciclos de Trabajo
+        head_w = QHBoxLayout()
+        head_w.setSpacing(12)
+
+        btn_back_to_main = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back_to_main.setCursor(Qt.PointingHandCursor)
+        btn_back_to_main.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #bae6fd;
+                border: 1px solid rgba(56, 189, 248, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.30);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_back_to_main.clicked.connect(self.go_back_to_sectors_overview)
+        head_w.addWidget(btn_back_to_main)
+
+        lbl_w_title = QLabel("🔄  PRIMER SECTOR : FLUJO DE CICLOS DE TRABAJO")
+        lbl_w_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
+        head_w.addWidget(lbl_w_title)
+        head_w.addStretch()
+
+        lbl_flow_pill = QLabel("[ADD ➔ IA AUDIT ➔ IA COMMIT ➔ PUSH]")
+        lbl_flow_pill.setFixedHeight(24)
+        lbl_flow_pill.setAlignment(Qt.AlignCenter)
+        lbl_flow_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #818cf8; background-color: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.35); border-radius: 4px; padding: 2px 8px;")
+        head_w.addWidget(lbl_flow_pill)
+        layout.addLayout(head_w)
+
+        work_cycle_actions = [
+            ("➕", "Add (Preparar Cambios)", "git add -A / Staging completo de archivos modificados y nuevos", "#34d399"),
+            ("🔍", "IA Audit (Analizar Diff)", "Auditoría inteligente del árbol de cambios y diff con IA", "#38bdf8"),
+            ("🤖", "IA Commit (Generar commit)", "Generación semántica de mensaje de commit estructurado", "#c084fc"),
+            ("✍️", "Commit Manual", "Redactar mensaje personalizado y registrar commit en el repositorio", "#fbbf24"),
+            ("🚀", "Push", "Publicar commits locales confirmados a la rama remota origin", "#60a5fa"),
+            ("◀", "Volver", "Regresar al menú principal de Sectores", "#9ca3af")
+        ]
+
+        for icon, act_title, act_sub, color in work_cycle_actions:
+            btn = LumenCyberActionButton(icon, act_title, act_sub, accent_color=color)
+            if act_title == "Volver":
+                btn.clicked.connect(self.go_back_to_sectors_overview)
+            else:
+                btn.clicked.connect(self.handle_action_click)
+            layout.addWidget(btn)
+
+        layout.addStretch()
+        return card
+
+    def create_simple_sector_view(self, title: str, accent_color: str, actions: list) -> QFrame:
+        """Crea una ventana dedicada y limpia para un sector específico con diseño consistente."""
+        card = QFrame()
+        card.setProperty("class", "surface")
+        card.setStyleSheet(f"""
+            QFrame.surface {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(22, 24, 34, 0.95), stop:1 rgba(16, 18, 25, 0.95));
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-top: 3px solid {accent_color};
+                border-radius: 10px;
+            }}
+        """)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        # Barra superior de navegación del Sector
+        nav_bar = QHBoxLayout()
+        nav_bar.setSpacing(12)
+
+        btn_back_sec = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back_sec.setCursor(Qt.PointingHandCursor)
+        btn_back_sec.setStyleSheet(f"""
+            QPushButton {{
+                background-color: rgba(255, 255, 255, 0.04);
+                color: {accent_color};
+                border: 1px solid {accent_color};
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }}
+            QPushButton:hover {{
+                background-color: {accent_color};
+                color: #07090e;
+            }}
+        """)
+        btn_back_sec.clicked.connect(self.go_back_to_sectors_overview)
+        nav_bar.addWidget(btn_back_sec)
+
+        lbl_sec_title = QLabel(title)
+        lbl_sec_title.setStyleSheet(f"font-size: 12.5px; font-weight: 900; color: {accent_color}; letter-spacing: 0.5px;")
+        nav_bar.addWidget(lbl_sec_title)
+
+        nav_bar.addStretch()
+        layout.addLayout(nav_bar)
+
+        for icon, act_title, act_sub in actions:
+            btn = LumenCyberActionButton(icon, act_title, act_sub, accent_color=accent_color)
+            btn.clicked.connect(self.handle_action_click)
+            layout.addWidget(btn)
+
+        layout.addStretch()
+        return card
+
+    # -----------------------------------------------------------------
+    # CONTROL DE NAVEGACIÓN ENTRE VENTANAS DE SECTOR
+    # -----------------------------------------------------------------
+    def open_sector_view(self, sector_idx: int, sector_title: str):
+        """Abre la ventana limpia dedicada del sector seleccionado."""
+        self.sectors_stack.setCurrentIndex(sector_idx)
+        self.terminal_display.log("NAV", f"Abriendo ventana dedicada de <b>{sector_title}</b>.", tag_color="#38bdf8", prefix="📂")
+
+    def open_sector_and_handle(self, sector_idx: int, sector_title: str, action_title: str):
+        """Abre la ventana del sector o ejecuta la acción seleccionada."""
+        if sector_idx == 1:
+            if action_title == "Ciclos de Trabajo":
+                self.open_sector_view(1, "Ciclos de Trabajo")
+            else:
+                self.handle_action_click(action_title)
+        else:
+            self.open_sector_view(sector_idx, sector_title)
+            self.handle_action_click(action_title)
+
+    def go_back_to_sectors_overview(self):
+        """Regresa directamente al menú principal de los 4 sectores en un solo clic."""
+        self.sectors_stack.setCurrentIndex(0)
+        self.terminal_display.log("NAV", "Regresando al menú principal de Sectores.", tag_color="#9ca3af", prefix="◀")
+
+    # -----------------------------------------------------------------
+    # MÉTODOS DE RELOJ, LOGS Y ACCIONES
+    # -----------------------------------------------------------------
+    def update_clock(self):
+        """Actualiza la hora actual en tiempo real."""
         now_str = datetime.now().strftime("%H:%M:%S")
         self.lbl_current_time.setText(now_str)
 
-        # Título y versión
-        self.lbl_proj_title.setText(f"{p_name} (v0.1.0)")
-        self.lbl_t_title.setText(f"lumen-terminal@{p_name.lower()}:~$")
+    def copy_terminal_output(self):
+        """Copia el texto plano actual del visor al portapapeles del sistema."""
+        text = self.terminal_display.toPlainText()
+        if text:
+            clipboard = QApplication.clipboard()
+            clipboard.setText(text)
+            self.terminal_display.log_info("CLIPBOARD", "Contenido del visor copiado al portapapeles.")
+
+    def clear_terminal_output(self):
+        """Limpia el contenido del visor terminal."""
+        self.terminal_display.clear()
+        p_name = self.project_data.get("name", "Proyecto")
+        self.terminal_display.log(
+            "READY", 
+            f"Terminal lista para <b>{p_name}</b>.", 
+            tag_color="#34d399", 
+            prefix="❯"
+        )
+
+    def handle_action_click(self, action_title: str):
+        """Maneja el clic interactivo en las acciones y proyecta el log coloreado en la terminal."""
+        p_name = self.project_data.get("name", "Proyecto")
         
-        # Git branch / status si existe
-        git_path = os.path.join(p_path, ".git") if p_path else ""
-        if git_path and os.path.exists(git_path):
-            self.lbl_proj_branch.setText("main")
-            self.lbl_proj_remote.setText("origin/main")
+        actions_map = {
+            "Ciclos de Trabajo": ("WORKFLOW", f"Accediendo al menú de <b>Ciclos de Trabajo</b> para <b>{p_name}</b>...", "#38bdf8", "🔄"),
+            "Add (Preparar Cambios)": ("GIT-ADD", f"Preparando cambios en el árbol de trabajo (git add -A)...", "#34d399", "➕"),
+            "IA Audit (Analizar Diff)": ("IA-AUDIT", f"Iniciando auditoría y análisis de diff con motor de IA local...", "#38bdf8", "🔍"),
+            "IA Commit (Generar commit)": ("IA-COMMIT", f"Analizando cambios en staging para generar propuesta semántica de commit...", "#c084fc", "🤖"),
+            "Commit Manual": ("COMMIT", f"Abriendo formulario para redacción de commit manual...", "#fbbf24", "✍️"),
+            "Push": ("GIT-PUSH", f"Enviando commits confirmados a la rama remota origin...", "#60a5fa", "🚀"),
+            "Control de Ramas": ("GIT-BRANCH", f"Consultando matriz de ramas para <b>{p_name}</b>... (git branch -a)", "#c084fc", "🌿"),
+            "Fusión de Ramas": ("GIT-MERGE", f"Preparando interfaz de fusión (merge) para <b>{p_name}</b>...", "#38bdf8", "🔀"),
+            "Estado y Sincronización": ("GIT-SYNC", f"Verificando estado del árbol de trabajo (Status / Fetch / Pull)...", "#34d399", "⚡"),
+            "Ejecutar proyecto en editor": ("IDE", f"Lanzando espacio de trabajo de <b>{p_name}</b> en editor externo...", "#38bdf8", "💻"),
+            "Entornos python": ("VENV", f"Inspeccionando dependencias y entorno virtual de <b>{p_name}</b>...", "#fbbf24", "🐍"),
+            "Docker y puertos": ("DOCKER", f"Verificando servicios Docker y mapeo de puertos para <b>{p_name}</b>...", "#60a5fa", "🐳"),
+            "Gestor de gitignore": ("GITIGNORE", f"Analizando reglas y plantillas de exclusión en <code>.gitignore</code>...", "#c084fc", "🛡️"),
+            "Lector de documentación": ("DOCS", f"Cargando lector de documentación y archivos README...", "#818cf8", "📖"),
+            "Utilidades IA": ("AI-COPILOT", f"Iniciando puente de telemetría con modelo de IA local (Ollama)...", "#ec4899", "🤖"),
+            "Usuario Git": ("USER", f"Consultando perfil de autor, correo y llaves de firma Git...", "#fbbf24", "👤")
+        }
+
+        if action_title in actions_map:
+            tag, msg, color, prefix = actions_map[action_title]
+            self.terminal_display.log(tag, msg, tag_color=color, prefix=prefix)
         else:
-            self.lbl_proj_branch.setText("(Sin Git)")
-            self.lbl_proj_remote.setText("Local")
+            self.terminal_display.log_info("ACTION", f"Ejecutando acción: <b>{action_title}</b>...")
+
+    def set_project(self, folder_data: dict):
+        """Sincroniza y carga en tiempo real la información del proyecto seleccionado en el HUD y terminal coloreada."""
+        self.project_data = folder_data
+        sync = get_full_project_sync(folder_data)
+
+        # SIEMPRE resetear al panel general de los 4 sectores al abrir un proyecto
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.setCurrentIndex(0)
+
+        # 1. Proyecto, Versión, Rama, Remoto
+        self.lbl_proj_title.setText(f"{sync['name']} ({sync['version']})")
+        self.lbl_proj_branch.setText(sync['git_info']['branch'])
+        self.lbl_proj_remote.setText(sync['git_info']['remote'])
+
+        # 2. Entorno, Docker, Hora
+        env_text = sync['env_info']['text']
+        self.lbl_env_status.setText(env_text)
+        if sync['env_info']['is_active']:
+            self.lbl_env_status.setStyleSheet("font-weight: 800; color: #34d399; font-size: 13px;")
+        else:
+            self.lbl_env_status.setStyleSheet("font-weight: 700; color: #9ca3af; font-size: 13px;")
+
+        self.lbl_docker_status.setText(sync['docker_info']['text'])
+        self.lbl_current_time.setText(sync['timestamp'])
+
+        # 3. Git HUD
+        self.lbl_git_mod.setText(sync['git_hud']['mod_str'])
+        self.lbl_git_untracked.setText(sync['git_hud']['untracked_str'])
+        self.lbl_git_deleted.setText(sync['git_hud']['deleted_str'])
+
+        # 4. Historial reciente (Commits en tiempo real)
+        while self.history_items_layout.count():
+            item = self.history_items_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+            elif item.layout():
+                sub_lay = item.layout()
+                while sub_lay.count():
+                    sub_item = sub_lay.takeAt(0)
+                    if sub_item.widget():
+                        sub_item.widget().deleteLater()
+
+        commits = sync.get("commits", [])
+        if commits:
+            for c in commits:
+                row_c = QHBoxLayout()
+                row_c.setSpacing(8)
+
+                lbl_dot = QLabel("◈")
+                lbl_dot.setStyleSheet(f"color: {c.get('color', '#38bdf8')}; font-size: 12px;")
+                row_c.addWidget(lbl_dot)
+
+                lbl_time = QLabel(c['time'])
+                lbl_time.setStyleSheet("font-family: monospace; font-size: 12px; color: #9ca3af; font-weight: 600; min-width: 85px;")
+                row_c.addWidget(lbl_time)
+
+                lbl_c_title = QLabel(c['title'])
+                lbl_c_title.setStyleSheet("font-size: 12.5px; color: #f3f4f6; font-weight: 600;")
+                row_c.addWidget(lbl_c_title, 1)
+
+                lbl_author = QLabel(f"👤 {c['author']}")
+                lbl_author.setStyleSheet("font-size: 12px; color: #9ca3af;")
+                row_c.addWidget(lbl_author)
+
+                lbl_br = QLabel(f"[{c['branch']}]")
+                lbl_br.setStyleSheet("font-family: monospace; font-size: 11.5px; color: #818cf8; font-weight: 700;")
+                row_c.addWidget(lbl_br)
+
+                self.history_items_layout.addLayout(row_c)
+        else:
+            lbl_empty = QLabel("  • (No hay historial de commits registrado para este proyecto)")
+            lbl_empty.setStyleSheet("font-family: monospace; font-size: 12px; color: #6b7280; font-style: italic;")
+            self.history_items_layout.addWidget(lbl_empty)
+
+        # 5. Visor de terminal coloreado con HTML y diseño ciber-ilustre
+        p_name_clean = sync['name'].lower().replace(" ", "-")
+        self.lbl_t_title.setText(f"lumen-terminal@{p_name_clean}:~$")
+
+        self.terminal_display.clear()
+        self.terminal_display.log(
+            "KERNEL", 
+            f"Conectado a <b style='color:#fbbf24;'>{sync['name']}</b> <span style='color:#a5b4fc;'>[{sync['version']}]</span> en rama <b style='color:#38bdf8;'>{sync['git_info']['branch']}</b>",
+            tag_color="#818cf8",
+            prefix="❖"
+        )
+        self.terminal_display.log(
+            "READY",
+            "Esperando acciones...",
+            tag_color="#34d399",
+            prefix="❯"
+        )
+
+    def refresh_current_project(self):
+        """Re-sincroniza el proyecto actual con el disco."""
+        if self.project_data:
+            self.set_project(self.project_data)
+            self.terminal_display.log_success("SYNC", "Proyecto sincronizado con éxito.")
