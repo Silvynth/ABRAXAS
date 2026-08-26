@@ -261,3 +261,4 @@ def execute_commit_and_tag(
         return True, proc.stdout.strip()
     except Exception as e:
         return False, str(e)
+
