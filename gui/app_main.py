@@ -86,7 +86,7 @@ class NeosMainApp(QWidget):
             ("⚙  UMBRA", "Núcleo Operador & Kernel"),
             ("💻  LUMEN", "Motor Dev & IA Local"),
             ("📁  PROYECTOS", "Explorador de Repositorios"),
-            ("🔄  ACTUALIZACIÓN", "Gestor de Paquetes"),
+            ("🔄  ACTUALIZACIÓN", "Actualizar la App ABRAXAS & Sistema"),
             ("🛠  CONFIG", "Ajustes de Sistema")
         ]
 
@@ -156,6 +156,8 @@ class NeosMainApp(QWidget):
             self.page_lumen.load_projects()
         elif index == 2 and hasattr(self, "page_proyectos"):
             self.page_proyectos.load_projects()
+        elif index == 3 and hasattr(self, "page_actualizacion"):
+            self.page_actualizacion.start_check_updates()
 
     def apply_theme(self, theme_key):
         self.setStyleSheet(generate_stylesheet(theme_key))
