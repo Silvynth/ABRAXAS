@@ -4,16 +4,94 @@
 # =====================================================================
 
 import os
+import subprocess
 from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QFrame, QScrollArea, QGridLayout,
     QTextEdit, QApplication, QStackedWidget, QSizePolicy
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QThread
 
 from core import get_version
 from core.lumen_sync import get_full_project_sync
+from core.ai import get_configured_model, audit_git_diff
+
+
+class GitPushThread(QThread):
+    """Hilo para ejecutar git push origin <branch> sin congelar la GUI."""
+    finished_push = Signal(bool, str, str)
+
+    def __init__(self, project_path: str):
+        super().__init__()
+        self.project_path = project_path
+
+    def run(self):
+        try:
+            b_proc = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=self.project_path, capture_output=True, text=True, timeout=6
+            )
+            branch = b_proc.stdout.strip() or "main"
+
+            p_proc = subprocess.run(
+                ["git", "push", "origin", branch],
+                cwd=self.project_path, capture_output=True, text=True, timeout=45
+            )
+            if p_proc.returncode == 0:
+                out = p_proc.stdout.strip() or p_proc.stderr.strip() or "Todo sincronizado con el repositorio remoto."
+                self.finished_push.emit(True, branch, out)
+            else:
+                err = p_proc.stderr.strip() or p_proc.stdout.strip() or "Error desconocido durante git push."
+                self.finished_push.emit(False, branch, err)
+        except Exception as e:
+            self.finished_push.emit(False, "unknown", str(e))
+
+
+class IAAuditThread(QThread):
+    """Hilo para analizar diff de git y consultar a Ollama sin congelar la GUI."""
+    finished_audit = Signal(bool, str, dict)
+
+    def __init__(self, project_path: str, model_type: str = "light"):
+        super().__init__()
+        self.project_path = project_path
+        self.model_type = model_type
+
+    def run(self):
+        try:
+            # 1. Obtener diff (staging primero, luego árbol de trabajo, luego último commit)
+            d_cached = subprocess.run(
+                ["git", "diff", "--cached"],
+                cwd=self.project_path, capture_output=True, text=True, timeout=10
+            )
+            diff_text = d_cached.stdout.strip()
+
+            if not diff_text:
+                d_work = subprocess.run(
+                    ["git", "diff", "HEAD"],
+                    cwd=self.project_path, capture_output=True, text=True, timeout=10
+                )
+                diff_text = d_work.stdout.strip()
+
+            if not diff_text:
+                d_last = subprocess.run(
+                    ["git", "diff", "HEAD~1", "HEAD"],
+                    cwd=self.project_path, capture_output=True, text=True, timeout=10
+                )
+                diff_text = d_last.stdout.strip()
+
+            if not diff_text:
+                self.finished_audit.emit(
+                    False, 
+                    "No se detectaron diferencias (diff vacío) en staging, árbol de trabajo ni en el último commit.",
+                    {}
+                )
+                return
+
+            res = audit_git_diff(diff_text, model_type=self.model_type)
+            self.finished_audit.emit(True, "", res)
+        except Exception as e:
+            self.finished_audit.emit(False, str(e), {})
 
 
 class LumenCyberActionButton(QFrame):
@@ -79,6 +157,9 @@ class LumenCyberActionButton(QFrame):
                 border: 1px solid {self.accent_color};
             }}
         """)
+
+    def set_subtitle(self, subtitle: str):
+        self.lbl_sub.setText(subtitle)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -160,7 +241,7 @@ class LumenTerminalDisplay(QTextEdit):
 
 
 class LumenProjectWorkspaceView(QWidget):
-    """Vista modular de control de desarrollo y HUD con navegación directa (1-clic) a ventanas de sector."""
+    """Vista modular de control de desarrollo y HUD con navegación directa y funciones reales Git e IA."""
     
     back_requested = Signal()
 
@@ -168,6 +249,8 @@ class LumenProjectWorkspaceView(QWidget):
         super().__init__(parent)
         self.app_version = get_version()
         self.project_data = {}
+        self.push_thread = None
+        self.audit_thread = None
         self.init_ui()
 
         # Temporizador para la hora en vivo
@@ -499,7 +582,7 @@ class LumenProjectWorkspaceView(QWidget):
         self.sectors_stack.addWidget(self.page_overview)
 
         # =============================================================
-        # PÁGINA 1: VENTANA DEDICADA Y LIMPIA DEL SECTOR 1 (CICLOS DE TRABAJO)
+        # PÁGINA 1: VENTANA DEDICADA DEL SECTOR 1 (CICLOS DE TRABAJO & IA AUDIT)
         # =============================================================
         self.page_sector1_view = self.create_sector1_dedicated_view()
         self.sectors_stack.addWidget(self.page_sector1_view)
@@ -547,7 +630,7 @@ class LumenProjectWorkspaceView(QWidget):
         content_layout.addWidget(self.sectors_stack)
 
         # -------------------------------------------------------------
-        # 4. RECUADRO INFERIOR (CONSERVADO EN LA PARTE INFERIOR)
+        # 4. RECUADRO INFERIOR (TERMINAL DE SALIDA DE SOLO LECTURA)
         # -------------------------------------------------------------
         self.terminal_frame = QFrame()
         self.terminal_frame.setProperty("class", "surface")
@@ -702,7 +785,7 @@ class LumenProjectWorkspaceView(QWidget):
         return card
 
     def create_sector1_dedicated_view(self) -> QFrame:
-        """Crea la ventana limpia y dedicada para el Sector 1 (Ciclos de Trabajo)."""
+        """Crea la ventana del Sector 1 con sub-páginas (0: Flujo Ciclos de Trabajo, 1: Selección IA AUDIT)."""
         card = QFrame()
         card.setProperty("class", "surface")
         card.setStyleSheet("""
@@ -718,7 +801,17 @@ class LumenProjectWorkspaceView(QWidget):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
 
-        # Encabezado único de Ciclos de Trabajo
+        # Sub-stack interno para alternar entre Flujo y Vista IA AUDIT
+        self.sector1_sub_stack = QStackedWidget()
+
+        # =============================================================
+        # SUB-PÁGINA 0: FLUJO PRINCIPAL DE CICLOS DE TRABAJO
+        # =============================================================
+        page_work = QWidget()
+        w_lay = QVBoxLayout(page_work)
+        w_lay.setContentsMargins(0, 0, 0, 0)
+        w_lay.setSpacing(10)
+
         head_w = QHBoxLayout()
         head_w.setSpacing(12)
 
@@ -753,26 +846,121 @@ class LumenProjectWorkspaceView(QWidget):
         lbl_flow_pill.setAlignment(Qt.AlignCenter)
         lbl_flow_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #818cf8; background-color: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.35); border-radius: 4px; padding: 2px 8px;")
         head_w.addWidget(lbl_flow_pill)
-        layout.addLayout(head_w)
+        w_lay.addLayout(head_w)
 
-        work_cycle_actions = [
-            ("➕", "Add (Preparar Cambios)", "git add -A / Staging completo de archivos modificados y nuevos", "#34d399"),
-            ("🔍", "IA Audit (Analizar Diff)", "Auditoría inteligente del árbol de cambios y diff con IA", "#38bdf8"),
-            ("🤖", "IA Commit (Generar commit)", "Generación semántica de mensaje de commit estructurado", "#c084fc"),
-            ("✍️", "Commit Manual", "Redactar mensaje personalizado y registrar commit en el repositorio", "#fbbf24"),
-            ("🚀", "Push", "Publicar commits locales confirmados a la rama remota origin", "#60a5fa"),
-            ("◀", "Volver", "Regresar al menú principal de Sectores", "#9ca3af")
-        ]
+        # Botón 1: ADD (Preparar Cambios)
+        btn_add = LumenCyberActionButton("➕", "Add (Preparar Cambios)", "git add -A / Staging completo de archivos modificados y nuevos", accent_color="#34d399")
+        btn_add.clicked.connect(self.run_git_add)
+        w_lay.addWidget(btn_add)
 
-        for icon, act_title, act_sub, color in work_cycle_actions:
-            btn = LumenCyberActionButton(icon, act_title, act_sub, accent_color=color)
-            if act_title == "Volver":
-                btn.clicked.connect(self.go_back_to_sectors_overview)
-            else:
-                btn.clicked.connect(self.handle_action_click)
-            layout.addWidget(btn)
+        # Botón 2: IA AUDIT (Analizar Diff)
+        btn_ia_audit = LumenCyberActionButton("🔍", "IA Audit (Analizar Diff)", "Auditoría inteligente del árbol de cambios y diff con IA (Ligero / Pesado)", accent_color="#38bdf8")
+        btn_ia_audit.clicked.connect(self.open_ia_audit_subview)
+        w_lay.addWidget(btn_ia_audit)
 
-        layout.addStretch()
+        # Botón 3: IA Commit (Generar commit)
+        btn_ia_commit = LumenCyberActionButton("🤖", "IA Commit (Generar commit)", "Generación semántica de mensaje de commit estructurado", accent_color="#c084fc")
+        btn_ia_commit.clicked.connect(lambda: self.handle_action_click("IA Commit (Generar commit)"))
+        w_lay.addWidget(btn_ia_commit)
+
+        # Botón 4: Commit Manual
+        btn_commit_man = LumenCyberActionButton("✍️", "Commit Manual", "Redactar mensaje personalizado y registrar commit en el repositorio", accent_color="#fbbf24")
+        btn_commit_man.clicked.connect(lambda: self.handle_action_click("Commit Manual"))
+        w_lay.addWidget(btn_commit_man)
+
+        # Botón 5: Push
+        btn_push = LumenCyberActionButton("🚀", "Push", "Publicar commits locales confirmados a la rama remota origin", accent_color="#60a5fa")
+        btn_push.clicked.connect(self.run_git_push)
+        w_lay.addWidget(btn_push)
+
+        # Botón 6: Volver
+        btn_volver = LumenCyberActionButton("◀", "Volver", "Regresar al menú principal de Sectores", accent_color="#9ca3af")
+        btn_volver.clicked.connect(self.go_back_to_sectors_overview)
+        w_lay.addWidget(btn_volver)
+
+        w_lay.addStretch()
+        self.sector1_sub_stack.addWidget(page_work)
+
+        # =============================================================
+        # SUB-PÁGINA 1: SELECCIÓN DE MODELO PARA IA AUDIT
+        # =============================================================
+        page_ia_audit = QWidget()
+        ia_lay = QVBoxLayout(page_ia_audit)
+        ia_lay.setContentsMargins(0, 0, 0, 0)
+        ia_lay.setSpacing(10)
+
+        head_ia = QHBoxLayout()
+        head_ia.setSpacing(12)
+
+        btn_back_to_work = QPushButton("◀  Volver a Ciclos de Trabajo")
+        btn_back_to_work.setCursor(Qt.PointingHandCursor)
+        btn_back_to_work.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #bae6fd;
+                border: 1px solid rgba(56, 189, 248, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.30);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_back_to_work.clicked.connect(self.go_back_to_work_cycles)
+        head_ia.addWidget(btn_back_to_work)
+
+        lbl_ia_title = QLabel("🔍  AUDITORÍA DE DIFF CON INTELIGENCIA ARTIFICIAL")
+        lbl_ia_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
+        head_ia.addWidget(lbl_ia_title)
+        head_ia.addStretch()
+
+        lbl_engine_pill = QLabel("[OLLAMA ENGINE]")
+        lbl_engine_pill.setFixedHeight(24)
+        lbl_engine_pill.setAlignment(Qt.AlignCenter)
+        lbl_engine_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #34d399; background-color: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 4px; padding: 2px 8px;")
+        head_ia.addWidget(lbl_engine_pill)
+        ia_lay.addLayout(head_ia)
+
+        # Opción 1: Diff IA (Modelo Ligero)
+        light_name = get_configured_model("light")
+        self.btn_diff_light = LumenCyberActionButton(
+            "⚡", 
+            "Diff IA (Modelo Ligero)", 
+            f"Auditoría ágil y rápida del diff • Modelo configurado: {light_name}", 
+            accent_color="#38bdf8"
+        )
+        self.btn_diff_light.clicked.connect(lambda: self.run_ai_diff_audit("light"))
+        ia_lay.addWidget(self.btn_diff_light)
+
+        # Opción 2: Diff IA (Modelo Pesado)
+        heavy_name = get_configured_model("heavy")
+        self.btn_diff_heavy = LumenCyberActionButton(
+            "🧠", 
+            "Diff IA (Modelo Pesado)", 
+            f"Auditoría exhaustiva y análisis profundo • Modelo configurado: {heavy_name}", 
+            accent_color="#c084fc"
+        )
+        self.btn_diff_heavy.clicked.connect(lambda: self.run_ai_diff_audit("heavy"))
+        ia_lay.addWidget(self.btn_diff_heavy)
+
+        # Botón Volver
+        btn_back_audit = LumenCyberActionButton(
+            "◀", 
+            "Volver", 
+            "Regresar a las opciones del Ciclo de Trabajo", 
+            accent_color="#9ca3af"
+        )
+        btn_back_audit.clicked.connect(self.go_back_to_work_cycles)
+        ia_lay.addWidget(btn_back_audit)
+
+        ia_lay.addStretch()
+        self.sector1_sub_stack.addWidget(page_ia_audit)
+
+        layout.addWidget(self.sector1_sub_stack)
         return card
 
     def create_simple_sector_view(self, title: str, accent_color: str, actions: list) -> QFrame:
@@ -832,11 +1020,13 @@ class LumenProjectWorkspaceView(QWidget):
         return card
 
     # -----------------------------------------------------------------
-    # CONTROL DE NAVEGACIÓN ENTRE VENTANAS DE SECTOR
+    # NAVEGACIÓN DENTRO DE SECTORES Y CICLOS DE TRABAJO
     # -----------------------------------------------------------------
     def open_sector_view(self, sector_idx: int, sector_title: str):
         """Abre la ventana limpia dedicada del sector seleccionado."""
         self.sectors_stack.setCurrentIndex(sector_idx)
+        if sector_idx == 1 and hasattr(self, "sector1_sub_stack"):
+            self.sector1_sub_stack.setCurrentIndex(0)
         self.terminal_display.log("NAV", f"Abriendo ventana dedicada de <b>{sector_title}</b>.", tag_color="#38bdf8", prefix="📂")
 
     def open_sector_and_handle(self, sector_idx: int, sector_title: str, action_title: str):
@@ -850,13 +1040,136 @@ class LumenProjectWorkspaceView(QWidget):
             self.open_sector_view(sector_idx, sector_title)
             self.handle_action_click(action_title)
 
+    def open_ia_audit_subview(self):
+        """Abre la sub-vista de selección de modelo de IA para Auditoría de Diff."""
+        self.sector1_sub_stack.setCurrentIndex(1)
+        light_name = get_configured_model("light")
+        heavy_name = get_configured_model("heavy")
+        self.btn_diff_light.set_subtitle(f"Auditoría ágil y rápida del diff • Modelo configurado: {light_name}")
+        self.btn_diff_heavy.set_subtitle(f"Auditoría exhaustiva y análisis profundo • Modelo configurado: {heavy_name}")
+        self.terminal_display.log("WORKFLOW", "Accediendo a selección de modelo para <b>IA Audit</b> (Ligero / Pesado)...", tag_color="#38bdf8", prefix="🔍")
+
+    def go_back_to_work_cycles(self):
+        """Regresa a la página principal de Ciclos de Trabajo."""
+        self.sector1_sub_stack.setCurrentIndex(0)
+        self.terminal_display.log("NAV", "Regresando al menú de Ciclos de Trabajo.", tag_color="#9ca3af", prefix="◀")
+
     def go_back_to_sectors_overview(self):
         """Regresa directamente al menú principal de los 4 sectores en un solo clic."""
         self.sectors_stack.setCurrentIndex(0)
+        if hasattr(self, "sector1_sub_stack"):
+            self.sector1_sub_stack.setCurrentIndex(0)
         self.terminal_display.log("NAV", "Regresando al menú principal de Sectores.", tag_color="#9ca3af", prefix="◀")
 
     # -----------------------------------------------------------------
-    # MÉTODOS DE RELOJ, LOGS Y ACCIONES
+    # ACCIONES REALES: GIT ADD, GIT PUSH E IA AUDIT
+    # -----------------------------------------------------------------
+    def run_git_add(self):
+        """Ejecuta git add -A en el proyecto activo, actualiza el staging y refresca el HUD."""
+        path = self.project_data.get("path")
+        if not path or not os.path.exists(path):
+            self.terminal_display.log_error("GIT-ADD", "No hay un proyecto activo seleccionado.")
+            return
+
+        self.terminal_display.log("GIT-ADD", "Ejecutando staging completo de archivos (git add -A)...", tag_color="#34d399", prefix="➕")
+        try:
+            res = subprocess.run(["git", "add", "-A"], cwd=path, capture_output=True, text=True, timeout=10)
+            if res.returncode == 0:
+                st_proc = subprocess.run(["git", "status", "--short"], cwd=path, capture_output=True, text=True, timeout=5)
+                st_lines = st_proc.stdout.strip().splitlines() if st_proc.stdout.strip() else []
+                
+                self.terminal_display.log_success("GIT-ADD", f"Staging completado con éxito. {len(st_lines)} archivo(s) preparados para commit.")
+                for line in st_lines[:6]:
+                    self.terminal_display.log("STAGED", line, tag_color="#34d399", prefix="•")
+                if len(st_lines) > 6:
+                    self.terminal_display.log("STAGED", f"... y {len(st_lines)-6} archivo(s) más.", tag_color="#9ca3af", prefix="•")
+                
+                # Actualizar el HUD superior inmediatamente
+                self.refresh_current_project()
+            else:
+                self.terminal_display.log_error("GIT-ADD", f"Error al ejecutar git add: {res.stderr.strip()}")
+        except Exception as e:
+            self.terminal_display.log_error("GIT-ADD", f"Excepción al ejecutar git add: {e}")
+
+    def run_git_push(self):
+        """Ejecuta git push origin <rama> en segundo plano y proyecta los resultados en la terminal."""
+        path = self.project_data.get("path")
+        if not path or not os.path.exists(path):
+            self.terminal_display.log_error("GIT-PUSH", "No hay un proyecto activo seleccionado.")
+            return
+
+        if self.push_thread and self.push_thread.isRunning():
+            self.terminal_display.log_warn("GIT-PUSH", "Ya hay una operación de push en curso.")
+            return
+
+        self.terminal_display.log("GIT-PUSH", "Iniciando envío de commits hacia el repositorio remoto (origin)...", tag_color="#60a5fa", prefix="🚀")
+        
+        self.push_thread = GitPushThread(path)
+        self.push_thread.finished_push.connect(self.on_push_finished)
+        self.push_thread.start()
+
+    def on_push_finished(self, success: bool, branch: str, msg: str):
+        """Callback al finalizar git push."""
+        if success:
+            self.terminal_display.log_success("GIT-PUSH", f"Commits sincronizados exitosamente con origin/{branch}.")
+            if msg:
+                for line in msg.splitlines()[:5]:
+                    self.terminal_display.log("REMOTE", line, tag_color="#60a5fa", prefix="🌐")
+            self.refresh_current_project()
+        else:
+            self.terminal_display.log_error("GIT-PUSH", f"Fallo al realizar push a origin/{branch}: {msg}")
+
+    def run_ai_diff_audit(self, model_type: str):
+        """Ejecuta la auditoría inteligente de Diff con el modelo seleccionado (light o heavy)."""
+        path = self.project_data.get("path")
+        if not path or not os.path.exists(path):
+            self.terminal_display.log_error("IA-AUDIT", "No hay un proyecto activo seleccionado.")
+            return
+
+        if self.audit_thread and self.audit_thread.isRunning():
+            self.terminal_display.log_warn("IA-AUDIT", "Ya hay una auditoría de IA en curso. Espera a que termine.")
+            return
+
+        model_name = get_configured_model(model_type)
+        m_label = "Modelo Ligero" if model_type == "light" else "Modelo Pesado"
+        color = "#38bdf8" if model_type == "light" else "#c084fc"
+
+        self.terminal_display.log("IA-AUDIT", f"Iniciando auditoría con <b>{m_label}</b> [<code>{model_name}</code>]...", tag_color=color, prefix="🔍")
+        self.terminal_display.log_info("AI-ENGINE", "Extrayendo diff y procesando telemetría con Ollama...")
+
+        self.audit_thread = IAAuditThread(path, model_type=model_type)
+        self.audit_thread.finished_audit.connect(self.on_audit_finished)
+        self.audit_thread.start()
+
+    def on_audit_finished(self, success: bool, err_msg: str, res: dict):
+        """Callback al recibir el resultado de la auditoría de IA."""
+        if not success:
+            self.terminal_display.log_warn("IA-AUDIT", err_msg)
+            return
+
+        model_name = res.get("model_name", "Ollama")
+        audit_text = res.get("audit_text", "")
+
+        self.terminal_display.log_success("IA-AUDIT", f"Auditoría generada exitosamente por <b>{model_name}</b>:")
+        
+        # Formatear el reporte de auditoría en un recuadro estilizado en la terminal
+        formatted_html = audit_text.replace("\n", "<br>").replace("### ", "<b>").replace("## ", "<b>").replace("**", "<b>").replace("* ", "• ")
+        now = datetime.now().strftime("%H:%M:%S")
+        box_html = (
+            f"<div style='background-color: rgba(99, 102, 241, 0.08); border-left: 4px solid #818cf8; "
+            f"padding: 10px 14px; margin: 8px 0; border-radius: 4px; font-family: sans-serif; font-size: 12px; "
+            f"color: #f3f4f6; line-height: 1.5;'>"
+            f"<div style='font-weight: 800; color: #a5b4fc; margin-bottom: 6px; font-family: monospace;'>"
+            f"📊 REPORTE DE AUDITORÍA DE DIFF [{model_name}]:"
+            f"</div>"
+            f"{formatted_html}"
+            f"</div>"
+        )
+        self.terminal_display.append(box_html)
+        self.terminal_display.verticalScrollBar().setValue(self.terminal_display.verticalScrollBar().maximum())
+
+    # -----------------------------------------------------------------
+    # MÉTODOS DE RELOJ, LOGS Y ACCIONES GENÉRICAS
     # -----------------------------------------------------------------
     def update_clock(self):
         """Actualiza la hora actual en tiempo real."""
@@ -888,11 +1201,8 @@ class LumenProjectWorkspaceView(QWidget):
         
         actions_map = {
             "Ciclos de Trabajo": ("WORKFLOW", f"Accediendo al menú de <b>Ciclos de Trabajo</b> para <b>{p_name}</b>...", "#38bdf8", "🔄"),
-            "Add (Preparar Cambios)": ("GIT-ADD", f"Preparando cambios en el árbol de trabajo (git add -A)...", "#34d399", "➕"),
-            "IA Audit (Analizar Diff)": ("IA-AUDIT", f"Iniciando auditoría y análisis de diff con motor de IA local...", "#38bdf8", "🔍"),
             "IA Commit (Generar commit)": ("IA-COMMIT", f"Analizando cambios en staging para generar propuesta semántica de commit...", "#c084fc", "🤖"),
             "Commit Manual": ("COMMIT", f"Abriendo formulario para redacción de commit manual...", "#fbbf24", "✍️"),
-            "Push": ("GIT-PUSH", f"Enviando commits confirmados a la rama remota origin...", "#60a5fa", "🚀"),
             "Control de Ramas": ("GIT-BRANCH", f"Consultando matriz de ramas para <b>{p_name}</b>... (git branch -a)", "#c084fc", "🌿"),
             "Fusión de Ramas": ("GIT-MERGE", f"Preparando interfaz de fusión (merge) para <b>{p_name}</b>...", "#38bdf8", "🔀"),
             "Estado y Sincronización": ("GIT-SYNC", f"Verificando estado del árbol de trabajo (Status / Fetch / Pull)...", "#34d399", "⚡"),
@@ -911,14 +1221,10 @@ class LumenProjectWorkspaceView(QWidget):
         else:
             self.terminal_display.log_info("ACTION", f"Ejecutando acción: <b>{action_title}</b>...")
 
-    def set_project(self, folder_data: dict):
+    def set_project(self, folder_data: dict, reset_terminal: bool = True):
         """Sincroniza y carga en tiempo real la información del proyecto seleccionado en el HUD y terminal coloreada."""
         self.project_data = folder_data
         sync = get_full_project_sync(folder_data)
-
-        # SIEMPRE resetear al panel general de los 4 sectores al abrir un proyecto
-        if hasattr(self, "sectors_stack"):
-            self.sectors_stack.setCurrentIndex(0)
 
         # 1. Proyecto, Versión, Rama, Remoto
         self.lbl_proj_title.setText(f"{sync['name']} ({sync['version']})")
@@ -990,22 +1296,29 @@ class LumenProjectWorkspaceView(QWidget):
         p_name_clean = sync['name'].lower().replace(" ", "-")
         self.lbl_t_title.setText(f"lumen-terminal@{p_name_clean}:~$")
 
-        self.terminal_display.clear()
-        self.terminal_display.log(
-            "KERNEL", 
-            f"Conectado a <b style='color:#fbbf24;'>{sync['name']}</b> <span style='color:#a5b4fc;'>[{sync['version']}]</span> en rama <b style='color:#38bdf8;'>{sync['git_info']['branch']}</b>",
-            tag_color="#818cf8",
-            prefix="❖"
-        )
-        self.terminal_display.log(
-            "READY",
-            "Esperando acciones...",
-            tag_color="#34d399",
-            prefix="❯"
-        )
+        if reset_terminal:
+            # SIEMPRE resetear al panel general de los 4 sectores al abrir un proyecto desde cero
+            if hasattr(self, "sectors_stack"):
+                self.sectors_stack.setCurrentIndex(0)
+            if hasattr(self, "sector1_sub_stack"):
+                self.sector1_sub_stack.setCurrentIndex(0)
 
-    def refresh_current_project(self):
+            self.terminal_display.clear()
+            self.terminal_display.log(
+                "KERNEL", 
+                f"Conectado a <b style='color:#fbbf24;'>{sync['name']}</b> <span style='color:#a5b4fc;'>[{sync['version']}]</span> en rama <b style='color:#38bdf8;'>{sync['git_info']['branch']}</b>",
+                tag_color="#818cf8",
+                prefix="❖"
+            )
+            self.terminal_display.log(
+                "READY",
+                "Esperando acciones...",
+                tag_color="#34d399",
+                prefix="❯"
+            )
+
+    def refresh_current_project(self, reset_terminal: bool = False):
         """Re-sincroniza el proyecto actual con el disco."""
         if self.project_data:
-            self.set_project(self.project_data)
-            self.terminal_display.log_success("SYNC", "Proyecto sincronizado con éxito.")
+            self.set_project(self.project_data, reset_terminal=reset_terminal)
+            self.terminal_display.log_success("SYNC", "HUD y estado del repositorio actualizados.")
