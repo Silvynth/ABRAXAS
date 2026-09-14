@@ -146,8 +146,8 @@ def get_model_skill(model_type: str = "chat", config_path: str = None) -> str:
     cfg = AbraxasConfig(config_path)
     
     # 1. Comprobar si está definido directamente en config.toml
-    inline_skill = cfg.get(f"ai.skills.{model_type}_skill", "")
-    if inline_skill and inline_skill.strip():
+    inline_skill = cfg.get(f"ai.skills.{model_type}_skill", None)
+    if inline_skill is not None:
         return inline_skill.strip()
 
     # 2. Comprobar si hay archivo en skills/
@@ -161,30 +161,11 @@ def get_model_skill(model_type: str = "chat", config_path: str = None) -> str:
     if os.path.exists(fpath):
         try:
             with open(fpath, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if content:
-                    return content
+                return f.read().strip()
         except Exception:
             pass
 
-    # 3. Fallbacks con estilo Artemis
-    defaults = {
-        "heavy": (
-            "Eres un auditor de código técnico del sistema ABRAXAS. Tu personalidad es seria, comparativa, sugerente y extremadamente estricta. "
-            "Cero cordialidad, cero introducciones o comentarios de relleno. Tu flujo de trabajo es: analiza el diff en profundidad, "
-            "explica técnicamente las implicaciones de los cambios de forma rigurosa, detecta riesgos o bugs, y sugiere mejoras concretas. "
-            "Si el código cumple los estándares al 100%, concluye con: '✅ El código cumple los estándares al 100%'."
-        ),
-        "light": (
-            "Eres un sensor de análisis de cambios Git de ABRAXAS. Tu tarea es analizar el git diff y generar un diagnóstico ágil y un commit estructurado: "
-            "1. Resumen del cambio predominante. 2. Título semántico estructurado de 2 a 4 palabras ('Acción de Componente'). "
-            "3. Cuerpo descriptivo conciso en español (máximo 3 líneas) sin bloques de código."
-        ),
-        "chat": (
-            "Eres el copiloto de desarrollo y operador del sistema ABRAXAS. Responde de forma clara, técnica, precisa y estructurada en español con formato Markdown."
-        )
-    }
-    return defaults.get(model_type, defaults["chat"])
+    return ""
 
 
 def audit_git_diff(diff_content: str, model_type: str = "light", config_path: str = None) -> dict:

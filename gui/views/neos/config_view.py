@@ -4,15 +4,17 @@
 # =====================================================================
 
 import os
+import json
+import urllib.request
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QLineEdit, QFileDialog, 
     QCheckBox, QFrame, QScrollArea,
-    QComboBox, QStyledItemDelegate, QTextEdit
+    QComboBox, QStyledItemDelegate, QTextEdit, QDoubleSpinBox
 )
 from PySide6.QtCore import Qt, Signal
 
-from core.setup import write_toml_dict, read_toml_dict
+from core.setup import write_toml_dict, read_toml_dict, detect_git_identity, sync_global_gitconfig
 from core.ai import get_model_skill, SKILLS_DIR
 
 class ConfigView(QWidget):
@@ -27,6 +29,16 @@ class ConfigView(QWidget):
         self.cfg = read_toml_dict(self.config_target)
 
         self.init_ui()
+
+    def _fetch_local_ollama_models(self):
+        """Consulta modelos locales disponibles en el servidor Ollama."""
+        try:
+            req = urllib.request.Request("http://localhost:11434/api/tags")
+            with urllib.request.urlopen(req, timeout=1.2) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                return [m.get('name') for m in data.get('models', []) if m.get('name')]
+        except Exception:
+            return []
 
     def init_ui(self):
         layout = QVBoxLayout(self)
@@ -66,7 +78,8 @@ class ConfigView(QWidget):
         # Projects Dir
         l_paths.addWidget(QLabel("Directorio raíz de proyectos:"))
         r_proj = QHBoxLayout()
-        self.txt_cfg_proj = QLineEdit(self.cfg.get("paths", {}).get("projects_dir", "~/Proyectos"))
+        self.txt_cfg_proj = QLineEdit(self.cfg.get("paths", {}).get("projects_dir", ""))
+        self.txt_cfg_proj.setPlaceholderText("ej. /home/usuario/Development")
         btn_proj = QPushButton("Examinar")
         btn_proj.setProperty("class", "browse")
         btn_proj.clicked.connect(lambda: self.browse_folder(self.txt_cfg_proj))
@@ -77,18 +90,14 @@ class ConfigView(QWidget):
         # Vault Dir
         l_paths.addWidget(QLabel("Bóveda de notas / Obsidian:"))
         r_vault = QHBoxLayout()
-        self.txt_cfg_vault = QLineEdit(self.cfg.get("paths", {}).get("vault_dir", "~/Vault"))
+        self.txt_cfg_vault = QLineEdit(self.cfg.get("paths", {}).get("vault_dir", ""))
+        self.txt_cfg_vault.setPlaceholderText("ej. /home/usuario/Vault/01_Obsidian")
         btn_vault = QPushButton("Examinar")
         btn_vault.setProperty("class", "browse")
         btn_vault.clicked.connect(lambda: self.browse_folder(self.txt_cfg_vault))
         r_vault.addWidget(self.txt_cfg_vault)
         r_vault.addWidget(btn_vault)
         l_paths.addLayout(r_vault)
-
-        # Snapshots Dir
-        l_paths.addWidget(QLabel("Subvolumen de instantáneas Btrfs / Snapper:"))
-        self.txt_cfg_snap = QLineEdit(self.cfg.get("paths", {}).get("snapshots_dir", "/.snapshots"))
-        l_paths.addWidget(self.txt_cfg_snap)
 
         s_layout.addWidget(card_paths)
 
@@ -104,8 +113,8 @@ class ConfigView(QWidget):
         lbl_sec2.setProperty("class", "section_title")
         l_ai.addWidget(lbl_sec2)
 
-        self.chk_cfg_ai = QCheckBox("Habilitar Invocación de IA en ABRAXAS (bajo demanda)")
-        self.chk_cfg_ai.setChecked(self.cfg.get("ai", {}).get("enabled", True))
+        self.chk_cfg_ai = QCheckBox("Habilitar Asistencia con IA Local en ABRAXAS")
+        self.chk_cfg_ai.setChecked(self.cfg.get("ai", {}).get("enabled", False))
         l_ai.addWidget(self.chk_cfg_ai)
 
         row_ai1 = QHBoxLayout()
@@ -116,23 +125,27 @@ class ConfigView(QWidget):
         row_ai1.addWidget(self.cmb_cfg_provider, 1)
         l_ai.addLayout(row_ai1)
 
+        # Detectar modelos de Ollama
+        detected_models = self._fetch_local_ollama_models()
+
         # 1. Conversational Model
         l_ai.addWidget(QLabel("Modelo Conversacional (Chatbox & Obsidian):"))
         row_ai_chat = QHBoxLayout()
         row_ai_chat.setSpacing(10)
         self.cmb_cfg_chat_model = QComboBox()
         self.cmb_cfg_chat_model.setItemDelegate(QStyledItemDelegate())
-        chat_default = self.cfg.get("ai", {}).get("chat_model", "llama3.1:8b")
-        presets_chat = ["llama3.1:8b", "mistral:7b", "gemma2:9b", "qwen2.5:7b", "Personalizado..."]
-        if chat_default not in presets_chat:
+        chat_default = self.cfg.get("ai", {}).get("chat_model", "")
+        presets_chat = list(detected_models) if detected_models else ["deepseek-r1:8b", "qwen2.5:7b", "llama3.1:8b"]
+        if chat_default and chat_default not in presets_chat:
             presets_chat.insert(0, chat_default)
+        if "Personalizado..." not in presets_chat:
+            presets_chat.append("Personalizado...")
         self.cmb_cfg_chat_model.addItems(presets_chat)
-        if chat_default in presets_chat:
+        if chat_default and chat_default in presets_chat:
             self.cmb_cfg_chat_model.setCurrentText(chat_default)
 
         self.txt_cfg_chat_model = QLineEdit(chat_default)
-        self.txt_cfg_chat_model.setPlaceholderText("Nombre / modelo personalizado...")
-        self.txt_cfg_chat_model.setToolTip("Introduce un nombre o tag personalizado de modelo para el chat")
+        self.txt_cfg_chat_model.setPlaceholderText("Nombre del modelo...")
         self.cmb_cfg_chat_model.currentTextChanged.connect(
             lambda t: self.txt_cfg_chat_model.setText(t) if t != "Personalizado..." else None
         )
@@ -146,17 +159,18 @@ class ConfigView(QWidget):
         row_ai_heavy.setSpacing(10)
         self.cmb_cfg_heavy_model = QComboBox()
         self.cmb_cfg_heavy_model.setItemDelegate(QStyledItemDelegate())
-        heavy_default = self.cfg.get("ai", {}).get("heavy_model", "qwen2.5-coder:14b")
-        presets_heavy = ["qwen2.5-coder:14b", "deepseek-coder:14b", "llama3.1:8b", "Personalizado..."]
-        if heavy_default not in presets_heavy:
+        heavy_default = self.cfg.get("ai", {}).get("heavy_model", "")
+        presets_heavy = list(detected_models) if detected_models else ["deepseek-r1:8b", "qwen2.5-coder:14b"]
+        if heavy_default and heavy_default not in presets_heavy:
             presets_heavy.insert(0, heavy_default)
+        if "Personalizado..." not in presets_heavy:
+            presets_heavy.append("Personalizado...")
         self.cmb_cfg_heavy_model.addItems(presets_heavy)
-        if heavy_default in presets_heavy:
+        if heavy_default and heavy_default in presets_heavy:
             self.cmb_cfg_heavy_model.setCurrentText(heavy_default)
 
         self.txt_cfg_heavy_model = QLineEdit(heavy_default)
-        self.txt_cfg_heavy_model.setPlaceholderText("Nombre / modelo personalizado...")
-        self.txt_cfg_heavy_model.setToolTip("Introduce un nombre o tag personalizado para el modelo pesado de desarrollo")
+        self.txt_cfg_heavy_model.setPlaceholderText("Nombre del modelo pesado...")
         self.cmb_cfg_heavy_model.currentTextChanged.connect(
             lambda t: self.txt_cfg_heavy_model.setText(t) if t != "Personalizado..." else None
         )
@@ -170,17 +184,18 @@ class ConfigView(QWidget):
         row_ai_light.setSpacing(10)
         self.cmb_cfg_light_model = QComboBox()
         self.cmb_cfg_light_model.setItemDelegate(QStyledItemDelegate())
-        light_default = self.cfg.get("ai", {}).get("light_model", "qwen2.5-coder:7b")
-        presets_light = ["qwen2.5-coder:7b", "llama3.2:3b", "gemma2:2b", "Personalizado..."]
-        if light_default not in presets_light:
+        light_default = self.cfg.get("ai", {}).get("light_model", "")
+        presets_light = list(detected_models) if detected_models else ["qwen2.5-coder:7b", "llama3.2:3b"]
+        if light_default and light_default not in presets_light:
             presets_light.insert(0, light_default)
+        if "Personalizado..." not in presets_light:
+            presets_light.append("Personalizado...")
         self.cmb_cfg_light_model.addItems(presets_light)
-        if light_default in presets_light:
+        if light_default and light_default in presets_light:
             self.cmb_cfg_light_model.setCurrentText(light_default)
 
         self.txt_cfg_light_model = QLineEdit(light_default)
-        self.txt_cfg_light_model.setPlaceholderText("Nombre / modelo personalizado...")
-        self.txt_cfg_light_model.setToolTip("Introduce un nombre o tag personalizado para el modelo ligero de desarrollo")
+        self.txt_cfg_light_model.setPlaceholderText("Nombre del modelo ligero...")
         self.cmb_cfg_light_model.currentTextChanged.connect(
             lambda t: self.txt_cfg_light_model.setText(t) if t != "Personalizado..." else None
         )
@@ -188,11 +203,27 @@ class ConfigView(QWidget):
         row_ai_light.addWidget(self.txt_cfg_light_model, 1)
         l_ai.addLayout(row_ai_light)
 
+        # Endpoint
         row_ai3 = QHBoxLayout()
         row_ai3.addWidget(QLabel("Endpoint Servidor:"))
         self.txt_cfg_endpoint = QLineEdit(self.cfg.get("ai", {}).get("endpoint", "http://localhost:11434"))
         row_ai3.addWidget(self.txt_cfg_endpoint, 1)
         l_ai.addLayout(row_ai3)
+
+        # Temperature
+        row_temp = QHBoxLayout()
+        row_temp.addWidget(QLabel("Temperatura (Creatividad / Precisión):"))
+        self.spn_cfg_temp = QDoubleSpinBox()
+        self.spn_cfg_temp.setRange(0.0, 1.0)
+        self.spn_cfg_temp.setSingleStep(0.05)
+        self.spn_cfg_temp.setDecimals(2)
+        try:
+            curr_temp = float(self.cfg.get("ai", {}).get("temperature", 0.2))
+        except (ValueError, TypeError):
+            curr_temp = 0.2
+        self.spn_cfg_temp.setValue(curr_temp)
+        row_temp.addWidget(self.spn_cfg_temp, 1)
+        l_ai.addLayout(row_temp)
 
         s_layout.addWidget(card_ai)
 
@@ -210,31 +241,30 @@ class ConfigView(QWidget):
         h_sk_title.addWidget(lbl_sec_sk)
         h_sk_title.addStretch()
 
-        btn_reset_skills = QPushButton("🔄 Cargar Valores Predeterminados")
-        btn_reset_skills.setCursor(Qt.PointingHandCursor)
-        btn_reset_skills.setStyleSheet("""
+        btn_clear_skills = QPushButton("🧹 Limpiar Skills")
+        btn_clear_skills.setCursor(Qt.PointingHandCursor)
+        btn_clear_skills.setStyleSheet("""
             QPushButton {
-                background-color: rgba(99, 102, 241, 0.15);
-                color: #c7d2fe;
-                border: 1px solid rgba(99, 102, 241, 0.35);
+                background-color: rgba(239, 68, 68, 0.15);
+                color: #fca5a5;
+                border: 1px solid rgba(239, 68, 68, 0.35);
                 border-radius: 6px;
                 padding: 4px 10px;
                 font-size: 11px;
                 font-weight: 700;
             }
             QPushButton:hover {
-                background-color: rgba(99, 102, 241, 0.30);
-                border-color: #818cf8;
+                background-color: rgba(239, 68, 68, 0.30);
+                border-color: #f87171;
                 color: #ffffff;
             }
         """)
-        btn_reset_skills.clicked.connect(self.load_default_skills_presets)
-        h_sk_title.addWidget(btn_reset_skills)
+        btn_clear_skills.clicked.connect(self.clear_skills)
+        h_sk_title.addWidget(btn_clear_skills)
         l_sk.addLayout(h_sk_title)
 
         lbl_sk_sub = QLabel(
-            "Define el comportamiento, tono y protocolo técnico de razonamiento para cada uno de los 3 modelos de IA "
-            "(Valores predeterminados del sistema ABRAXAS)."
+            "Define el prompt de comportamiento del sistema para cada modelo. Puedes dejarlos vacíos para usar el comportamiento base del modelo."
         )
         lbl_sk_sub.setProperty("class", "card_desc")
         lbl_sk_sub.setWordWrap(True)
@@ -248,54 +278,81 @@ class ConfigView(QWidget):
         self.txt_sk_chat = QTextEdit()
         self.txt_sk_chat.setMinimumHeight(65)
         self.txt_sk_chat.setMaximumHeight(85)
+        self.txt_sk_chat.setPlaceholderText("Instrucciones personalizadas del sistema (opcional)...")
         self.txt_sk_chat.setPlainText(get_model_skill("chat", self.config_target))
         l_sk.addWidget(self.txt_sk_chat)
 
         # 2. Skill Modelo Pesado
-        lbl_sk_heavy = QLabel("🧠 Skill: Modelo Pesado Dev (Auditoría Profunda & Refactor — Protocolo audit.txt):")
+        lbl_sk_heavy = QLabel("🧠 Skill: Modelo Pesado Dev (Auditoría Profunda & Refactor):")
         lbl_sk_heavy.setStyleSheet("font-weight: 700; color: #c084fc; font-size: 12px;")
         l_sk.addWidget(lbl_sk_heavy)
 
         self.txt_sk_heavy = QTextEdit()
         self.txt_sk_heavy.setMinimumHeight(80)
         self.txt_sk_heavy.setMaximumHeight(115)
+        self.txt_sk_heavy.setPlaceholderText("Protocolo estricto de auditoría (opcional)...")
         self.txt_sk_heavy.setPlainText(get_model_skill("heavy", self.config_target))
         l_sk.addWidget(self.txt_sk_heavy)
 
         # 3. Skill Modelo Ligero
-        lbl_sk_light = QLabel("⚡ Skill: Modelo Ligero Dev (Git Rápido, Commits & Diff — Protocolo commit_hex.txt):")
+        lbl_sk_light = QLabel("⚡ Skill: Modelo Ligero Dev (Git Rápido & Mensajes de Commit):")
         lbl_sk_light.setStyleSheet("font-weight: 700; color: #38bdf8; font-size: 12px;")
         l_sk.addWidget(lbl_sk_light)
 
         self.txt_sk_light = QTextEdit()
         self.txt_sk_light.setMinimumHeight(80)
         self.txt_sk_light.setMaximumHeight(115)
+        self.txt_sk_light.setPlaceholderText("Formato conciso para análisis y commits (opcional)...")
         self.txt_sk_light.setPlainText(get_model_skill("light", self.config_target))
         l_sk.addWidget(self.txt_sk_light)
 
         s_layout.addWidget(card_skills)
 
         # -------------------------------------------------------------
-        # Section 3: Entorno de Desarrollo ([development])
+        # Section 3: Identidad Git & GitHub ([git])
         # -------------------------------------------------------------
-        card_dev = QFrame()
-        card_dev.setProperty("class", "surface")
-        l_dev = QVBoxLayout(card_dev)
-        l_dev.setSpacing(10)
+        card_git = QFrame()
+        card_git.setProperty("class", "surface")
+        l_git = QVBoxLayout(card_git)
+        l_git.setSpacing(10)
 
-        lbl_sec_dev = QLabel("⚙️ Entornos de Desarrollo ([development])")
-        lbl_sec_dev.setProperty("class", "section_title")
-        l_dev.addWidget(lbl_sec_dev)
+        lbl_sec_git = QLabel("🐙 Identidad Git & GitHub ([git])")
+        lbl_sec_git.setProperty("class", "section_title")
+        l_git.addWidget(lbl_sec_git)
 
-        self.chk_cfg_venv = QCheckBox("Detección automática de entornos virtuales Python (.venv)")
-        self.chk_cfg_venv.setChecked(self.cfg.get("development", {}).get("venv_auto_detect", True))
-        l_dev.addWidget(self.chk_cfg_venv)
+        lbl_git_sub = QLabel(
+            "Configura la identidad de autoría para los commits automáticos generados en LUMEN."
+        )
+        lbl_git_sub.setProperty("class", "card_desc")
+        lbl_git_sub.setWordWrap(True)
+        l_git.addWidget(lbl_git_sub)
 
-        self.chk_cfg_docker = QCheckBox("Monitoreo de contenedores Docker activos")
-        self.chk_cfg_docker.setChecked(self.cfg.get("development", {}).get("docker_monitor", True))
-        l_dev.addWidget(self.chk_cfg_docker)
+        l_git.addWidget(QLabel("Nombre de usuario Git (user.name):"))
+        self.txt_cfg_git_user = QLineEdit(self.cfg.get("git", {}).get("user_name", ""))
+        self.txt_cfg_git_user.setPlaceholderText("ej. Tu Nombre o Usuario")
+        l_git.addWidget(self.txt_cfg_git_user)
 
-        s_layout.addWidget(card_dev)
+        l_git.addWidget(QLabel("Correo electrónico Git (user.email):"))
+        self.txt_cfg_git_email = QLineEdit(self.cfg.get("git", {}).get("user_email", ""))
+        self.txt_cfg_git_email.setPlaceholderText("ej. correo@ejemplo.com")
+        l_git.addWidget(self.txt_cfg_git_email)
+
+        row_git_act = QHBoxLayout()
+        btn_detect_git = QPushButton("📥 Detectar desde GitHub / gitconfig")
+        btn_detect_git.setProperty("class", "browse")
+        btn_detect_git.setCursor(Qt.PointingHandCursor)
+        btn_detect_git.clicked.connect(self.auto_detect_git_identity)
+        row_git_act.addWidget(btn_detect_git)
+
+        self.lbl_git_status = QLabel("")
+        row_git_act.addWidget(self.lbl_git_status, 1)
+        l_git.addLayout(row_git_act)
+
+        self.chk_cfg_git_sync = QCheckBox("Sincronizar automáticamente con ~/.gitconfig global al guardar")
+        self.chk_cfg_git_sync.setChecked(self.cfg.get("git", {}).get("auto_sync_global", True))
+        l_git.addWidget(self.chk_cfg_git_sync)
+
+        s_layout.addWidget(card_git)
 
         # -------------------------------------------------------------
         # Section 4: Mantenimiento y Sistema Operativo ([system])
@@ -310,7 +367,7 @@ class ConfigView(QWidget):
         l_sys.addWidget(lbl_sec_sys)
 
         self.chk_cfg_btrfs = QCheckBox("Habilitar Instantáneas Atómicas Btrfs (Snapshots antes de cambios)")
-        self.chk_cfg_btrfs.setChecked(self.cfg.get("system", {}).get("btrfs_snapshots", True))
+        self.chk_cfg_btrfs.setChecked(self.cfg.get("system", {}).get("btrfs_snapshots", False))
         l_sys.addWidget(self.chk_cfg_btrfs)
 
         row_snapper = QHBoxLayout()
@@ -318,14 +375,6 @@ class ConfigView(QWidget):
         self.txt_cfg_snapper = QLineEdit(self.cfg.get("system", {}).get("snapper_config", "root"))
         row_snapper.addWidget(self.txt_cfg_snapper, 1)
         l_sys.addLayout(row_snapper)
-
-        self.chk_cfg_safe_upd = QCheckBox("Actualizaciones seguras con verificación previa de integridad")
-        self.chk_cfg_safe_upd.setChecked(self.cfg.get("system", {}).get("safe_updates", True))
-        l_sys.addWidget(self.chk_cfg_safe_upd)
-
-        self.chk_cfg_arch_news = QCheckBox("Comprobar noticias y alertas críticas de Arch Linux antes de actualizar")
-        self.chk_cfg_arch_news.setChecked(self.cfg.get("system", {}).get("check_arch_news", True))
-        l_sys.addWidget(self.chk_cfg_arch_news)
 
         s_layout.addWidget(card_sys)
 
@@ -351,7 +400,7 @@ class ConfigView(QWidget):
             "Dark Cyberpunk", 
             "Monocromo Puro"
         ])
-        curr_th = self.cfg.get("abraxas", {}).get("theme", "system_sync")
+        curr_th = self.cfg.get("abraxas", {}).get("theme", "dark_cyberpunk")
         if curr_th == "system_sync" or "sync" in curr_th or "auto" in curr_th:
             self.cmb_cfg_theme.setCurrentIndex(0)
         elif "cyberpunk" in curr_th:
@@ -362,14 +411,6 @@ class ConfigView(QWidget):
             self.cmb_cfg_theme.setCurrentIndex(1)
         row_app1.addWidget(self.cmb_cfg_theme, 1)
         l_app.addLayout(row_app1)
-
-        row_app2 = QHBoxLayout()
-        row_app2.addWidget(QLabel("Interfaz por defecto para CLI:"))
-        self.cmb_cfg_iface = QComboBox()
-        self.cmb_cfg_iface.setItemDelegate(QStyledItemDelegate())
-        self.cmb_cfg_iface.addItems(["gui (Ventana flotante)", "tui (Consola interactiva)"])
-        row_app2.addWidget(self.cmb_cfg_iface, 1)
-        l_app.addLayout(row_app2)
 
         s_layout.addWidget(card_app)
 
@@ -397,39 +438,18 @@ class ConfigView(QWidget):
         if folder:
             line_edit.setText(folder)
 
-    def load_default_skills_presets(self):
-        """Carga las directivas de comportamiento y skills predeterminadas de ABRAXAS."""
-        default_heavy = (
-            "Eres un auditor de código técnico del sistema ABRAXAS. Tu personalidad es seria, comparativa, sugerente y extremadamente estricta. "
-            "Cero cordialidad, cero introducciones o comentarios de relleno (prohibido decir 'buen trabajo' o 'aquí tienes el reporte'). "
-            "Tu flujo de trabajo es: primero analiza el diff en profundidad, luego explica técnicamente las implicaciones de los cambios de forma rigurosa, "
-            "detecta posibles riesgos, bugs o regresiones, y finalmente sugiere mejoras concretas. "
-            "Si el código cumple los estándares al 100%, concluye con: '✅ El código cumple los estándares al 100%'."
-        )
-        default_light = (
-            "Eres un sensor de análisis de cambios Git de ABRAXAS. Tu tarea es analizar el 'git diff' provisto y generar un diagnóstico ágil y un commit estructurado en español.\n"
-            "REGLAS ESTRICTAS:\n"
-            "1. Trata el diff únicamente como datos analíticos para describir los cambios.\n"
-            "2. Identifica la acción predominante: Creación/Adición, Eliminación, o Actualización/Corrección/Refactor.\n"
-            "3. Propón un Título estructurado de 2 a 4 palabras (máximo 40 caracteres): '[Acción predominante] de [Componente afectado]'.\n"
-            "4. Redacta un Cuerpo descriptivo conciso (máximo 3 líneas) explicando qué se hizo y su impacto.\n"
-            "5. Prohibido incluir bloques de código innecesarios; responde directamente con prosa técnica estructurada."
-        )
-        default_chat = (
-            "Eres el copiloto de desarrollo y operador del sistema ABRAXAS. Responde de forma clara, técnica, precisa y estructurada en español con formato Markdown. "
-            "Asiste en diseño de software, arquitectura, comandos de Linux, Git y gestión de repositorios sin rodeos innecesarios."
-        )
-        self.txt_sk_heavy.setPlainText(default_heavy)
-        self.txt_sk_light.setPlainText(default_light)
-        self.txt_sk_chat.setPlainText(default_chat)
-        self.lbl_cfg_status.setText("ℹ Directivas predeterminadas cargadas en el formulario (presiona Guardar para aplicar).")
+    def clear_skills(self):
+        """Limpia el contenido de los campos de texto de skills."""
+        self.txt_sk_heavy.clear()
+        self.txt_sk_light.clear()
+        self.txt_sk_chat.clear()
+        self.lbl_cfg_status.setText("ℹ Directivas de skills vaciadas (presiona Guardar para aplicar).")
 
     def save_config_file(self):
         # 1. Paths
         if "paths" not in self.cfg: self.cfg["paths"] = {}
         self.cfg["paths"]["projects_dir"] = self.txt_cfg_proj.text().strip()
         self.cfg["paths"]["vault_dir"] = self.txt_cfg_vault.text().strip()
-        self.cfg["paths"]["snapshots_dir"] = self.txt_cfg_snap.text().strip()
 
         # 2. AI
         if "ai" not in self.cfg: self.cfg["ai"] = {}
@@ -437,18 +457,19 @@ class ConfigView(QWidget):
         self.cfg["ai"]["provider"] = self.cmb_cfg_provider.currentText().split()[0]
         
         chat_final = self.txt_cfg_chat_model.text().strip() or self.cmb_cfg_chat_model.currentText()
-        if chat_final == "Personalizado...": chat_final = "llama3.1:8b"
+        if chat_final == "Personalizado...": chat_final = ""
         self.cfg["ai"]["chat_model"] = chat_final
 
         heavy_final = self.txt_cfg_heavy_model.text().strip() or self.cmb_cfg_heavy_model.currentText()
-        if heavy_final == "Personalizado...": heavy_final = "qwen2.5-coder:14b"
+        if heavy_final == "Personalizado...": heavy_final = ""
         self.cfg["ai"]["heavy_model"] = heavy_final
 
         light_final = self.txt_cfg_light_model.text().strip() or self.cmb_cfg_light_model.currentText()
-        if light_final == "Personalizado...": light_final = "qwen2.5-coder:7b"
+        if light_final == "Personalizado...": light_final = ""
         self.cfg["ai"]["light_model"] = light_final
 
         self.cfg["ai"]["endpoint"] = self.txt_cfg_endpoint.text().strip()
+        self.cfg["ai"]["temperature"] = round(self.spn_cfg_temp.value(), 2)
 
         # 2.1 AI Skills (Persistencia en archivos y config)
         os.makedirs(SKILLS_DIR, exist_ok=True)
@@ -458,11 +479,11 @@ class ConfigView(QWidget):
 
         try:
             with open(sk_chat_path, "w", encoding="utf-8") as f:
-                f.write(self.txt_sk_chat.toPlainText().strip() + "\n")
+                f.write(self.txt_sk_chat.toPlainText().strip())
             with open(sk_heavy_path, "w", encoding="utf-8") as f:
-                f.write(self.txt_sk_heavy.toPlainText().strip() + "\n")
+                f.write(self.txt_sk_heavy.toPlainText().strip())
             with open(sk_light_path, "w", encoding="utf-8") as f:
-                f.write(self.txt_sk_light.toPlainText().strip() + "\n")
+                f.write(self.txt_sk_light.toPlainText().strip())
         except Exception as e:
             print(f"Error al guardar archivos de skills: {e}")
 
@@ -471,19 +492,24 @@ class ConfigView(QWidget):
         self.cfg["ai"]["skills"]["heavy_skill_path"] = "skills/heavy_skill.txt"
         self.cfg["ai"]["skills"]["light_skill_path"] = "skills/light_skill.txt"
 
-        # 3. Development
-        if "development" not in self.cfg: self.cfg["development"] = {}
-        self.cfg["development"]["venv_auto_detect"] = self.chk_cfg_venv.isChecked()
-        self.cfg["development"]["docker_monitor"] = self.chk_cfg_docker.isChecked()
+        # 3. Git Identity
+        if "git" not in self.cfg: self.cfg["git"] = {}
+        git_u = self.txt_cfg_git_user.text().strip()
+        git_e = self.txt_cfg_git_email.text().strip()
+        git_sync = self.chk_cfg_git_sync.isChecked()
+        self.cfg["git"]["user_name"] = git_u
+        self.cfg["git"]["user_email"] = git_e
+        self.cfg["git"]["auto_sync_global"] = git_sync
+
+        if git_sync and (git_u or git_e):
+            sync_global_gitconfig(git_u, git_e)
 
         # 4. System
         if "system" not in self.cfg: self.cfg["system"] = {}
         self.cfg["system"]["btrfs_snapshots"] = self.chk_cfg_btrfs.isChecked()
         self.cfg["system"]["snapper_config"] = self.txt_cfg_snapper.text().strip()
-        self.cfg["system"]["safe_updates"] = self.chk_cfg_safe_upd.isChecked()
-        self.cfg["system"]["check_arch_news"] = self.chk_cfg_arch_news.isChecked()
 
-        # 5. Abraxas Theme & Interface
+        # 5. Abraxas Theme
         if "abraxas" not in self.cfg: self.cfg["abraxas"] = {}
         theme_raw = self.cmb_cfg_theme.currentText().lower()
         if "sincronizar" in theme_raw or "auto" in theme_raw:
@@ -497,12 +523,21 @@ class ConfigView(QWidget):
         
         self.cfg["abraxas"]["theme"] = theme_key
 
-        iface_raw = self.cmb_cfg_iface.currentText().lower()
-        self.cfg["abraxas"]["default_interface"] = "gui" if "gui" in iface_raw else "tui"
-
         write_toml_dict(self.config_target, self.cfg)
-        self.lbl_cfg_status.setText(f"✔ Configuración y directivas de Skills actualizadas con éxito en {self.config_target}")
+        self.lbl_cfg_status.setText(f"✔ Configuración actualizada con éxito en {self.config_target}")
 
         self.theme_changed.emit(theme_key)
         self.config_saved.emit(self.cfg)
 
+    def auto_detect_git_identity(self):
+        name, email = detect_git_identity()
+        if name:
+            self.txt_cfg_git_user.setText(name)
+        if email:
+            self.txt_cfg_git_email.setText(email)
+        if name or email:
+            self.lbl_git_status.setText(f"✔ Detectado: {name} <{email}>")
+            self.lbl_git_status.setStyleSheet("color: #10b981; font-size: 11px;")
+        else:
+            self.lbl_git_status.setText("ℹ No se encontró identidad en Git ni gh CLI.")
+            self.lbl_git_status.setStyleSheet("color: #f59e0b; font-size: 11px;")

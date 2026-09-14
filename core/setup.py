@@ -9,8 +9,9 @@ import shutil
 import urllib.request
 import json
 import re
+import subprocess
 
-# TrueColor ANSI Palette (Noctalia YoRHa Theme)
+# TrueColor ANSI Palette (Noctalia Theme)
 C_GOLD = '\x1b[38;2;230;166;200m'
 C_PRIMARY = '\x1b[38;2;230;166;200m'
 C_TEXT = '\x1b[38;2;238;231;240m'
@@ -29,7 +30,60 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE_PATH = os.path.join(ROOT_DIR, "config.default.toml")
 
 def get_target_config_path():
-    return os.path.join(ROOT_DIR, "config.toml")
+    user_cfg = os.path.expanduser("~/.config/abraxas/config.toml")
+    repo_cfg = os.path.join(ROOT_DIR, "config.toml")
+    if os.path.exists(user_cfg):
+        return user_cfg
+    return repo_cfg
+
+def detect_git_identity():
+    """Detecta nombre y correo desde git config o gh CLI."""
+    name = ""
+    email = ""
+    try:
+        name = subprocess.check_output(["git", "config", "--get", "user.name"], text=True, stderr=subprocess.DEVNULL).strip()
+    except Exception:
+        pass
+    try:
+        email = subprocess.check_output(["git", "config", "--get", "user.email"], text=True, stderr=subprocess.DEVNULL).strip()
+    except Exception:
+        pass
+
+    if not name or not email:
+        try:
+            gh_user = subprocess.check_output(["gh", "api", "user"], text=True, stderr=subprocess.DEVNULL)
+            data = json.loads(gh_user)
+            if not name:
+                name = data.get("name") or data.get("login") or ""
+            if not email:
+                email = data.get("email") or ""
+        except Exception:
+            pass
+
+    if not email:
+        try:
+            gh_emails = subprocess.check_output(["gh", "api", "user/emails"], text=True, stderr=subprocess.DEVNULL)
+            emails_data = json.loads(gh_emails)
+            if isinstance(emails_data, list) and len(emails_data) > 0:
+                primary = next((e.get("email") for e in emails_data if e.get("primary")), None)
+                email = primary or emails_data[0].get("email", "")
+        except Exception:
+            pass
+
+    return name, email
+
+def sync_global_gitconfig(name: str, email: str):
+    """Sincroniza el nombre y correo con git config --global."""
+    if name:
+        try:
+            subprocess.run(["git", "config", "--global", "user.name", name], check=False)
+        except Exception:
+            pass
+    if email:
+        try:
+            subprocess.run(["git", "config", "--global", "user.email", email], check=False)
+        except Exception:
+            pass
 
 def read_toml_dict(filepath):
     """Lector TOML nativo simple para el esquema de Abraxas"""
@@ -92,25 +146,25 @@ def write_toml_dict(filepath, cfg):
         "",
         "[abraxas]",
         f'schema_version = "{cfg.get("abraxas", {}).get("schema_version", "0.1.0")}"',
-        f'app_name = "{cfg.get("abraxas", {}).get("app_name", "ABRAXAS")}"',
-        f'theme = "{cfg.get("abraxas", {}).get("theme", "noctalia")}"',
-        f'default_interface = "{cfg.get("abraxas", {}).get("default_interface", "gui")}"',
+        f'theme = "{cfg.get("abraxas", {}).get("theme", "dark_cyberpunk")}"',
         "",
         "[paths]",
-        f'projects_dir = "{cfg.get("paths", {}).get("projects_dir", "~/Proyectos")}"',
-        f'vault_dir = "{cfg.get("paths", {}).get("vault_dir", "~/Vault")}"',
-        f'snapshots_dir = "{cfg.get("paths", {}).get("snapshots_dir", "/.snapshots")}"',
-        f'backup_dir = "{cfg.get("paths", {}).get("backup_dir", "~/Proyectos/ABRAXAS/backups")}"',
+        f'projects_dir = "{cfg.get("paths", {}).get("projects_dir", "")}"',
+        f'vault_dir = "{cfg.get("paths", {}).get("vault_dir", "")}"',
+        "",
+        "[git]",
+        f'user_name = "{cfg.get("git", {}).get("user_name", "")}"',
+        f'user_email = "{cfg.get("git", {}).get("user_email", "")}"',
+        f'auto_sync_global = {str(cfg.get("git", {}).get("auto_sync_global", True)).lower()}',
         "",
         "[ai]",
-        f'enabled = {str(cfg.get("ai", {}).get("enabled", True)).lower()}',
+        f'enabled = {str(cfg.get("ai", {}).get("enabled", False)).lower()}',
         f'provider = "{cfg.get("ai", {}).get("provider", "ollama")}"',
         f'endpoint = "{cfg.get("ai", {}).get("endpoint", "http://localhost:11434")}"',
-        f'chat_model = "{cfg.get("ai", {}).get("chat_model", "llama3.1:8b")}"',
-        f'heavy_model = "{cfg.get("ai", {}).get("heavy_model", cfg.get("ai", {}).get("default_model", "qwen2.5-coder:14b"))}"',
-        f'light_model = "{cfg.get("ai", {}).get("light_model", "qwen2.5-coder:7b")}"',
+        f'chat_model = "{cfg.get("ai", {}).get("chat_model", "")}"',
+        f'heavy_model = "{cfg.get("ai", {}).get("heavy_model", "")}"',
+        f'light_model = "{cfg.get("ai", {}).get("light_model", "")}"',
         f'temperature = {cfg.get("ai", {}).get("temperature", 0.2)}',
-        f'system_telemetry = {str(cfg.get("ai", {}).get("system_telemetry", True)).lower()}',
         "",
         "[ai.skills]",
         f'chat_skill_path = "{cfg.get("ai", {}).get("skills", {}).get("chat_skill_path", "skills/chat_skill.txt")}"',
@@ -118,15 +172,8 @@ def write_toml_dict(filepath, cfg):
         f'light_skill_path = "{cfg.get("ai", {}).get("skills", {}).get("light_skill_path", "skills/light_skill.txt")}"',
         "",
         "[system]",
-        f'btrfs_snapshots = {str(cfg.get("system", {}).get("btrfs_snapshots", True)).lower()}',
+        f'btrfs_snapshots = {str(cfg.get("system", {}).get("btrfs_snapshots", False)).lower()}',
         f'snapper_config = "{cfg.get("system", {}).get("snapper_config", "root")}"',
-        f'safe_updates = {str(cfg.get("system", {}).get("safe_updates", True)).lower()}',
-        f'check_arch_news = {str(cfg.get("system", {}).get("check_arch_news", True)).lower()}',
-        "",
-        "[development]",
-        f'venv_auto_detect = {str(cfg.get("development", {}).get("venv_auto_detect", True)).lower()}',
-        f'docker_monitor = {str(cfg.get("development", {}).get("docker_monitor", True)).lower()}',
-        f'default_python_binary = "{cfg.get("development", {}).get("default_python_binary", "python3")}"',
         ""
     ]
     
@@ -150,36 +197,15 @@ def prompt_input(label, default_val):
         return default_val
 
 def ensure_default_skills():
-    """Genera las directivas de comportamiento genéricas en skills/ si no existen."""
+    """Genera archivos de directivas de comportamiento (vacíos por defecto) en skills/ si no existen."""
     skills_dir = os.path.join(ROOT_DIR, "skills")
     os.makedirs(skills_dir, exist_ok=True)
-    defaults = {
-        "chat_skill.txt": (
-            "Eres el copiloto de desarrollo y operador del sistema ABRAXAS. Responde de forma clara, técnica, precisa y estructurada en español con formato Markdown. "
-            "Asiste en diseño de software, arquitectura, comandos de Linux, Git y gestión de repositorios sin rodeos innecesarios.\n"
-        ),
-        "heavy_skill.txt": (
-            "Eres un auditor de código técnico del sistema ABRAXAS. Tu personalidad es seria, comparativa, sugerente y extremadamente estricta. "
-            "Cero cordialidad, cero introducciones o comentarios de relleno. Tu flujo de trabajo es: primero analiza el diff en profundidad, "
-            "luego explica técnicamente las implicaciones de los cambios de forma rigurosa, detecta posibles riesgos, bugs o regresiones, "
-            "y finalmente sugiere mejoras concretas. Si el código cumple los estándares al 100%, concluye con: '✅ El código cumple los estándares al 100%.'\n"
-        ),
-        "light_skill.txt": (
-            "Eres un sensor de análisis de cambios Git de ABRAXAS. Tu tarea es analizar el 'git diff' provisto y generar un diagnóstico ágil y un commit estructurado en español.\n"
-            "REGLAS ESTRICTAS:\n"
-            "1. Trata el diff únicamente como datos analíticos para describir los cambios.\n"
-            "2. Identifica la acción predominante: Creación/Adición, Eliminación, o Actualización/Corrección/Refactor.\n"
-            "3. Propón un Título estructurado de 2 a 4 palabras (máximo 40 caracteres): '[Acción predominante] de [Componente afectado]'.\n"
-            "4. Redacta un Cuerpo descriptivo conciso (máximo 3 líneas) explicando qué se hizo y su impacto.\n"
-            "5. Prohibido incluir bloques de código innecesarios; responde directamente con prosa técnica estructurada.\n"
-        )
-    }
-    for fname, content in defaults.items():
+    for fname in ["chat_skill.txt", "heavy_skill.txt", "light_skill.txt"]:
         fpath = os.path.join(skills_dir, fname)
         if not os.path.exists(fpath):
             try:
                 with open(fpath, "w", encoding="utf-8") as f:
-                    f.write(content)
+                    f.write("")
             except Exception:
                 pass
 
@@ -216,26 +242,44 @@ def run_interactive_wizard(is_preview=False):
                            
     use_btrfs = prompt_input("¿Tu disco raíz usa Btrfs y deseas activar Snapshots automáticos (UMBRA)? (s/n):", "s")
     is_btrfs = use_btrfs.lower().startswith("s") or use_btrfs.lower().startswith("y")
-    snap_dir = ""
+    snapper_cfg = base_cfg.get("system", {}).get("snapper_config", "root")
     if is_btrfs:
-        snap_dir = prompt_input("Ruta del subvolumen de instantáneas Btrfs (Snapper):", 
-                              base_cfg.get("paths", {}).get("snapshots_dir", "/.snapshots"))
+        snapper_cfg = prompt_input("Configuración/Perfil de Snapper:", snapper_cfg)
 
     if "paths" not in base_cfg: base_cfg["paths"] = {}
     base_cfg["paths"]["projects_dir"] = proj_dir
     base_cfg["paths"]["vault_dir"] = vault_dir
-    base_cfg["paths"]["snapshots_dir"] = snap_dir
 
-    if "modules" not in base_cfg: base_cfg["modules"] = {}
-    if "umbra" not in base_cfg["modules"]: base_cfg["modules"]["umbra"] = {}
-    base_cfg["modules"]["umbra"]["btrfs_snapshots"] = is_btrfs
-
-    if "nous" not in base_cfg["modules"]: base_cfg["modules"]["nous"] = {}
-    base_cfg["modules"]["nous"]["obsidian_sync"] = is_vault
+    if "system" not in base_cfg: base_cfg["system"] = {}
+    base_cfg["system"]["btrfs_snapshots"] = is_btrfs
+    base_cfg["system"]["snapper_config"] = snapper_cfg
     print("")
 
-    # 2. Hardware Profile
-    print(f"  {C_CYAN}⚡ [2/4] PERFIL DE RENDIMIENTO Y HARDWARE:{RESET}")
+    # 2. Identidad Git & GitHub
+    print(f"  {C_CYAN}🐙 [2/5] IDENTIDAD GIT Y CONTROL DE VERSIONES:{RESET}")
+    def_name, def_email = detect_git_identity()
+    if not def_name:
+        def_name = base_cfg.get("git", {}).get("user_name", "")
+    if not def_email:
+        def_email = base_cfg.get("git", {}).get("user_email", "")
+    
+    git_name = prompt_input("Nombre de usuario para commits de Git (user.name):", def_name)
+    git_email = prompt_input("Correo electrónico para commits de Git (user.email):", def_email)
+    
+    sync_choice = prompt_input("¿Sincronizar automáticamente con ~/.gitconfig global? (s/n):", "s")
+    is_sync = sync_choice.lower().startswith("s") or sync_choice.lower().startswith("y")
+    
+    if "git" not in base_cfg: base_cfg["git"] = {}
+    base_cfg["git"]["user_name"] = git_name
+    base_cfg["git"]["user_email"] = git_email
+    base_cfg["git"]["auto_sync_global"] = is_sync
+    
+    if not is_preview and is_sync and (git_name or git_email):
+        sync_global_gitconfig(git_name, git_email)
+    print("")
+
+    # 3. Hardware Profile
+    print(f"  {C_CYAN}⚡ [3/5] PERFIL DE RENDIMIENTO Y HARDWARE:{RESET}")
     print(f"     1) Auto (Recomendado)")
     print(f"     2) Alto Rendimiento (Priorizar GPU / VRAM)")
     print(f"     3) Bajo Consumo (Optimizado para batería)")
@@ -245,16 +289,17 @@ def run_interactive_wizard(is_preview=False):
     base_cfg["hardware"]["profile"] = h_map.get(h_choice, "auto")
     print("")
 
-    # 3. Inteligencia Artificial (Ollama)
-    print(f"  {C_GOLD}🧠 [3/4] CONFIGURACIÓN DE IA LOCAL & MODELOS (OLLAMA):{RESET}")
+    # 4. Inteligencia Artificial (Ollama)
+    print(f"  {C_GOLD}🧠 [4/5] CONFIGURACIÓN DE IA LOCAL & MODELOS (OLLAMA):{RESET}")
     ai_choice = prompt_input("¿Deseas habilitar la asistencia con IA Local? (s/n):", "s")
     is_ai = ai_choice.lower().startswith("s") or ai_choice.lower().startswith("y")
     
-    chat_m = base_cfg.get("ai", {}).get("chat_model", "llama3.1:8b")
-    heavy_m = base_cfg.get("ai", {}).get("heavy_model", "qwen2.5-coder:14b")
-    light_m = base_cfg.get("ai", {}).get("light_model", "qwen2.5-coder:7b")
+    chat_m = base_cfg.get("ai", {}).get("chat_model", "")
+    heavy_m = base_cfg.get("ai", {}).get("heavy_model", "")
+    light_m = base_cfg.get("ai", {}).get("light_model", "")
 
     if is_ai:
+        models = []
         try:
             req = urllib.request.Request("http://localhost:11434/api/tags")
             with urllib.request.urlopen(req, timeout=1.2) as resp:
@@ -263,11 +308,15 @@ def run_interactive_wizard(is_preview=False):
                 if models:
                     print(f"     {C_GREEN}✔ Modelos locales detectados en Ollama:{RESET} {', '.join(models)}")
         except Exception:
-            print(f"     {C_DIM}ℹ Ollama no está activo actualmente. Puedes ingresar los nombres o alias deseados.{RESET}")
+            pass
 
-        chat_m = prompt_input("1. Modelo Conversacional (Chatbox & Obsidian):", chat_m)
-        heavy_m = prompt_input("2. Modelo Pesado Dev (Refactor & Auditoría Profunda):", heavy_m)
-        light_m = prompt_input("3. Modelo Ligero Dev (Git Rápido & IA Commit):", light_m)
+        if not models:
+            print(f"     {C_DIM}ℹ No hay modelos instalados en Ollama actualmente.{RESET}")
+            print(f"     {C_DIM}  (Podrás descargarlos más tarde con: ollama pull <modelo>){RESET}")
+
+        chat_m = prompt_input("1. Modelo Conversacional (Chatbox & Obsidian):", chat_m if chat_m else (models[0] if models else ""))
+        heavy_m = prompt_input("2. Modelo Pesado Dev (Refactor & Auditoría Profunda):", heavy_m if heavy_m else (models[0] if models else ""))
+        light_m = prompt_input("3. Modelo Ligero Dev (Git Rápido & IA Commit):", light_m if light_m else (models[0] if models else ""))
 
     if "ai" not in base_cfg: base_cfg["ai"] = {}
     base_cfg["ai"]["enabled"] = is_ai
@@ -285,8 +334,8 @@ def run_interactive_wizard(is_preview=False):
         print(f"     {C_GREEN}✔ Directivas genéricas de Skills inicializadas en 'skills/'.{RESET}")
     print("")
 
-    # 4. Tema Visual
-    print(f"  {C_ACCENT}🎨 [4/4] TEMA VISUAL:{RESET}")
+    # 5. Tema Visual
+    print(f"  {C_ACCENT}🎨 [5/5] TEMA VISUAL:{RESET}")
     print(f"     1) Noctalia (Sincronizado con el sistema Wayland/Hyprland)")
     print(f"     2) Dark Cyberpunk")
     print(f"     3) Monocromo Minimalista")
@@ -325,8 +374,9 @@ def run_crud_menu():
         print(f"     {C_ACCENT}[2]{RESET} Ver Configuración Actual (config.toml)")
         print(f"     {C_YELLOW}[3]{RESET} Modificar Ruta de Proyectos")
         print(f"     {C_YELLOW}[4]{RESET} Modificar Ruta de Bóveda / Obsidian")
-        print(f"     {C_CYAN}[5]{RESET} Activar / Desactivar IA Local (Ollama)")
-        print(f"     {C_WARN}[6]{RESET} Restablecer a Valores de Fábrica (config.default.toml)")
+        print(f"     {C_CYAN}[5]{RESET} Modificar Identidad Git (user.name / user.email)")
+        print(f"     {C_CYAN}[6]{RESET} Activar / Desactivar IA Local (Ollama)")
+        print(f"     {C_WARN}[7]{RESET} Restablecer a Valores de Fábrica (config.default.toml)")
         print(f"     {C_DIM}[0] Salir{RESET}\n")
         
         choice = input(f"  {C_GOLD}Selecciona una opción >> {RESET}").strip()
@@ -351,13 +401,29 @@ def run_crud_menu():
             print(f"  {C_GREEN}✔ Ruta de bóveda actualizada.{RESET}\n")
         elif choice == "5":
             cfg = read_toml_dict(cfg_target) or read_toml_dict(TEMPLATE_PATH)
+            curr_name = cfg.get("git", {}).get("user_name", "")
+            curr_email = cfg.get("git", {}).get("user_email", "")
+            if not curr_name or not curr_email:
+                dn, de = detect_git_identity()
+                if not curr_name: curr_name = dn
+                if not curr_email: curr_email = de
+            new_name = prompt_input("Nombre de usuario Git (user.name):", curr_name)
+            new_email = prompt_input("Correo electrónico Git (user.email):", curr_email)
+            if "git" not in cfg: cfg["git"] = {}
+            cfg["git"]["user_name"] = new_name
+            cfg["git"]["user_email"] = new_email
+            write_toml_dict(cfg_target, cfg)
+            sync_global_gitconfig(new_name, new_email)
+            print(f"  {C_GREEN}✔ Identidad Git actualizada ({new_name} <{new_email}>).{RESET}\n")
+        elif choice == "6":
+            cfg = read_toml_dict(cfg_target) or read_toml_dict(TEMPLATE_PATH)
             curr = cfg.get("ai", {}).get("enabled", True)
             if "ai" not in cfg: cfg["ai"] = {}
             cfg["ai"]["enabled"] = not curr
             write_toml_dict(cfg_target, cfg)
             state_str = "Habilitada" if cfg["ai"]["enabled"] else "Deshabilitada"
             print(f"  {C_GREEN}✔ IA Local {state_str}.{RESET}\n")
-        elif choice == "6":
+        elif choice == "7":
             confirm = input(f"  {C_WARN}¿Confirmas sobrescribir con la plantilla por defecto? (s/N) >> {RESET}").strip()
             if confirm.lower().startswith("s") or confirm.lower().startswith("y"):
                 shutil.copyfile(TEMPLATE_PATH, cfg_target)

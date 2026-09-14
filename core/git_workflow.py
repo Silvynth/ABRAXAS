@@ -13,7 +13,7 @@ from core.ai import get_configured_model, get_model_skill, generate_with_model
 
 
 def get_project_semver(project_path: str) -> str:
-    """Detecta la versión SemVer del proyecto según los protocolos de Artemis/YoRHa."""
+    """Detecta la versión SemVer del proyecto según los protocolos de ABRAXAS."""
     if not project_path or not os.path.isdir(project_path):
         return "v0.1.0"
 
@@ -226,6 +226,49 @@ Diff:
     }
 
 
+def get_git_identity(project_path: str = None) -> Tuple[str, str]:
+    """Obtiene user.name y user.email buscando en:
+    1. Git config del repositorio o global
+    2. config.toml [git] de Abraxas
+    3. Auto-detección desde GitHub CLI (gh)
+    """
+    name = ""
+    email = ""
+    try:
+        name = subprocess.check_output(["git", "config", "user.name"], cwd=project_path, text=True, stderr=subprocess.DEVNULL).strip()
+    except Exception:
+        pass
+    try:
+        email = subprocess.check_output(["git", "config", "user.email"], cwd=project_path, text=True, stderr=subprocess.DEVNULL).strip()
+    except Exception:
+        pass
+
+    if not name or not email:
+        try:
+            from core.setup import read_toml_dict, get_target_config_path
+            cfg = read_toml_dict(get_target_config_path())
+            git_sec = cfg.get("git", {})
+            if not name:
+                name = git_sec.get("user_name", "")
+            if not email:
+                email = git_sec.get("user_email", "")
+        except Exception:
+            pass
+
+    if not name or not email:
+        try:
+            from core.setup import detect_git_identity
+            det_n, det_e = detect_git_identity()
+            if not name:
+                name = det_n
+            if not email:
+                email = det_e
+        except Exception:
+            pass
+
+    return name, email
+
+
 def execute_commit_and_tag(
     project_path: str,
     commit_header: str,
@@ -243,9 +286,15 @@ def execute_commit_and_tag(
                 f.write(f"{target_ver.lstrip('vV')}\n")
             subprocess.run(["git", "add", ".version"], cwd=project_path, check=False)
 
-        # 2. Ejecutar git commit
+        # 2. Ejecutar git commit con identidad garantizada
         full_title = f"{commit_header} | {title}"
-        cmd_commit = ["git", "commit", "-m", full_title, "-m", body]
+        cmd_commit = ["git"]
+        git_name, git_email = get_git_identity(project_path)
+        if git_name:
+            cmd_commit.extend(["-c", f"user.name={git_name}"])
+        if git_email:
+            cmd_commit.extend(["-c", f"user.email={git_email}"])
+        cmd_commit.extend(["commit", "-m", full_title, "-m", body])
         proc = subprocess.run(cmd_commit, cwd=project_path, capture_output=True, text=True, timeout=20)
         if proc.returncode != 0:
             return False, f"Error al ejecutar git commit:\n{proc.stderr}"

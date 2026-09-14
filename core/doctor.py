@@ -39,10 +39,11 @@ def run_doctor():
     check_item("Entorno Python", py_ok, f"v{py_v} (Compatible)", f"v{py_v} (Se recomienda 3.11+)")
 
     # 2. Config TOML
-    cfg_file = os.path.expanduser("~/.config/abraxas/config.toml")
-    template = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.default.toml")
+    from core.setup import get_target_config_path
+    cfg_file = get_target_config_path()
+    template = os.path.join(ROOT_DIR, "config.default.toml")
     cfg_ok = os.path.exists(cfg_file) or os.path.exists(template)
-    check_item("Archivo de Configuración", cfg_ok, "config.toml detectado", "No se encontró config.toml")
+    check_item("Archivo de Configuración", cfg_ok, f"Detectado ({os.path.basename(cfg_file)})", "No se encontró config.toml")
 
     # 3. Shell Tools
     fzf_ok = shutil.which("fzf") is not None

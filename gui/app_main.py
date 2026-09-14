@@ -1,4 +1,4 @@
-#!/home/silvynth/Proyectos/ABRAXAS/venv/bin/python
+#!/usr/bin/env python3
 # =====================================================================
 #  ❖ ABRAXAS | NEOS CONTROL CENTER (PySide6 Main GUI)
 # =====================================================================

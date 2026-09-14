@@ -21,7 +21,10 @@ from PySide6.QtCore import Qt, QTimer
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT_DIR)
 
-from core.setup import write_toml_dict, read_toml_dict, TEMPLATE_PATH, get_target_config_path
+from core.setup import (
+    write_toml_dict, read_toml_dict, TEMPLATE_PATH, get_target_config_path,
+    detect_git_identity, sync_global_gitconfig
+)
 from core import get_version, __app_name__
 
 # =====================================================================
@@ -718,6 +721,53 @@ class AbraxasInstallerGUI(QWidget):
         b_box.addWidget(self.txt_snap)
         c_layout.addWidget(self.btrfs_container)
 
+        # Divider
+        div3 = QFrame()
+        div3.setFrameShape(QFrame.HLine)
+        div3.setStyleSheet(f"background-color: {BORDER_BASE}; max-height: 1px; border: none;")
+        c_layout.addWidget(div3)
+
+        # 4. Git Identity
+        lbl_git_sec = QLabel("Identidad Git & GitHub ([git]):")
+        lbl_git_sec.setProperty("class", "section_title")
+        c_layout.addWidget(lbl_git_sec)
+
+        lbl_git_sub = QLabel("Firma de autoría para commits y releases en LUMEN (evita bloqueos en Git).")
+        lbl_git_sub.setProperty("class", "label_muted")
+        c_layout.addWidget(lbl_git_sub)
+
+        def_git_user = self.cfg.get("git", {}).get("user_name", "")
+        def_git_email = self.cfg.get("git", {}).get("user_email", "")
+        if not def_git_user or not def_git_email:
+            det_u, det_e = detect_git_identity()
+            if not def_git_user: def_git_user = det_u
+            if not def_git_email: def_git_email = det_e
+
+        row_git = QHBoxLayout()
+        row_git.setSpacing(8)
+
+        v_gu = QVBoxLayout()
+        v_gu.setSpacing(2)
+        v_gu.addWidget(QLabel("Usuario Git (user.name):"))
+        self.txt_git_user = QLineEdit(def_git_user)
+        self.txt_git_user.setPlaceholderText("ej. Tu Nombre o Usuario")
+        v_gu.addWidget(self.txt_git_user)
+        row_git.addLayout(v_gu, 1)
+
+        v_ge = QVBoxLayout()
+        v_ge.setSpacing(2)
+        v_ge.addWidget(QLabel("Correo Git (user.email):"))
+        self.txt_git_email = QLineEdit(def_git_email)
+        self.txt_git_email.setPlaceholderText("ej. correo@ejemplo.com")
+        v_ge.addWidget(self.txt_git_email)
+        row_git.addLayout(v_ge, 1)
+
+        c_layout.addLayout(row_git)
+
+        self.chk_git_sync = QCheckBox("Sincronizar automáticamente con ~/.gitconfig global")
+        self.chk_git_sync.setChecked(self.cfg.get("git", {}).get("auto_sync_global", True))
+        c_layout.addWidget(self.chk_git_sync)
+
         layout.addWidget(card)
         layout.addStretch()
         return page
@@ -778,42 +828,42 @@ class AbraxasInstallerGUI(QWidget):
         h_chat.setSpacing(8)
         self.cmb_chat_model = QComboBox()
         self.cmb_chat_model.setItemDelegate(QStyledItemDelegate(self.cmb_chat_model))
-        self.txt_chat_model = QLineEdit(self.cfg.get("ai", {}).get("chat_model", "llama3.1:8b"))
-        self.txt_chat_model.setPlaceholderText("Nombre / alias (ej: llama3.1:8b o Hestia)")
+        self.txt_chat_model = QLineEdit(self.cfg.get("ai", {}).get("chat_model", ""))
+        self.txt_chat_model.setPlaceholderText("Sin modelo (descarga con 'ollama pull <modelo>')")
         h_chat.addWidget(self.cmb_chat_model, 3)
         h_chat.addWidget(self.txt_chat_model, 2)
         row_chat.addWidget(lbl_chat)
         row_chat.addLayout(h_chat)
         l_aic.addLayout(row_chat)
 
-        # 2. Modelo Pesado Dev (Refactor & Auditoría Profunda - HENDRIX)
+        # 2. Modelo Dev Pesado (Refactor & Auditoría Profunda)
         row_heavy = QVBoxLayout()
         row_heavy.setSpacing(4)
-        lbl_heavy = QLabel("2. Modelo Pesado Dev (Refactor & Auditoría Profunda - HENDRIX):")
+        lbl_heavy = QLabel("2. Modelo Dev Pesado (Refactor & Auditoría Profunda):")
         lbl_heavy.setProperty("class", "label_muted")
         h_heavy = QHBoxLayout()
         h_heavy.setSpacing(8)
         self.cmb_heavy_model = QComboBox()
         self.cmb_heavy_model.setItemDelegate(QStyledItemDelegate(self.cmb_heavy_model))
-        self.txt_heavy_model = QLineEdit(self.cfg.get("ai", {}).get("heavy_model", "qwen2.5-coder:14b"))
-        self.txt_heavy_model.setPlaceholderText("Nombre / alias (ej: qwen2.5-coder:14b o Hendrix)")
+        self.txt_heavy_model = QLineEdit(self.cfg.get("ai", {}).get("heavy_model", ""))
+        self.txt_heavy_model.setPlaceholderText("Sin modelo (descarga con 'ollama pull <modelo>')")
         h_heavy.addWidget(self.cmb_heavy_model, 3)
         h_heavy.addWidget(self.txt_heavy_model, 2)
         row_heavy.addWidget(lbl_heavy)
         row_heavy.addLayout(h_heavy)
         l_aic.addLayout(row_heavy)
 
-        # 3. Modelo Ligero Dev (Git Rápido & IA Commit - HEX)
+        # 3. Modelo Dev Ligero (Git Rápido & IA Commit)
         row_light = QVBoxLayout()
         row_light.setSpacing(4)
-        lbl_light = QLabel("3. Modelo Ligero Dev (Git Rápido & IA Commit - HEX):")
+        lbl_light = QLabel("3. Modelo Dev Ligero (Git Rápido & IA Commit):")
         lbl_light.setProperty("class", "label_muted")
         h_light = QHBoxLayout()
         h_light.setSpacing(8)
         self.cmb_light_model = QComboBox()
         self.cmb_light_model.setItemDelegate(QStyledItemDelegate(self.cmb_light_model))
-        self.txt_light_model = QLineEdit(self.cfg.get("ai", {}).get("light_model", "qwen2.5-coder:7b"))
-        self.txt_light_model.setPlaceholderText("Nombre / alias (ej: qwen2.5-coder:7b o Hex)")
+        self.txt_light_model = QLineEdit(self.cfg.get("ai", {}).get("light_model", ""))
+        self.txt_light_model.setPlaceholderText("Sin modelo (descarga con 'ollama pull <modelo>')")
         h_light.addWidget(self.cmb_light_model, 3)
         h_light.addWidget(self.txt_light_model, 2)
         row_light.addWidget(lbl_light)
@@ -878,8 +928,8 @@ class AbraxasInstallerGUI(QWidget):
         c_sk.addWidget(lbl_sk_c)
         c_sk.addWidget(self.txt_sk_chat)
 
-        # 2. Skill Modelo Pesado (Auditoría Profunda)
-        lbl_sk_h = QLabel("Skill Modelo Pesado (Auditoría Profunda & Refactor - HENDRIX):")
+        # 2. Skill Modelo Dev Pesado (Auditoría Profunda & Refactor)
+        lbl_sk_h = QLabel("Skill Modelo Dev Pesado (Auditoría Profunda & Refactor):")
         lbl_sk_h.setStyleSheet(f"font-size: 11.5px; font-weight: 600; color: {TEXT_PRIMARY};")
         self.txt_sk_heavy = QTextEdit()
         self.txt_sk_heavy.setFixedHeight(75)
@@ -887,8 +937,8 @@ class AbraxasInstallerGUI(QWidget):
         c_sk.addWidget(lbl_sk_h)
         c_sk.addWidget(self.txt_sk_heavy)
 
-        # 3. Skill Modelo Ligero (Git Rápido & IA Commit)
-        lbl_sk_l = QLabel("Skill Modelo Ligero (Git Rápido & IA Commit - HEX):")
+        # 3. Skill Modelo Dev Ligero (Git Rápido & IA Commit)
+        lbl_sk_l = QLabel("Skill Modelo Dev Ligero (Git Rápido & IA Commit):")
         lbl_sk_l.setStyleSheet(f"font-size: 11.5px; font-weight: 600; color: {TEXT_PRIMARY};")
         self.txt_sk_light = QTextEdit()
         self.txt_sk_light.setFixedHeight(75)
@@ -987,18 +1037,13 @@ class AbraxasInstallerGUI(QWidget):
     def load_generic_skills(self):
         """Carga el texto genérico predeterminado disponible para personalizar las directivas."""
         chat_path = os.path.join(ROOT_DIR, "skills", "chat_skill.txt")
+        chat_path = os.path.join(ROOT_DIR, "skills", "chat_skill.txt")
         if os.path.exists(chat_path):
             try:
                 with open(chat_path, "r", encoding="utf-8") as f:
                     self.txt_sk_chat.setPlainText(f.read().strip())
             except Exception:
                 pass
-        else:
-            self.txt_sk_chat.setPlainText(
-                "Eres el copiloto de desarrollo y operador del sistema ABRAXAS. "
-                "Responde de forma clara, técnica, precisa y estructurada en español con formato Markdown. "
-                "Asiste en diseño de software, arquitectura, comandos de Linux, Git y gestión de repositorios sin rodeos innecesarios."
-            )
 
         heavy_path = os.path.join(ROOT_DIR, "skills", "heavy_skill.txt")
         if os.path.exists(heavy_path):
@@ -1007,15 +1052,6 @@ class AbraxasInstallerGUI(QWidget):
                     self.txt_sk_heavy.setPlainText(f.read().strip())
             except Exception:
                 pass
-        else:
-            self.txt_sk_heavy.setPlainText(
-                "Eres un auditor de código técnico del sistema ABRAXAS. "
-                "Tu personalidad es seria, comparativa, sugerente y extremadamente estricta. "
-                "Cero cordialidad, cero introducciones o comentarios de relleno. Tu flujo de trabajo es: "
-                "primero analiza el diff en profundidad, luego explica técnicamente las implicaciones de los cambios de forma rigurosa, "
-                "detecta posibles riesgos, bugs o regresiones, y finalmente sugiere mejoras concretas. "
-                "Si el código cumple los estándares al 100%, concluye con: '✅ El código cumple los estándares al 100%'."
-            )
 
         light_path = os.path.join(ROOT_DIR, "skills", "light_skill.txt")
         if os.path.exists(light_path):
@@ -1024,41 +1060,12 @@ class AbraxasInstallerGUI(QWidget):
                     self.txt_sk_light.setPlainText(f.read().strip())
             except Exception:
                 pass
-        else:
-            self.txt_sk_light.setPlainText(
-                "Eres un sensor de análisis de cambios Git de ABRAXAS. Tu tarea es analizar el 'git diff' provisto y generar un diagnóstico ágil y un commit estructurado en español.\n"
-                "REGLAS ESTRICTAS:\n"
-                "1. Trata el diff únicamente como datos analíticos para describir los cambios.\n"
-                "2. Identifica la acción predominante: Creación/Adición, Eliminación, o Actualización/Corrección/Refactor.\n"
-                "3. Propón un Título estructurado de 2 a 4 palabras (máximo 40 caracteres): '[Acción predominante] de [Componente afectado]'.\n"
-                "4. Redacta un Cuerpo descriptivo conciso (máximo 3 líneas) explicando qué se hizo y su impacto.\n"
-                "5. Prohibido incluir bloques de código innecesarios; responde directamente con prosa técnica estructurada."
-            )
 
     def restore_default_skills(self):
-        """Restaura las directivas genéricas predeterminadas del sistema ABRAXAS."""
-        self.txt_sk_chat.setPlainText(
-            "Eres el copiloto de desarrollo y operador del sistema ABRAXAS. "
-            "Responde de forma clara, técnica, precisa y estructurada en español con formato Markdown. "
-            "Asiste en diseño de software, arquitectura, comandos de Linux, Git y gestión de repositorios sin rodeos innecesarios."
-        )
-        self.txt_sk_heavy.setPlainText(
-            "Eres un auditor de código técnico del sistema ABRAXAS. "
-            "Tu personalidad es seria, comparativa, sugerente y extremadamente estricta. "
-            "Cero cordialidad, cero introducciones o comentarios de relleno. Tu flujo de trabajo es: "
-            "primero analiza el diff en profundidad, luego explica técnicamente las implicaciones de los cambios de forma rigurosa, "
-            "detecta posibles riesgos, bugs o regresiones, y finalmente sugiere mejoras concretas. "
-            "Si el código cumple los estándares al 100%, concluye con: '✅ El código cumple los estándares al 100%'."
-        )
-        self.txt_sk_light.setPlainText(
-            "Eres un sensor de análisis de cambios Git de ABRAXAS. Tu tarea es analizar el 'git diff' provisto y generar un diagnóstico ágil y un commit estructurado en español.\n"
-            "REGLAS ESTRICTAS:\n"
-            "1. Trata el diff únicamente como datos analíticos para describir los cambios.\n"
-            "2. Identifica la acción predominante: Creación/Adición, Eliminación, o Actualización/Corrección/Refactor.\n"
-            "3. Propón un Título estructurado de 2 a 4 palabras (máximo 40 caracteres): '[Acción predominante] de [Componente afectado]'.\n"
-            "4. Redacta un Cuerpo descriptivo conciso (máximo 3 líneas) explicando qué se hizo y su impacto.\n"
-            "5. Prohibido incluir bloques de código innecesarios; responde directamente con prosa técnica estructurada."
-        )
+        """Limpia las directivas de skills."""
+        self.txt_sk_chat.clear()
+        self.txt_sk_heavy.clear()
+        self.txt_sk_light.clear()
 
     def scan_ollama_models(self):
         models_info = []
@@ -1096,47 +1103,46 @@ class AbraxasInstallerGUI(QWidget):
             cmb.clear()
 
         if models_info:
-            self.lbl_ai_status.setText("● Ollama Detectado")
+            self.lbl_ai_status.setText(f"● Ollama Activo ({len(models_info)} modelo{'s' if len(models_info) > 1 else ''})")
             self.lbl_ai_status.setStyleSheet(f"color: {SUCCESS}; font-size: 11px; font-weight: 600;")
             for name, size in models_info:
                 display_label = f"⚡  {name} ({size})" if size else f"⚡  {name}"
                 for cmb in combos:
                     cmb.addItem(display_label, userData=name)
+
+            # Seleccionar automáticamente solo si existen modelos instalados
+            chat_val = self.txt_chat_model.text().strip()
+            heavy_val = self.txt_heavy_model.text().strip()
+            light_val = self.txt_light_model.text().strip()
+
+            def select_best(cmb, target_str):
+                for i in range(cmb.count()):
+                    d = cmb.itemData(i) or ""
+                    if target_str and target_str.lower() in d.lower():
+                        cmb.setCurrentIndex(i)
+                        return d
+                if cmb.count() > 0:
+                    return cmb.itemData(0) or cmb.currentText()
+                return target_str
+
+            c_found = select_best(self.cmb_chat_model, chat_val)
+            if not chat_val and c_found: self.txt_chat_model.setText(c_found)
+
+            h_found = select_best(self.cmb_heavy_model, heavy_val)
+            if not heavy_val and h_found: self.txt_heavy_model.setText(h_found)
+
+            l_found = select_best(self.cmb_light_model, light_val)
+            if not light_val and l_found: self.txt_light_model.setText(l_found)
         else:
-            self.lbl_ai_status.setText("○ Ollama No Detectado")
+            self.lbl_ai_status.setText("○ Sin modelos instalados en Ollama")
             self.lbl_ai_status.setStyleSheet(f"color: {WARNING}; font-size: 11px;")
-            fallback_models = [
-                ("llama3.1:8b", "Meta Llama 8B"),
-                ("qwen2.5-coder:14b", "Recomendado 14B"),
-                ("qwen2.5-coder:7b", "Ligero 7B")
-            ]
-            for name, note in fallback_models:
-                for cmb in combos:
-                    cmb.addItem(f"📦  {name}  [{note}]", userData=name)
+            for cmb in combos:
+                cmb.addItem("⚠️ Ningún modelo instalado", userData="")
 
-        # Seleccionar automáticamente según configuración o presets óptimos
-        chat_val = self.txt_chat_model.text().strip()
-        heavy_val = self.txt_heavy_model.text().strip()
-        light_val = self.txt_light_model.text().strip()
-
-        def select_best(cmb, target_str):
-            for i in range(cmb.count()):
-                d = cmb.itemData(i) or ""
-                if target_str.lower() in d.lower():
-                    cmb.setCurrentIndex(i)
-                    return d
-            if cmb.count() > 0:
-                return cmb.itemData(0) or cmb.currentText()
-            return target_str
-
-        c_found = select_best(self.cmb_chat_model, chat_val if chat_val else "llama")
-        if not chat_val and c_found: self.txt_chat_model.setText(c_found)
-
-        h_found = select_best(self.cmb_heavy_model, heavy_val if heavy_val else "14b")
-        if not heavy_val and h_found: self.txt_heavy_model.setText(h_found)
-
-        l_found = select_best(self.cmb_light_model, light_val if light_val else "7b")
-        if not light_val and l_found: self.txt_light_model.setText(l_found)
+            # No autocompletar modelos ficticios si no hay ninguno instalado
+            self.txt_chat_model.clear()
+            self.txt_heavy_model.clear()
+            self.txt_light_model.clear()
 
         for cmb in combos:
             cmb.blockSignals(False)
@@ -1186,24 +1192,23 @@ class AbraxasInstallerGUI(QWidget):
 
     def perform_installation(self):
         # 1. Rutas
+        # 1. Rutas
         if "paths" not in self.cfg: self.cfg["paths"] = {}
         self.cfg["paths"]["projects_dir"] = self.txt_projects.text().strip()
         self.cfg["paths"]["vault_dir"] = self.txt_vault.text().strip() if self.chk_vault_enable.isChecked() else ""
-        self.cfg["paths"]["snapshots_dir"] = self.txt_snap.text().strip() if self.chk_btrfs_enable.isChecked() else ""
 
-        # 2. Hardware
-        if "hardware" not in self.cfg: self.cfg["hardware"] = {}
-        self.cfg["hardware"]["profile"] = "auto"
+        # 1.5. Git Identity
+        if "git" not in self.cfg: self.cfg["git"] = {}
+        self.cfg["git"]["user_name"] = self.txt_git_user.text().strip()
+        self.cfg["git"]["user_email"] = self.txt_git_email.text().strip()
+        self.cfg["git"]["auto_sync_global"] = self.chk_git_sync.isChecked()
 
-        # 3. Módulos
-        if "modules" not in self.cfg: self.cfg["modules"] = {}
-        if "umbra" not in self.cfg["modules"]: self.cfg["modules"]["umbra"] = {}
-        self.cfg["modules"]["umbra"]["btrfs_snapshots"] = self.chk_btrfs_enable.isChecked()
+        # 2. Sistema
+        if "system" not in self.cfg: self.cfg["system"] = {}
+        self.cfg["system"]["btrfs_snapshots"] = self.chk_btrfs_enable.isChecked()
+        self.cfg["system"]["snapper_config"] = "root"
 
-        if "nous" not in self.cfg["modules"]: self.cfg["modules"]["nous"] = {}
-        self.cfg["modules"]["nous"]["obsidian_sync"] = self.chk_vault_enable.isChecked()
-
-        # 4. IA (3 Modelos & Skills)
+        # 3. IA (3 Modelos & Skills)
         if "ai" not in self.cfg: self.cfg["ai"] = {}
         self.cfg["ai"]["enabled"] = self.chk_ai.isChecked()
         
@@ -1220,7 +1225,7 @@ class AbraxasInstallerGUI(QWidget):
         self.cfg["ai"]["skills"]["heavy_skill_path"] = "skills/heavy_skill.txt"
         self.cfg["ai"]["skills"]["light_skill_path"] = "skills/light_skill.txt"
 
-        # 5. Tema
+        # 4. Tema
         if "abraxas" not in self.cfg: self.cfg["abraxas"] = {}
         theme_raw = self.cmb_theme.currentText().lower()
         if "cyberpunk" in theme_raw: self.cfg["abraxas"]["theme"] = "dark_cyberpunk"
@@ -1233,31 +1238,60 @@ class AbraxasInstallerGUI(QWidget):
     def finish_installation(self):
         if not self.is_preview:
             write_toml_dict(self.config_target, self.cfg)
+
+            # Sincronizar identidad Git global si corresponde
+            if self.cfg.get("git", {}).get("auto_sync_global", True):
+                g_u = self.cfg.get("git", {}).get("user_name", "")
+                g_e = self.cfg.get("git", {}).get("user_email", "")
+                if g_u or g_e:
+                    sync_global_gitconfig(g_u, g_e)
             
-            # Guardar archivos de Skills personalizados o genéricos en el disco
+            # Guardar archivos de Skills personalizados o vacíos en el disco
             skills_dir = os.path.join(ROOT_DIR, "skills")
             os.makedirs(skills_dir, exist_ok=True)
             try:
                 with open(os.path.join(skills_dir, "chat_skill.txt"), "w", encoding="utf-8") as f:
-                    f.write(self.txt_sk_chat.toPlainText().strip() + "\n")
+                    f.write(self.txt_sk_chat.toPlainText().strip())
                 with open(os.path.join(skills_dir, "heavy_skill.txt"), "w", encoding="utf-8") as f:
-                    f.write(self.txt_sk_heavy.toPlainText().strip() + "\n")
+                    f.write(self.txt_sk_heavy.toPlainText().strip())
                 with open(os.path.join(skills_dir, "light_skill.txt"), "w", encoding="utf-8") as f:
-                    f.write(self.txt_sk_light.toPlainText().strip() + "\n")
+                    f.write(self.txt_sk_light.toPlainText().strip())
             except Exception as e:
                 print(f"Error escribiendo directivas de skills: {e}")
+
+            # Registrar lanzador de escritorio y comando abx
+            launcher_sh = os.path.join(ROOT_DIR, "scripts", "install_desktop_launcher.sh")
+            if os.path.exists(launcher_sh):
+                try:
+                    subprocess.run(["bash", launcher_sh], check=False, capture_output=True)
+                except Exception as e:
+                    print(f"Error registrando lanzador de escritorio: {e}")
+
+            # Crear directorios de proyectos y bóveda de Obsidian si corresponde
+            try:
+                p_dir = os.path.expanduser(self.cfg.get("paths", {}).get("projects_dir", "~/Proyectos"))
+                if p_dir:
+                    os.makedirs(p_dir, exist_ok=True)
+                if self.chk_vault_enable.isChecked():
+                    v_dir = os.path.expanduser(self.cfg.get("paths", {}).get("vault_dir", ""))
+                    if v_dir:
+                        os.makedirs(os.path.join(v_dir, "00_Inbox"), exist_ok=True)
+                        os.makedirs(os.path.join(v_dir, "01_Proyectos"), exist_ok=True)
+                        os.makedirs(os.path.join(v_dir, "02_Memoria"), exist_ok=True)
+            except Exception as e:
+                print(f"Error inicializando directorios de trabajo: {e}")
             
         self.progress_bar.setValue(100)
         
-        btrfs_status = f"<font color='{SUCCESS}'>Activo ({self.cfg['paths']['snapshots_dir']})</font>" if self.cfg["modules"]["umbra"]["btrfs_snapshots"] else f"<font color='{TEXT_MUTED}'>Deshabilitado</font>"
+        btrfs_status = f"<font color='{SUCCESS}'>Activo</font>" if self.cfg.get("system", {}).get("btrfs_snapshots", False) else f"<font color='{TEXT_MUTED}'>Deshabilitado</font>"
         ai_status = (
             f"<font color='{SUCCESS}'>Habilitada</font><br/>"
             f"&nbsp;&nbsp;• <b>Chat:</b> {self.cfg['ai']['chat_model']}<br/>"
             f"&nbsp;&nbsp;• <b>Pesado (Audit):</b> {self.cfg['ai']['heavy_model']}<br/>"
             f"&nbsp;&nbsp;• <b>Ligero (Commit):</b> {self.cfg['ai']['light_model']}<br/>"
-            f"&nbsp;&nbsp;• <b>Skills:</b> Directivas inicializadas en <code>skills/</code>"
+            f"&nbsp;&nbsp;• <b>Skills:</b> Directivas configuradas en <code>skills/</code>"
         ) if self.cfg["ai"]["enabled"] else f"<font color='{TEXT_MUTED}'>Deshabilitada</font>"
-        vault_status = f"{self.cfg['paths']['vault_dir']}" if self.cfg["modules"]["nous"]["obsidian_sync"] else f"<font color='{TEXT_MUTED}'>Omitido</font>"
+        vault_status = f"{self.cfg['paths']['vault_dir']}" if self.chk_vault_enable.isChecked() else f"<font color='{TEXT_MUTED}'>Omitido</font>"
 
         if self.is_preview:
             self.lbl_finish_status.setText("Simulación Completada con Éxito")

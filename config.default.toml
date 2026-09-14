@@ -1,0 +1,34 @@
+# =====================================================================
+#  ❖ ABRAXAS | CONFIGURACIÓN PREDETERMINADA DEL SISTEMA (PLANTILLA)
+# =====================================================================
+
+[abraxas]
+schema_version = "0.1.0"
+theme = "dark_cyberpunk"
+
+[paths]
+projects_dir = ""
+vault_dir = ""
+
+[git]
+user_name = ""
+user_email = ""
+auto_sync_global = true
+
+[ai]
+enabled = false
+provider = "ollama"
+endpoint = "http://localhost:11434"
+chat_model = ""
+heavy_model = ""
+light_model = ""
+temperature = 0.2
+
+[ai.skills]
+chat_skill_path = "skills/chat_skill.txt"
+heavy_skill_path = "skills/heavy_skill.txt"
+light_skill_path = "skills/light_skill.txt"
+
+[system]
+btrfs_snapshots = false
+snapper_config = "root"

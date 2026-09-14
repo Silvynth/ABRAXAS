@@ -3,11 +3,18 @@
 #  ❖ ABRAXAS | DESKTOP LAUNCHER WRAPPER
 # =====================================================================
 
-PROJECT_DIR="/home/silvynth/Proyectos/ABRAXAS"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_DIR="$DIR"
 LOG_FILE="/tmp/abraxas.log"
 
 cd "$PROJECT_DIR" || exit 1
 export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
 
+if [ -f "$PROJECT_DIR/venv/bin/python" ]; then
+    PYTHON_BIN="$PROJECT_DIR/venv/bin/python"
+else
+    PYTHON_BIN="$(which python3)"
+fi
+
 # Ejecutar y registrar logs de depuración
-exec "$PROJECT_DIR/venv/bin/python" "$PROJECT_DIR/gui/app_main.py" "$@" > "$LOG_FILE" 2>&1
+exec "$PYTHON_BIN" "$PROJECT_DIR/gui/app_main.py" "$@" > "$LOG_FILE" 2>&1

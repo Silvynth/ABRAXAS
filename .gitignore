@@ -10,7 +10,6 @@ keys.toml
 *.state
 .test/
 .sandbox/
-config.default.toml
 docs/
 
 # Cachés y Archivos de Sesión

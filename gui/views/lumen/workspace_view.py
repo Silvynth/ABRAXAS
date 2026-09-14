@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QFrame, QScrollArea, QGridLayout,
     QTextEdit, QApplication, QStackedWidget, QSizePolicy,
-    QProgressBar
+    QProgressBar, QLineEdit, QComboBox, QStyledItemDelegate
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread
 
@@ -18,13 +18,13 @@ from core import get_version
 from core.lumen_sync import get_full_project_sync
 from core.ai import get_configured_model, audit_git_diff
 from core.git_workflow import (
-    get_project_semver, bump_semver, 
+    get_project_semver, bump_semver, get_next_commit_seq,
     generate_ia_commit_proposal, execute_commit_and_tag
 )
 
 
 class GitPushThread(QThread):
-    """Hilo para ejecutar git push origin <branch> sin congelar la GUI."""
+    """Hilo para ejecutar git push hacia el remoto sin congelar la GUI."""
     finished_push = Signal(bool, str, str)
 
     def __init__(self, project_path: str, follow_tags: bool = False):
@@ -34,29 +34,73 @@ class GitPushThread(QThread):
 
     def run(self):
         try:
+            # 1. Detectar rama actual
             b_proc = subprocess.run(
                 ["git", "branch", "--show-current"],
                 cwd=self.project_path, capture_output=True, text=True, timeout=6
             )
-            branch = b_proc.stdout.strip() or "main"
+            branch = b_proc.stdout.strip()
+            if not branch:
+                r_proc = subprocess.run(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"], 
+                    cwd=self.project_path, capture_output=True, text=True, timeout=4
+                )
+                branch = r_proc.stdout.strip() or "main"
 
-            cmd = ["git", "push", "--follow-tags", "origin", branch] if self.follow_tags else ["git", "push", "origin", branch]
+            # 2. Detectar remotos configurados
+            rem_proc = subprocess.run(
+                ["git", "remote"],
+                cwd=self.project_path, capture_output=True, text=True, timeout=5
+            )
+            remotes = rem_proc.stdout.strip().splitlines() if rem_proc.returncode == 0 else []
+            if not remotes:
+                self.finished_push.emit(False, branch, "No hay ningún repositorio remoto configurado en este proyecto ('git remote' vacío). Agrega uno con: git remote add origin <url>")
+                return
+
+            remote_target = "origin" if "origin" in remotes else remotes[0]
+
+            # 3. Comprobar si hay commits locales pendientes de envío
+            upstream_ref = f"{remote_target}/{branch}"
+            pending_commits = 0
+            rev_proc = subprocess.run(
+                ["git", "rev-list", "--count", f"{upstream_ref}..HEAD"],
+                cwd=self.project_path, capture_output=True, text=True, timeout=5
+            )
+            if rev_proc.returncode == 0 and rev_proc.stdout.strip().isdigit():
+                pending_commits = int(rev_proc.stdout.strip())
+
+            # 4. Construir comando git push con -u para tracking
+            cmd = ["git", "push"]
+            if self.follow_tags:
+                cmd.append("--follow-tags")
+            cmd.extend(["-u", remote_target, branch])
+
             p_proc = subprocess.run(
                 cmd,
-                cwd=self.project_path, capture_output=True, text=True, timeout=45
+                cwd=self.project_path, capture_output=True, text=True, timeout=60
             )
+
+            combined = (p_proc.stdout.strip() + "\n" + p_proc.stderr.strip()).strip()
+
             if p_proc.returncode == 0:
-                out = p_proc.stdout.strip() or p_proc.stderr.strip() or "Todo sincronizado con el repositorio remoto."
-                self.finished_push.emit(True, branch, out)
+                if "Everything up-to-date" in combined or "Todo está actualizado" in combined:
+                    msg = "Todo está actualizado. No había nuevos commits pendientes para enviar."
+                elif pending_commits > 0:
+                    msg = f"{pending_commits} commit(s) enviados exitosamente a {remote_target}/{branch}."
+                else:
+                    msg = combined or "Commits y etiquetas sincronizados exitosamente."
+                self.finished_push.emit(True, branch, msg)
             else:
                 if self.follow_tags:
-                    p1 = subprocess.run(["git", "push", "origin", branch], cwd=self.project_path, capture_output=True, text=True, timeout=45)
-                    p2 = subprocess.run(["git", "push", "--tags"], cwd=self.project_path, capture_output=True, text=True, timeout=45)
+                    # Intento secuencial de rescate
+                    p1 = subprocess.run(["git", "push", "-u", remote_target, branch], cwd=self.project_path, capture_output=True, text=True, timeout=60)
+                    p2 = subprocess.run(["git", "push", "--tags", remote_target], cwd=self.project_path, capture_output=True, text=True, timeout=60)
                     if p1.returncode == 0:
-                        self.finished_push.emit(True, branch, f"{p1.stdout}\n{p2.stdout}".strip())
+                        c2 = (p1.stdout.strip() + "\n" + p2.stdout.strip() + "\n" + p1.stderr.strip()).strip()
+                        self.finished_push.emit(True, branch, c2 or "Sincronizado con éxito.")
                         return
-                err = p_proc.stderr.strip() or p_proc.stdout.strip() or "Error desconocido durante git push."
-                self.finished_push.emit(False, branch, err)
+                err_msg = combined or "Error desconocido durante git push."
+                self.finished_push.emit(False, branch, err_msg)
         except Exception as e:
             self.finished_push.emit(False, "unknown", str(e))
 
@@ -912,7 +956,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         # Botón 4: Commit Manual
         btn_commit_man = LumenCyberActionButton("✍️", "Commit Manual", "Redactar mensaje personalizado y registrar commit en el repositorio", accent_color="#fbbf24")
-        btn_commit_man.clicked.connect(lambda: self.handle_action_click("Commit Manual"))
+        btn_commit_man.clicked.connect(self.start_manual_commit_workflow)
         w_lay.addWidget(btn_commit_man)
 
         # Botón 5: Push
@@ -1366,6 +1410,130 @@ class LumenProjectWorkspaceView(QWidget):
         pp_lay.addStretch()
         self.sector1_sub_stack.addWidget(page_post_push)
 
+        # =============================================================
+        # SUB-PÁGINA 7: REDACCIÓN DE COMMIT MANUAL
+        # =============================================================
+        page_manual = QWidget()
+        man_lay = QVBoxLayout(page_manual)
+        man_lay.setContentsMargins(0, 0, 0, 0)
+        man_lay.setSpacing(10)
+
+        head_man = QHBoxLayout()
+        head_man.setSpacing(12)
+
+        lbl_man_head = QLabel("❖ REDACCIÓN DE COMMIT MANUAL ❖")
+        lbl_man_head.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #fbbf24; letter-spacing: 0.5px;")
+        head_man.addWidget(lbl_man_head)
+        head_man.addStretch()
+
+        lbl_man_pill = QLabel("[COMMIT MANUAL]")
+        lbl_man_pill.setFixedHeight(24)
+        lbl_man_pill.setAlignment(Qt.AlignCenter)
+        lbl_man_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #fbbf24; background-color: rgba(251, 191, 36, 0.12); border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 4px; padding: 2px 8px;")
+        head_man.addWidget(lbl_man_pill)
+        man_lay.addLayout(head_man)
+
+        card_man = QFrame()
+        card_man.setProperty("class", "surface")
+        card_man.setStyleSheet("""
+            QFrame.surface {
+                background-color: rgba(15, 17, 24, 0.85);
+                border: 1px solid rgba(99, 102, 241, 0.30);
+                border-left: 4px solid #fbbf24;
+                border-radius: 8px;
+                padding: 10px 14px;
+            }
+        """)
+        cm_lay = QVBoxLayout(card_man)
+        cm_lay.setSpacing(8)
+
+        # 1. Título del Commit
+        lbl_t_title = QLabel("Título o mensaje principal del commit (*):")
+        lbl_t_title.setStyleSheet("font-size: 11.5px; font-weight: 700; color: #f3f4f6;")
+        cm_lay.addWidget(lbl_t_title)
+
+        self.txt_manual_title = QLineEdit()
+        self.txt_manual_title.setPlaceholderText("ej. Corrección en rutas del sistema o actualización de módulos...")
+        self.txt_manual_title.setStyleSheet("""
+            QLineEdit {
+                background-color: #0f1015;
+                border: 1px solid #22242e;
+                border-radius: 6px;
+                color: #f3f4f6;
+                padding: 6px 10px;
+                font-size: 12.5px;
+            }
+            QLineEdit:focus {
+                border-color: #fbbf24;
+            }
+        """)
+        cm_lay.addWidget(self.txt_manual_title)
+
+        # 2. Descripción / Cuerpo (Opcional)
+        lbl_t_body = QLabel("Cuerpo o descripción detallada (opcional):")
+        lbl_t_body.setStyleSheet("font-size: 11.5px; font-weight: 700; color: #9ca3af;")
+        cm_lay.addWidget(lbl_t_body)
+
+        self.txt_manual_body = QTextEdit()
+        self.txt_manual_body.setFixedHeight(65)
+        self.txt_manual_body.setPlaceholderText("Explica brevemente los motivos o detalles técnicos del cambio (opcional)...")
+        self.txt_manual_body.setStyleSheet("""
+            QTextEdit {
+                background-color: #0f1015;
+                border: 1px solid #22242e;
+                border-radius: 6px;
+                color: #f3f4f6;
+                padding: 6px 8px;
+                font-size: 12px;
+            }
+            QTextEdit:focus {
+                border-color: #fbbf24;
+            }
+        """)
+        cm_lay.addWidget(self.txt_manual_body)
+
+        # 3. Etiqueta SemVer (Opcional)
+        lbl_t_sem = QLabel("Impacto y Etiqueta SemVer (opcional):")
+        lbl_t_sem.setStyleSheet("font-size: 11.5px; font-weight: 700; color: #9ca3af;")
+        cm_lay.addWidget(lbl_t_sem)
+
+        self.cmb_manual_semver = QComboBox()
+        self.cmb_manual_semver.setItemDelegate(QStyledItemDelegate())
+        self.cmb_manual_semver.setStyleSheet("""
+            QComboBox {
+                background-color: #0f1015;
+                border: 1px solid #22242e;
+                border-radius: 6px;
+                color: #f3f4f6;
+                padding: 6px 10px;
+                font-size: 12px;
+            }
+        """)
+        cm_lay.addWidget(self.cmb_manual_semver)
+
+        man_lay.addWidget(card_man)
+
+        # Botón 1: Confirmar y Grabar Commit Manual
+        self.btn_confirm_manual = LumenCyberActionButton(
+            "💾", "1. Confirmar y Registrar Commit", 
+            "Escribir commit con tu identidad en Git y aplicar etiqueta si se especificó", 
+            accent_color="#34d399"
+        )
+        self.btn_confirm_manual.clicked.connect(self.execute_manual_commit)
+        man_lay.addWidget(self.btn_confirm_manual)
+
+        # Botón 2: Cancelar
+        self.btn_cancel_manual = LumenCyberActionButton(
+            "◀", "2. Cancelar y Volver", 
+            "Regresar al menú principal de Ciclos de Trabajo sin hacer commit", 
+            accent_color="#f87171"
+        )
+        self.btn_cancel_manual.clicked.connect(lambda: self.sector1_sub_stack.setCurrentIndex(0))
+        man_lay.addWidget(self.btn_cancel_manual)
+
+        man_lay.addStretch()
+        self.sector1_sub_stack.addWidget(page_manual)
+
         layout.addWidget(self.sector1_sub_stack)
         return card
 
@@ -1508,8 +1676,16 @@ class LumenProjectWorkspaceView(QWidget):
             self.terminal_display.log_warn("GIT-PUSH", "Ya hay una operación de push en curso.")
             return
 
+        # Aviso preventivo si hay cambios en stage que no han sido confirmados
+        try:
+            diff_cached = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=path, capture_output=True, text=True, timeout=3).stdout.strip()
+            if diff_cached:
+                self.terminal_display.log("GIT-PUSH", "⚠️ <b>Aviso:</b> Tienes cambios en stage aún no confirmados. Solo se enviarán los commits registrados.", tag_color="#fbbf24", prefix="ℹ")
+        except Exception:
+            pass
+
         tag_str = " (con etiquetas --follow-tags)" if follow_tags else ""
-        self.terminal_display.log("GIT-PUSH", f"Iniciando envío de commits{tag_str} hacia el repositorio remoto (origin)...", tag_color="#60a5fa", prefix="🚀")
+        self.terminal_display.log("GIT-PUSH", f"Iniciando envío de commits{tag_str} hacia el repositorio remoto...", tag_color="#60a5fa", prefix="🚀")
         
         self.push_thread = GitPushThread(path, follow_tags=follow_tags)
         self.push_thread.finished_push.connect(self.on_push_finished)
@@ -1773,6 +1949,91 @@ class LumenProjectWorkspaceView(QWidget):
         """Omite el push y regresa directamente al menú principal de Ciclos de Trabajo."""
         self.terminal_display.log("PUSH", "Push remoto omitido. Los commits y etiquetas quedan guardados localmente.", tag_color="#9ca3af", prefix="ℹ")
         self.sector1_sub_stack.setCurrentIndex(0)
+
+    def start_manual_commit_workflow(self):
+        """Inicia el formulario de redacción de commit manual comprobando primero el estado de staging."""
+        path = self.project_data.get("path")
+        if not path or not os.path.exists(path):
+            self.terminal_display.log_error("COMMIT", "No hay un proyecto activo seleccionado.")
+            return
+
+        # 1. Comprobar si hay cambios preparados (staged)
+        st_proc = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=path, capture_output=True, text=True, timeout=5)
+        staged_files = st_proc.stdout.strip().splitlines() if st_proc.stdout.strip() else []
+        
+        if not staged_files:
+            u_proc = subprocess.run(["git", "diff", "--name-only"], cwd=path, capture_output=True, text=True, timeout=5)
+            unstaged_files = u_proc.stdout.strip().splitlines() if u_proc.stdout.strip() else []
+            if unstaged_files:
+                self.terminal_display.log("COMMIT", "❌ <b>Stage vacío</b>. Tienes archivos modificados pero no preparados. Ejecuta <b>➕ Add (Preparar Cambios)</b> primero.", tag_color="#f87171", prefix="⚠️")
+            else:
+                self.terminal_display.log("COMMIT", "❌ <b>Árbol de trabajo limpio</b>. No hay modificaciones pendientes para confirmar en commit.", tag_color="#f87171", prefix="⚠️")
+            return
+
+        # 2. Cargar opciones SemVer
+        cur_ver = get_project_semver(path)
+        next_gamma = bump_semver(cur_ver, "GAMMA")
+        next_beta = bump_semver(cur_ver, "BETA")
+        next_alpha = bump_semver(cur_ver, "ALPHA")
+
+        self.cmb_manual_semver.clear()
+        self.cmb_manual_semver.addItem(f"Omitir bump de versión (mantener {cur_ver}, sin tag)", ("OMIT", ""))
+        self.cmb_manual_semver.addItem(f"GAMMA (Patch / Fix) ➔ {next_gamma}", ("GAMMA", next_gamma))
+        self.cmb_manual_semver.addItem(f"BETA (Minor / Feat) ➔ {next_beta}", ("BETA", next_beta))
+        self.cmb_manual_semver.addItem(f"ALPHA (Major / Breaking) ➔ {next_alpha}", ("ALPHA", next_alpha))
+
+        self.txt_manual_title.clear()
+        self.txt_manual_body.clear()
+
+        # Cambiar a la sub-página 7 (Commit Manual)
+        self.sector1_sub_stack.setCurrentIndex(7)
+        self.txt_manual_title.setFocus()
+
+        self.terminal_display.log("COMMIT", f"Abriendo editor de commit manual. <b>{len(staged_files)}</b> archivo(s) listos en staging.", tag_color="#fbbf24", prefix="✍️")
+
+    def execute_manual_commit(self):
+        """Ejecuta el commit manual redactado por el usuario y crea el tag si aplica."""
+        path = self.project_data.get("path")
+        if not path:
+            self.terminal_display.log_error("COMMIT", "No hay un proyecto activo seleccionado.")
+            return
+
+        raw_title = self.txt_manual_title.text().strip()
+        if not raw_title:
+            self.terminal_display.log_error("COMMIT", "Debes ingresar al menos un título o mensaje para el commit.")
+            self.txt_manual_title.setFocus()
+            return
+
+        body = self.txt_manual_body.toPlainText().strip()
+        sem_data = self.cmb_manual_semver.currentData()
+        impact_type, target_ver = sem_data if sem_data else ("OMIT", "")
+
+        next_id = get_next_commit_seq(path)
+        header = f"MAN:{next_id}"
+        if target_ver and impact_type != "OMIT":
+            header = f"MAN:{next_id} [{target_ver}]"
+
+        self.terminal_display.log("COMMIT", f"Registrando commit manual (<code>{header} | {raw_title}</code>)...", tag_color="#34d399", prefix="💾")
+
+        ok, output = execute_commit_and_tag(
+            project_path=path,
+            commit_header=header,
+            title=raw_title,
+            body=body,
+            impact_type=impact_type,
+            target_ver=target_ver
+        )
+
+        if ok:
+            self.terminal_display.log_success("COMMIT", f"Commit registrado con éxito en Git: <b>{header} | {raw_title}</b>")
+            if impact_type != "OMIT" and target_ver:
+                self.terminal_display.log("TAG", f"Etiqueta de versión SemVer <b>{target_ver}</b> creada.", tag_color="#818cf8", prefix="🏷️")
+
+            self.refresh_current_project(reset_terminal=False)
+            # Pasar a la pantalla post-commit (Página 6: Opción a Push)
+            self.sector1_sub_stack.setCurrentIndex(6)
+        else:
+            self.terminal_display.log_error("COMMIT", f"Error al ejecutar commit: {output}")
 
     # -----------------------------------------------------------------
     # MÉTODOS DE RELOJ, LOGS Y ACCIONES GENÉRICAS
