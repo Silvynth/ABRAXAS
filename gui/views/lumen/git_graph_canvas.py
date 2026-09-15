@@ -279,6 +279,7 @@ class LumenHorizontalGitGraphView(QGraphicsView):
 
     commit_selected = Signal(str)      # Emite el hash corto del commit seleccionado
     checkout_requested = Signal(str)   # Emite el nombre de la rama o hash para checkout
+    branches_updated = Signal(list, list) # Emite (selected_branches, available_branches)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -294,7 +295,7 @@ class LumenHorizontalGitGraphView(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
-        # Diseño limpio y translúcido sin recuadro negro
+        # Diseño limpio y translúcido sin recuadro negro ni sombras duras
         self.setStyleSheet("""
             QGraphicsView {
                 background: transparent;
@@ -328,20 +329,18 @@ class LumenHorizontalGitGraphView(QGraphicsView):
         self.edges = []
         self.head_node = None
         self.branches_detected = []
+        self.selected_branches = []
+        self.available_branches = []
 
     def drawBackground(self, painter: QPainter, rect: QRectF):
-        """Fondo translúcido sutil con guía horizontal por carril y cuadrícula de puntos limpia."""
+        """Cuadrícula de puntos limpia sobre fondo transparente integrado con el tema."""
         super().drawBackground(painter, rect)
 
-        # Relleno translúcido muy suave para amalgamar con el degradado de Lumen
-        painter.fillRect(rect, QColor(16, 18, 25, 140))
-
-        # Cuadrícula sutil de puntos
         grid_size = 28
         left = int(rect.left()) - (int(rect.left()) % grid_size)
         top = int(rect.top()) - (int(rect.top()) % grid_size)
 
-        painter.setPen(QPen(QColor(255, 255, 255, 10), 1.0))
+        painter.setPen(QPen(QColor(255, 255, 255, 12), 1.0))
         x = left
         while x < rect.right():
             y = top
@@ -350,7 +349,41 @@ class LumenHorizontalGitGraphView(QGraphicsView):
                 y += grid_size
             x += grid_size
 
-    def load_project_graph(self, project_path: str, max_commits: int = 40, simulated_merge: Optional[Dict[str, Any]] = None):
+    def set_selected_branches(self, branches: List[str]):
+        """Configura explícitamente la lista de ramas a mostrar y recarga el grafo."""
+        self.selected_branches = [b.strip() for b in branches if b and b.strip()]
+        if self.current_project_path:
+            self.load_project_graph(self.current_project_path)
+
+    def add_branch(self, branch_name: str):
+        """Añade una rama adicional al visor de ramas (ver más ramas)."""
+        clean = branch_name.strip()
+        if clean and clean not in self.selected_branches:
+            self.selected_branches.append(clean)
+            if self.current_project_path:
+                self.load_project_graph(self.current_project_path)
+
+    def remove_branch(self, branch_name: str):
+        """Remueve una rama del visor de ramas (ver menos ramas, mínimo 1)."""
+        clean = branch_name.strip()
+        if clean in self.selected_branches and len(self.selected_branches) > 1:
+            self.selected_branches.remove(clean)
+            if self.current_project_path:
+                self.load_project_graph(self.current_project_path)
+
+    def increase_branches(self):
+        """Añade la siguiente rama disponible que no esté en pantalla."""
+        for b in self.available_branches:
+            if b not in self.selected_branches:
+                self.add_branch(b)
+                return
+
+    def decrease_branches(self):
+        """Reduce en 1 la cantidad de ramas en pantalla (manteniendo al menos 1)."""
+        if len(self.selected_branches) > 1:
+            self.remove_branch(self.selected_branches[-1])
+
+    def load_project_graph(self, project_path: str, max_commits: int = 50, simulated_merge: Optional[Dict[str, Any]] = None):
         """Carga y genera el grafo horizontal de ramas a partir del historial git del proyecto."""
         self.current_project_path = project_path
         self.scene.clear()
@@ -367,15 +400,56 @@ class LumenHorizontalGitGraphView(QGraphicsView):
         branch_info = self._get_git_branches(project_path)
         self.branches_detected = branch_info
 
-        # 2. Obtener historial cronológico / topológico de commits
-        commits = self._get_git_commits(project_path, max_commits)
+        # Detectar la rama activa actual (HEAD)
+        active_branch = "main"
+        try:
+            active_branch = subprocess.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=project_path, stderr=subprocess.DEVNULL, text=True
+            ).strip() or "main"
+        except Exception:
+            pass
+
+        # Lista unificada de nombres de ramas disponibles
+        all_names = []
+        if active_branch and active_branch != "HEAD":
+            all_names.append(active_branch)
+        for b in branch_info:
+            bname = b.get("name", "")
+            if bname and bname not in all_names and bname != "HEAD":
+                all_names.append(bname)
+
+        self.available_branches = all_names
+
+        # Configurar 3 ramas por defecto si no hay selección previa válida
+        if not self.selected_branches or not any(b in all_names for b in self.selected_branches):
+            # Priorizar: 1) Activa actual, 2) y 3) Primeras ramas disponibles
+            picked = [active_branch] if active_branch in all_names else []
+            for b in all_names:
+                if b not in picked:
+                    picked.append(b)
+                if len(picked) >= 3:
+                    break
+            self.selected_branches = picked if picked else [active_branch]
+        else:
+            # Mantener la selección válida
+            self.selected_branches = [b for b in self.selected_branches if b in all_names]
+            if not self.selected_branches:
+                self.selected_branches = all_names[:3] if all_names else [active_branch]
+
+        # Notificar a la UI sobre las ramas actualizadas
+        self.branches_updated.emit(self.selected_branches, self.available_branches)
+
+        # 2. Obtener historial cronológico / topológico de commits para las ramas seleccionadas
+        commits = self._get_git_commits(project_path, max_commits, self.selected_branches)
         if not commits:
-            self._render_empty_state("⚠️ No se encontraron commits en este repositorio")
+            self._render_empty_state("⚠️ No se encontraron commits en las ramas seleccionadas")
             return
 
-        # 3. Asignación de carriles horizontales (Topología de Ramas)
-        # Se calcula con los commits de más reciente a más antiguo para seguir el linaje hacia atrás
-        lane_mapping, commit_lanes = self._calculate_branch_lanes(commits, branch_info)
+        # 3. Asignación de carriles horizontales para las ramas seleccionadas
+        lane_mapping, commit_lanes = self._calculate_branch_lanes(
+            commits, branch_info, self.selected_branches, active_branch
+        )
 
         # Ahora sí, ordenamos de más antiguo (izquierda) a más reciente (derecha) para el eje temporal
         commits.reverse()
@@ -540,12 +614,21 @@ class LumenHorizontalGitGraphView(QGraphicsView):
             pass
         return branches
 
-    def _get_git_commits(self, path: str, limit: int) -> List[Dict[str, Any]]:
-        """Obtiene la lista estructurada de commits mediante git log."""
+    def _get_git_commits(self, path: str, limit: int, branches: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Obtiene la lista estructurada de commits mediante git log para las ramas especificadas."""
         commits = []
         SEP = "@@LUMEN_GRAPH_SEP@@"
+        branch_targets = []
+        if branches:
+            for b in branches:
+                clean_b = b.strip()
+                if clean_b:
+                    branch_targets.append(clean_b)
+        if not branch_targets:
+            branch_targets = ["--all"]
+
         cmd = [
-            "git", "log", "--all", "--topo-order",
+            "git", "log", *branch_targets, "--topo-order",
             f"--format=%h{SEP}%p{SEP}%d{SEP}%s{SEP}%an{SEP}%cr",
             "-n", str(limit)
         ]
@@ -580,68 +663,82 @@ class LumenHorizontalGitGraphView(QGraphicsView):
             pass
         return commits
 
-    def _calculate_branch_lanes(self, commits: List[Dict[str, Any]], branches: List[Dict[str, str]]):
+    def _calculate_branch_lanes(
+        self, 
+        commits: List[Dict[str, Any]], 
+        branches: List[Dict[str, str]], 
+        selected_branches: Optional[List[str]] = None,
+        active_branch: Optional[str] = None
+    ):
         """
         Asigna a cada commit un carril horizontal persistente según su linaje y rama.
-        El carril 0 siempre está reservado para la rama activa (HEAD).
-        Debe invocarse con commits ordenados de más reciente a más antiguo.
+        Los carriles 0, 1, 2... se asocian de manera fija a las ramas seleccionadas.
         """
         lane_mapping = {}  # lane_idx -> branch_name
         commit_lanes = {}  # hash -> lane_idx
 
-        # Detectar la rama activa actual
-        active_branch = "Lumen"
-        try:
-            active_branch = subprocess.check_output(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=self.current_project_path, stderr=subprocess.DEVNULL, text=True
-            ).strip() or "Lumen"
-        except Exception:
-            pass
+        # Si no se pasó active_branch, detectarlo
+        if not active_branch:
+            try:
+                active_branch = subprocess.check_output(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=self.current_project_path, stderr=subprocess.DEVNULL, text=True
+                ).strip() or "main"
+            except Exception:
+                active_branch = "main"
 
-        lane_mapping[0] = active_branch
+        # Establecer asignación fija de carriles según selected_branches
+        if selected_branches:
+            for idx, b_name in enumerate(selected_branches):
+                lane_mapping[idx] = b_name
+        else:
+            lane_mapping[0] = active_branch
 
-        # Identificar nombres de ramas conocidas pasadas como contexto
+        # Identificar ramas conocidas secundarias
         known_branch_names = [
             b["name"] for b in branches
-            if b.get("name") and b["name"] != active_branch and b["name"] != "HEAD"
+            if b.get("name") and b["name"] not in lane_mapping.values() and b["name"] != "HEAD"
         ]
 
-        # Algoritmo de asignación de carril por linaje (de más nuevo a más antiguo)
-        active_lanes = []  # commit_hash esperado por carril
+        # 1. Pre-mapeo directo por refs de commit
+        for c in commits:
+            for lane_idx, b_name in lane_mapping.items():
+                clean_b = b_name.replace("origin/", "").strip()
+                if any(clean_b in r or f"/{clean_b}" in r for r in c.get("refs", [])):
+                    commit_lanes[c["hash"]] = lane_idx
+                    break
+
+        # 2. Algoritmo de propagación por linaje topológico
+        num_lanes = max(len(lane_mapping), 1)
+        active_lanes = [None] * num_lanes
+
         for c in commits:
             chash = c["hash"]
 
-            # 1. Prioridad principal: ¿Este commit continúa un carril activo existente?
-            if chash in active_lanes:
+            # Si ya se asignó por refs, respetarlo
+            if chash in commit_lanes:
+                lane = commit_lanes[chash]
+            # Continuar carril activo existente
+            elif chash in active_lanes:
                 lane = active_lanes.index(chash)
-                # Si múltiples carriles convergían a este commit (punto de fork previo), liberar los otros
                 for idx in range(len(active_lanes)):
                     if active_lanes[idx] == chash:
                         active_lanes[idx] = None
             else:
-                # 2. Si no viene de un carril activo, ver si pertenece a una rama con carril ya mapeado
-                explicit_lane = None
-                for lane_idx, b_name in lane_mapping.items():
-                    if any(b_name in r for r in c.get("refs", [])):
-                        explicit_lane = lane_idx
-                        break
-
-                if explicit_lane is not None:
-                    lane = explicit_lane
-                elif None in active_lanes:
+                # Asignar a un carril libre de las ramas seleccionadas si existe
+                if None in active_lanes:
                     lane = active_lanes.index(None)
-                else:
+                elif len(active_lanes) < len(lane_mapping):
                     lane = len(active_lanes)
+                else:
+                    lane = 0
 
-            # Asegurar dimensión de active_lanes
             while len(active_lanes) <= lane:
                 active_lanes.append(None)
 
             active_lanes[lane] = chash
             commit_lanes[chash] = lane
 
-            # Asignar nombre descriptivo de rama al carril si aún no tiene uno
             if lane not in lane_mapping:
                 found_name = None
                 for r in c.get("refs", []):
@@ -653,15 +750,12 @@ class LumenHorizontalGitGraphView(QGraphicsView):
                     found_name = known_branch_names.pop(0)
                 lane_mapping[lane] = found_name or f"Rama #{lane}"
 
-            # 3. Propagar expectativas de padres hacia los carriles
+            # 3. Propagar padres hacia los carriles
             parents = c.get("parents", [])
             if not parents:
-                # Fin del linaje para este carril (commit raíz)
                 active_lanes[lane] = None
             else:
-                # El padre primario continúa en este mismo carril
                 active_lanes[lane] = parents[0]
-                # Los padres secundarios (bifurcaciones / merges entrantes) toman slots libres o nuevos
                 for p_extra in parents[1:]:
                     if p_extra not in active_lanes:
                         if None in active_lanes:

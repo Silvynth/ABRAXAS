@@ -37,25 +37,6 @@ def get_system_theme_palette():
     return None
 
 THEMES = {
-    "system_sync": {
-        "name": "🔄 Sincronizar con Sistema (Auto / Noctalia)",
-        "BG_MAIN": "#0d0e12",
-        "BG_SIDEBAR": "#12131a",
-        "BG_SURFACE": "#15161c",
-        "BG_SURFACE_HOVER": "#1c1d24",
-        "BG_INPUT": "#0f1015",
-        "BORDER_BASE": "#22242e",
-        "BORDER_FOCUS": "#6366f1",
-        "TEXT_PRIMARY": "#f3f4f6",
-        "TEXT_SECONDARY": "#9ca3af",
-        "TEXT_MUTED": "#6b7280",
-        "ACCENT": "#6366f1",
-        "ACCENT_HOVER": "#4f46e5",
-        "ACCENT_LIGHT": "#e0e7ff",
-        "CYAN": "#06b6d4",
-        "SUCCESS": "#10b981",
-        "WARNING": "#f59e0b"
-    },
     "noctalia": {
         "name": "Noctalia Minimal (Violeta / Índigo)",
         "BG_MAIN": "#0d0e12",
@@ -74,7 +55,13 @@ THEMES = {
         "CYAN": "#06b6d4",
         "SUCCESS": "#10b981",
         "WARNING": "#f59e0b"
-    },
+    }
+}
+
+# system_sync hereda los mismos tokens base de noctalia como fallback predeterminado
+THEMES["system_sync"] = dict(THEMES["noctalia"], name="🔄 Sincronizar con Sistema (Auto / Noctalia)")
+
+THEMES.update({
     "dark_cyberpunk": {
         "name": "Dark Cyberpunk (Cian Neón / Esmeralda)",
         "BG_MAIN": "#080c10",
@@ -113,7 +100,7 @@ THEMES = {
         "SUCCESS": "#a3e635",
         "WARNING": "#facc15"
     }
-}
+})
 
 def generate_stylesheet(theme_key="noctalia"):
     if theme_key == "system_sync":
@@ -123,10 +110,17 @@ def generate_stylesheet(theme_key="noctalia"):
         
     return f"""
 QWidget {{
-    background-color: {t["BG_MAIN"]};
     color: {t["TEXT_PRIMARY"]};
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     font-size: 13px;
+}}
+
+NeosMainApp, QWidget#central_widget, QWidget#content_area, QWidget.main_window {{
+    background-color: {t["BG_MAIN"]};
+}}
+
+QStackedWidget {{
+    background-color: transparent;
 }}
 
 QLabel {{

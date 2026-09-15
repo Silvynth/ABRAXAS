@@ -113,6 +113,7 @@ class NeosMainApp(QWidget):
         # 2. MAIN CONTENT STACK (MODULAR VIEWS: UMBRA, LUMEN, NEOS)
         # -------------------------------------------------------------
         content_area = QWidget()
+        content_area.setObjectName("content_area")
         c_layout = QVBoxLayout(content_area)
         c_layout.setContentsMargins(28, 24, 28, 24)
         c_layout.setSpacing(16)

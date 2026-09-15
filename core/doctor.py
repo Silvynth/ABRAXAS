@@ -10,7 +10,7 @@ import shutil
 import urllib.request
 import json
 
-from core.paths import ROOT_DIR
+from core.paths import ROOT_DIR, TEMPLATE_PATH
 from core import __version__
 
 C_GOLD = '\x1b[38;2;230;166;200m'
@@ -40,7 +40,7 @@ def run_doctor():
     # 2. Config TOML
     from core.setup import get_target_config_path
     cfg_file = get_target_config_path()
-    template = os.path.join(ROOT_DIR, "config.default.toml")
+    template = TEMPLATE_PATH
     cfg_ok = os.path.exists(cfg_file) or os.path.exists(template)
     check_item("Archivo de Configuración", cfg_ok, f"Detectado ({os.path.basename(cfg_file)})", "No se encontró config.toml")
 

@@ -11,9 +11,9 @@ from PySide6.QtWidgets import (
     QPushButton, QFrame, QScrollArea, QGridLayout,
     QTextEdit, QApplication, QStackedWidget, QSizePolicy,
     QProgressBar, QLineEdit, QComboBox, QStyledItemDelegate,
-    QCheckBox
+    QCheckBox, QMenu
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QThread
+from PySide6.QtCore import Qt, Signal, QTimer, QThread, QPoint
 
 from core import get_version
 from core.lumen_sync import get_full_project_sync
@@ -4984,10 +4984,98 @@ class LumenProjectWorkspaceView(QWidget):
 
         layout.addLayout(top_bar)
 
+        # -------------------------------------------------------------
+        # Barra de Control y Añadidor Dinámico de Ramas (3 ramas por defecto)
+        # -------------------------------------------------------------
+        branches_bar = QHBoxLayout()
+        branches_bar.setContentsMargins(4, 0, 4, 2)
+        branches_bar.setSpacing(8)
+
+        lbl_b_title = QLabel("🌿 RAMAS:")
+        lbl_b_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #9ca3af; letter-spacing: 0.5px;")
+        branches_bar.addWidget(lbl_b_title)
+
+        # Contenedor dinámico de chips de ramas visibles
+        self.branch_chips_widget = QWidget()
+        self.branch_chips_layout = QHBoxLayout(self.branch_chips_widget)
+        self.branch_chips_layout.setContentsMargins(0, 0, 0, 0)
+        self.branch_chips_layout.setSpacing(6)
+        branches_bar.addWidget(self.branch_chips_widget)
+
+        # Botón Añadir Rama (menú desplegable)
+        self.btn_add_branch = QPushButton("➕ Añadir Rama")
+        self.btn_add_branch.setCursor(Qt.PointingHandCursor)
+        self.btn_add_branch.setToolTip("Añadir otra rama al visor horizontal")
+        self.btn_add_branch.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.16);
+                color: #c7d2fe;
+                border: 1px dashed rgba(99, 102, 241, 0.45);
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: rgba(99, 102, 241, 0.32);
+                border-color: #818cf8;
+                color: #ffffff;
+            }
+        """)
+        self.btn_add_branch.clicked.connect(self.show_add_branch_menu)
+        branches_bar.addWidget(self.btn_add_branch)
+
+        # Botones rápidos Más / Menos Ramas
+        btn_more = QPushButton("➕ Más")
+        btn_more.setCursor(Qt.PointingHandCursor)
+        btn_more.setToolTip("Añadir la siguiente rama disponible")
+        btn_more.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.04);
+                color: #e2e8f0;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.20);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_more.clicked.connect(lambda: self.git_graph_view.increase_branches() if hasattr(self, "git_graph_view") else None)
+        branches_bar.addWidget(btn_more)
+
+        btn_less = QPushButton("➖ Menos")
+        btn_less.setCursor(Qt.PointingHandCursor)
+        btn_less.setToolTip("Quitar la última rama añadida (mínimo 1)")
+        btn_less.setStyleSheet(btn_more.styleSheet())
+        btn_less.clicked.connect(lambda: self.git_graph_view.decrease_branches() if hasattr(self, "git_graph_view") else None)
+        branches_bar.addWidget(btn_less)
+
+        branches_bar.addStretch()
+
+        self.lbl_branch_count = QLabel("3 ramas")
+        self.lbl_branch_count.setStyleSheet("""
+            background-color: rgba(56, 189, 248, 0.12);
+            color: #38bdf8;
+            border: 1px solid rgba(56, 189, 248, 0.30);
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-size: 10.5px;
+            font-weight: 700;
+        """)
+        branches_bar.addWidget(self.lbl_branch_count)
+
+        layout.addLayout(branches_bar)
+
         # Lienzo horizontal interactivo de ramas
         self.git_graph_view = LumenHorizontalGitGraphView()
         self.git_graph_view.setMinimumHeight(260)
         self.git_graph_view.commit_selected.connect(self.on_graph_commit_selected)
+        self.git_graph_view.branches_updated.connect(self.update_branch_chips)
         layout.addWidget(self.git_graph_view, 1)
 
         # Pie de inspección rápida
@@ -5004,6 +5092,112 @@ class LumenProjectWorkspaceView(QWidget):
         layout.addWidget(self.lbl_graph_inspector)
 
         return widget
+
+    def update_branch_chips(self, selected_branches: list, available_branches: list):
+        """Actualiza los chips interactivos de ramas activas en la barra de control del grafo."""
+        if not hasattr(self, "branch_chips_layout"):
+            return
+
+        # Limpiar chips anteriores
+        while self.branch_chips_layout.count():
+            item = self.branch_chips_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        from gui.views.lumen.git_graph_canvas import LUMEN_BRANCH_PALETTE
+
+        for idx, b_name in enumerate(selected_branches):
+            color = LUMEN_BRANCH_PALETTE[idx % len(LUMEN_BRANCH_PALETTE)].name()
+            chip = QFrame()
+            chip.setStyleSheet(f"""
+                QFrame {{
+                    background-color: rgba(255, 255, 255, 0.07);
+                    border: 1px solid {color}99;
+                    border-radius: 4px;
+                    padding: 2px 8px;
+                }}
+            """)
+            c_lay = QHBoxLayout(chip)
+            c_lay.setContentsMargins(5, 2, 5, 2)
+            c_lay.setSpacing(6)
+
+            lbl_dot = QLabel("●")
+            lbl_dot.setStyleSheet(f"color: {color}; font-size: 11px; font-weight: bold;")
+            c_lay.addWidget(lbl_dot)
+
+            lbl_name = QLabel(b_name)
+            lbl_name.setStyleSheet("color: #ffffff; font-size: 11px; font-weight: 700;")
+            c_lay.addWidget(lbl_name)
+
+            if len(selected_branches) > 1:
+                btn_del = QPushButton("✕")
+                btn_del.setCursor(Qt.PointingHandCursor)
+                btn_del.setToolTip(f"Ocultar rama '{b_name}'")
+                btn_del.setStyleSheet("""
+                    QPushButton {
+                        background: transparent;
+                        border: none;
+                        color: #9ca3af;
+                        font-size: 10px;
+                        font-weight: bold;
+                        padding: 0px 2px;
+                    }
+                    QPushButton:hover {
+                        color: #ef4444;
+                    }
+                """)
+                btn_del.clicked.connect(lambda _, b=b_name: self.git_graph_view.remove_branch(b))
+                c_lay.addWidget(btn_del)
+
+            self.branch_chips_layout.addWidget(chip)
+
+        count_text = f"{len(selected_branches)} {'rama' if len(selected_branches) == 1 else 'ramas'}"
+        if hasattr(self, "lbl_branch_count"):
+            self.lbl_branch_count.setText(count_text)
+
+        remaining = [b for b in available_branches if b not in selected_branches]
+        if hasattr(self, "btn_add_branch"):
+            self.btn_add_branch.setEnabled(bool(remaining))
+            self.btn_add_branch.setToolTip(f"{len(remaining)} ramas disponibles para añadir" if remaining else "Todas las ramas están visibles")
+
+    def show_add_branch_menu(self):
+        """Muestra menú contextual con las ramas disponibles para añadir al grafo."""
+        if not hasattr(self, "git_graph_view") or not self.git_graph_view:
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #15161c;
+                border: 1px solid #22242e;
+                border-radius: 6px;
+                padding: 4px;
+                color: #f3f4f6;
+            }
+            QMenu::item {
+                padding: 6px 14px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: rgba(99, 102, 241, 0.25);
+                color: #ffffff;
+            }
+        """)
+
+        available = getattr(self.git_graph_view, "available_branches", [])
+        selected = getattr(self.git_graph_view, "selected_branches", [])
+        remaining = [b for b in available if b not in selected]
+
+        if not remaining:
+            act = menu.addAction("Todas las ramas están visibles")
+            act.setEnabled(False)
+        else:
+            for b in remaining:
+                act = menu.addAction(f"🌿 {b}")
+                act.triggered.connect(lambda _, b_name=b: self.git_graph_view.add_branch(b_name))
+
+        menu.exec(self.btn_add_branch.mapToGlobal(QPoint(0, self.btn_add_branch.height() + 2)))
 
     def refresh_git_graph(self, simulated_merge: Optional[Dict[str, Any]] = None):
         """Carga en vivo el grafo horizontal de ramas según el proyecto activo."""

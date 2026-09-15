@@ -87,6 +87,19 @@ def bump_semver(current_ver: str, bump_type: str) -> str:
     return f"v{major}.{minor}.{patch}"
 
 
+def clean_commit_title(title: str, fallback: str = "Actualización de componentes del sistema") -> str:
+    """Limpia prefijos residuales (HEX, SIL, HEN, AGY, MAN) y normaliza la longitud del título."""
+    cleaned = re.sub(r"^(?:HEX|SIL|HEN|AGY|MAN):\d{4}(?:\s*\[v?[0-9.]+\])?\s*\|\s*", "", title, flags=re.IGNORECASE).strip()
+    if not cleaned:
+        cleaned = fallback
+    words = cleaned.split()
+    if len(words) > 8:
+        cleaned = " ".join(words[:8]) + "..."
+    if len(cleaned) > 50:
+        cleaned = cleaned[:47] + "..."
+    return cleaned
+
+
 def get_next_commit_seq(project_path: str) -> str:
     """Calcula el siguiente identificador correlativo de commit de 4 dígitos (0001, 0024, etc.)."""
     try:
@@ -97,7 +110,7 @@ def get_next_commit_seq(project_path: str) -> str:
             text=True
         )
         for line in log_out.splitlines():
-            match = re.search(r"(?:HEX|SIL|HEN|AGY):(\d{4})", line)
+            match = re.search(r"(?:HEX|SIL|HEN|AGY|MAN):(\d{4})", line)
             if match:
                 num = int(match.group(1))
                 return f"{num + 1:04d}"
@@ -186,17 +199,8 @@ Diff:
         if not title:
             title = clean_msg.splitlines()[0].strip() if clean_msg.splitlines() else "Actualización de componentes del sistema"
 
-    # Quitar cualquier prefijo residual tipo HEX:0024 | o [v0.4.5] que el modelo haya añadido
-    title = re.sub(r"^(?:HEX|SIL|HEN|AGY):\d{4}(?:\s*\[v?[0-9.]+\])?\s*\|\s*", "", title, flags=re.IGNORECASE).strip()
-    if not title:
-        title = "Actualización de componentes del sistema"
-
-    # Failsafe de longitud: máximo 8 palabras y 50 caracteres
-    words = title.split()
-    if len(words) > 8:
-        title = " ".join(words[:8]) + "..."
-    if len(title) > 50:
-        title = title[:47] + "..."
+    # Quitar cualquier prefijo residual tipo HEX/MAN y normalizar longitud
+    title = clean_commit_title(title, fallback="Actualización de componentes del sistema")
 
     # Extracción de Cuerpo
     body = ""
@@ -839,12 +843,7 @@ Diferencias de código:
         if not title:
             title = f"Fusión de {branch_display}"
 
-    title = re.sub(r"^(?:HEX|SIL|HEN|AGY):\d{4}(?:\s*\[v?[0-9.]+\])?\s*\|\s*", "", title, flags=re.IGNORECASE).strip()
-    words = title.split()
-    if len(words) > 8:
-        title = " ".join(words[:8]) + "..."
-    if len(title) > 50:
-        title = title[:47] + "..."
+    title = clean_commit_title(title, fallback=f"Fusión de {branch_display}")
 
     body = ""
     match_body = re.search(r"(?:cuerpo|body):\s*(.+)", clean_msg, re.IGNORECASE | re.DOTALL)

@@ -4,7 +4,7 @@
 # =====================================================================
 
 import os
-from core.paths import ROOT_DIR
+from core.paths import ROOT_DIR, TEMPLATE_PATH
 from core import __version__
 
 # Import tomllib (Python 3.11+) with fallback
@@ -18,7 +18,7 @@ except ImportError:
 
 class AbraxasConfig:
     ROOT_DIR = ROOT_DIR
-    TEMPLATE_PATH = os.path.join(ROOT_DIR, "config.default.toml")
+    TEMPLATE_PATH = TEMPLATE_PATH
 
     @classmethod
     def get_default_path(cls):

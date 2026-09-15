@@ -7,8 +7,7 @@ import os
 import subprocess
 import re
 
-_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_VERSION_FILE = os.path.join(_ROOT_DIR, "VERSION")
+from core.paths import ROOT_DIR as _ROOT_DIR, VERSION_FILE as _VERSION_FILE
 
 def get_git_commit_version():
     """Extrae el tag de versión del mensaje del último commit (ej: [v0.1.4])"""
