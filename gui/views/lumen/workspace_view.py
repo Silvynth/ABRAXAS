@@ -2778,28 +2778,12 @@ class LumenProjectWorkspaceView(QWidget):
         p1_lay.setContentsMargins(0, 0, 0, 0)
         p1_lay.setSpacing(10)
 
-        # Diagrama Visual de Fusión
-        diagram_frame = QFrame()
-        diagram_frame.setStyleSheet("""
-            QFrame {
-                background-color: rgba(255, 255, 255, 0.02);
-                border: 1px solid rgba(56, 189, 248, 0.25);
-                border-radius: 8px;
-                padding: 10px 14px;
-            }
-        """)
-        d_lay = QVBoxLayout(diagram_frame)
-        d_lay.setSpacing(6)
-
-        lbl_diag_title = QLabel("❖ PANEL DE CONTROL DE FUSIÓN TÁCTICA ❖")
-        lbl_diag_title.setStyleSheet("font-size: 12px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
-        d_lay.addWidget(lbl_diag_title)
-
-        d_row_info = QHBoxLayout()
-        self.lbl_diag_incoming = QLabel("RAMA ORIGEN (Incoming): feature/test • Autor: silvynth")
-        self.lbl_diag_incoming.setStyleSheet("font-size: 12px; font-weight: 800; color: #fbbf24;")
-        d_row_info.addWidget(self.lbl_diag_incoming)
-        d_row_info.addStretch()
+        # Cabecera de Confirmación Táctica
+        top_c_row = QHBoxLayout()
+        lbl_p1_title = QLabel("❖ CONFIRMACIÓN DE FUSIÓN TÁCTICA ❖")
+        lbl_p1_title.setStyleSheet("font-size: 12px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
+        top_c_row.addWidget(lbl_p1_title)
+        top_c_row.addStretch()
 
         btn_view_sim_canvas = QPushButton("👁️ Ver Simulación en Grafo")
         btn_view_sim_canvas.setCursor(Qt.PointingHandCursor)
@@ -2817,18 +2801,8 @@ class LumenProjectWorkspaceView(QWidget):
             QPushButton:hover { background-color: rgba(56, 189, 248, 0.30); color: #ffffff; }
         """)
         btn_view_sim_canvas.clicked.connect(self.show_simulated_canvas)
-        d_row_info.addWidget(btn_view_sim_canvas)
-        d_lay.addLayout(d_row_info)
-
-        lbl_arrow = QLabel("         │\n         ▼  (Integrando cambios en la rama destino)")
-        lbl_arrow.setStyleSheet("font-size: 11px; font-weight: 700; color: #9ca3af; font-family: monospace;")
-        d_lay.addWidget(lbl_arrow)
-
-        self.lbl_diag_receiver = QLabel("RAMA DESTINO (HEAD / Receiver): main • Autor: silvynth")
-        self.lbl_diag_receiver.setStyleSheet("font-size: 12px; font-weight: 800; color: #34d399;")
-        d_lay.addWidget(self.lbl_diag_receiver)
-
-        p1_lay.addWidget(diagram_frame)
+        top_c_row.addWidget(btn_view_sim_canvas)
+        p1_lay.addLayout(top_c_row)
 
         # Resumen de commits entrantes
         self.lbl_commits_preview = QLabel("Commits a integrar:")
@@ -3518,9 +3492,6 @@ class LumenProjectWorkspaceView(QWidget):
         self.selected_merge_branch = target_branch  # compatibilidad
         self.selected_merge_author = target_author
 
-        self.lbl_diag_incoming.setText(f"RAMA ORIGEN (Tus cambios):  <b>{source_branch}</b> • Autor: {source_author}")
-        self.lbl_diag_receiver.setText(f"RAMA DESTINO (Receptora):  <b>{target_branch}</b> • Autor: {target_author}")
-
         data = get_merge_diff_and_commits(path, source_branch=source_branch, target_branch=target_branch)
         commits = data.get("commits", [])
         self.selected_merge_commits = commits
@@ -3851,8 +3822,8 @@ class LumenProjectWorkspaceView(QWidget):
         if not path:
             return
         status = get_git_merge_status(path)
-        tgt_b = status.get("current_branch", "HEAD")
-        src_b = self.selected_merge_branch or "origen"
+        src_b = self.selected_merge_source or status.get("current_branch", "HEAD")
+        tgt_b = self.selected_merge_target or self.selected_merge_branch or "destino"
         m_title = self.txt_merge_title.text() or f"Fusión: {src_b} ➔ {tgt_b}"
         self.refresh_git_graph(simulated_merge={
             "source_branch": src_b,
