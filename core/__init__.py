@@ -24,7 +24,7 @@ def get_git_commit_version():
         match = re.search(r"\[v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?)\]", msg)
         if match:
             return match.group(1)
-    except Exception:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         pass
     return ""
 
@@ -42,7 +42,7 @@ def get_version():
                 v = _f.read().strip()
                 if v:
                     return v
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     return "0.1.1"

@@ -22,7 +22,7 @@ def check_gh_cli_authenticated() -> Tuple[bool, str]:
         return False, proc.stderr.strip() or "No autenticado en gh CLI"
     except FileNotFoundError:
         return False, "GitHub CLI ('gh') no está instalado"
-    except Exception as e:
+    except (subprocess.TimeoutExpired, OSError) as e:
         return False, str(e)
 
 def fetch_repos_gh_cli() -> List[Dict]:
@@ -94,7 +94,7 @@ def fetch_repos_api(username: str = "", token: str = "") -> List[Dict]:
             raise ValueError("Token de acceso de GitHub inválido o expirado.")
         else:
             raise RuntimeError(f"Error HTTP {e.code} de GitHub: {e.reason}")
-    except Exception as e:
+    except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
         raise RuntimeError(f"Error al conectar con GitHub: {e}")
 
 def fetch_single_repo_api(owner_repo: str, token: str = "") -> Dict:
@@ -129,7 +129,7 @@ def fetch_single_repo_api(owner_repo: str, token: str = "") -> Dict:
         if e.code == 404:
             raise ValueError(f"No se encontró el repositorio '{owner_repo}' en GitHub.")
         raise RuntimeError(f"Error HTTP {e.code} de GitHub: {e.reason}")
-    except Exception as e:
+    except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
         raise RuntimeError(f"Error al conectar con GitHub: {e}")
 
 def parse_git_url_repo_data(url: str) -> Dict:

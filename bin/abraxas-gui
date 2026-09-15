@@ -5,7 +5,9 @@
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_DIR="$DIR"
-LOG_FILE="/tmp/abraxas.log"
+LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/abraxas"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/abraxas.log"
 
 cd "$PROJECT_DIR" || exit 1
 export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"

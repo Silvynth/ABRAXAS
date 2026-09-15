@@ -18,12 +18,10 @@ C_CYAN='\033[38;2;124;206;217m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
-if [ -f "$SCRIPT_DIR/.version" ]; then
-    VERSION=$(cat "$SCRIPT_DIR/.version" | tr -d '[:space:]')
-elif [ -f "$SCRIPT_DIR/VERSION" ]; then
-    VERSION=$(cat "$SCRIPT_DIR/VERSION" | tr -d '[:space:]')
+if [ -f "$SCRIPT_DIR/VERSION" ]; then
+    VERSION=$(tr -d '[:space:]' < "$SCRIPT_DIR/VERSION")
 else
-    VERSION="0.4.7"
+    VERSION="1.1.2"
 fi
 
 CONFIG_DIR="$SCRIPT_DIR"

@@ -29,7 +29,7 @@ def get_project_semver(project_path: str) -> str:
                     ver = f.read().strip().split()[0]
                     if ver:
                         return f"v{ver.lstrip('vV')}"
-            except Exception:
+            except (OSError, ValueError, IndexError):
                 pass
 
     # 2. Tag más reciente en Git
@@ -42,7 +42,7 @@ def get_project_semver(project_path: str) -> str:
         ).strip()
         if tag:
             return f"v{tag.lstrip('vV')}"
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
 
     # 3. Tag en el historial de commits [vX.Y.Z]
@@ -56,7 +56,7 @@ def get_project_semver(project_path: str) -> str:
         match = re.search(r"\[v?(\d+\.\d+\.\d+)\]", log_out)
         if match:
             return f"v{match.group(1)}"
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         pass
 
     return "v0.1.0"
@@ -70,7 +70,7 @@ def bump_semver(current_ver: str, bump_type: str) -> str:
         major = int(parts[0]) if len(parts) > 0 else 0
         minor = int(parts[1]) if len(parts) > 1 else 1
         patch = int(parts[2]) if len(parts) > 2 else 0
-    except Exception:
+    except (ValueError, IndexError):
         major, minor, patch = 0, 1, 0
 
     bump = bump_type.upper()
@@ -101,7 +101,7 @@ def get_next_commit_seq(project_path: str) -> str:
             if match:
                 num = int(match.group(1))
                 return f"{num + 1:04d}"
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
     return "0001"
 
@@ -123,7 +123,7 @@ def get_git_staged_diff(project_path: str, max_chars: int = 12000) -> str:
                 text=True
             )
         return diff[:max_chars]
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         return ""
 
 
@@ -239,11 +239,11 @@ def get_git_identity(project_path: str = None) -> Tuple[str, str]:
     email = ""
     try:
         name = subprocess.check_output(["git", "config", "user.name"], cwd=project_path, text=True, stderr=subprocess.DEVNULL).strip()
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
     try:
         email = subprocess.check_output(["git", "config", "user.email"], cwd=project_path, text=True, stderr=subprocess.DEVNULL).strip()
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
 
     if not name or not email:
@@ -255,7 +255,7 @@ def get_git_identity(project_path: str = None) -> Tuple[str, str]:
                 name = git_sec.get("user_name", "")
             if not email:
                 email = git_sec.get("user_email", "")
-        except Exception:
+        except (ValueError, IndexError):
             pass
 
     if not name or not email:
@@ -266,7 +266,7 @@ def get_git_identity(project_path: str = None) -> Tuple[str, str]:
                 name = det_n
             if not email:
                 email = det_e
-        except Exception:
+        except (ValueError, IndexError):
             pass
 
     return name, email
@@ -311,7 +311,7 @@ def execute_commit_and_tag(
                 subprocess.run(["git", "tag", target_ver], cwd=project_path, check=False)
 
         return True, proc.stdout.strip()
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e)
 
 
@@ -341,7 +341,7 @@ def get_git_branches_matrix(project_path: str) -> Dict[str, Any]:
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=project_path, stderr=subprocess.DEVNULL, text=True
         ).strip()
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         current_branch = ""
 
     fmt = "%(refname)|%(refname:short)|%(upstream:track)|%(upstream:short)|%(authorname)|%(authordate:relative)"
@@ -350,7 +350,7 @@ def get_git_branches_matrix(project_path: str) -> Dict[str, Any]:
             ["git", "for-each-ref", f"--format={fmt}", "refs/heads/", "refs/remotes/"],
             cwd=project_path, stderr=subprocess.DEVNULL, text=True
         )
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         raw_output = ""
 
     branches = []
@@ -433,7 +433,7 @@ def get_git_branches_matrix(project_path: str) -> Dict[str, Any]:
             b_up = b_parts[1].strip() if len(b_parts) > 1 else ""
             if b_name and not b_up:
                 undeployed.append(b_name)
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
 
     return {
@@ -460,7 +460,7 @@ def execute_git_checkout(project_path: str, branch_name: str) -> Tuple[bool, str
             return True, out or f"Cambiado a rama '{target}'."
         else:
             return False, proc.stderr.strip() or proc.stdout.strip()
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e)
 
 
@@ -483,7 +483,7 @@ def execute_git_create_branch(project_path: str, new_branch_name: str) -> Tuple[
             return True, out or f"Rama '{clean_name}' creada y activada."
         else:
             return False, proc.stderr.strip() or proc.stdout.strip()
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e)
 
 
@@ -504,7 +504,7 @@ def execute_git_delete_branch(project_path: str, branch_name: str, force: bool =
             return True, out or f"Rama '{clean_name}' eliminada correctamente."
         else:
             return False, proc.stderr.strip() or proc.stdout.strip()
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e)
 
 
@@ -524,7 +524,7 @@ def execute_git_deploy_branch(project_path: str, branch_name: str, remote: str =
             return True, out or f"Rama '{clean_name}' desplegada con éxito en {remote}."
         else:
             return False, proc.stderr.strip() or proc.stdout.strip()
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e)
 
 
@@ -561,7 +561,7 @@ def get_git_merge_status(project_path: str) -> Dict[str, Any]:
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=project_path, stderr=subprocess.DEVNULL, text=True
         ).strip()
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         current_branch = ""
 
     is_merge_active = False
@@ -586,7 +586,7 @@ def get_git_merge_status(project_path: str) -> Dict[str, Any]:
                         incoming_branch = m.group(1)
                     else:
                         incoming_branch = first_line
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
 
     conflicts = []
@@ -600,7 +600,7 @@ def get_git_merge_status(project_path: str) -> Dict[str, Any]:
             if out_u:
                 conflicts = [line.strip() for line in out_u.splitlines() if line.strip()]
                 has_conflicts = len(conflicts) > 0
-        except Exception:
+        except (subprocess.SubprocessError, OSError, ValueError, IndexError):
             pass
 
     return {
@@ -626,7 +626,7 @@ def get_mergeable_branches(project_path: str) -> List[Dict[str, Any]]:
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=project_path, stderr=subprocess.DEVNULL, text=True
         ).strip()
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         current_branch = ""
 
     branches_raw = []
@@ -646,7 +646,7 @@ def get_mergeable_branches(project_path: str) -> List[Dict[str, Any]]:
                 continue
             seen.add(b)
             branches_raw.append(b)
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         return []
 
     results = []
@@ -662,7 +662,7 @@ def get_mergeable_branches(project_path: str) -> List[Dict[str, Any]]:
                 if len(parts) >= 2:
                     ahead = int(parts[0])
                     behind = int(parts[1])
-        except Exception:
+        except (subprocess.SubprocessError, OSError, ValueError, IndexError):
             pass
 
         subject = ""
@@ -680,7 +680,7 @@ def get_mergeable_branches(project_path: str) -> List[Dict[str, Any]]:
                 author = lparts[1] if len(lparts) > 1 else ""
                 date = lparts[2] if len(lparts) > 2 else ""
                 subject = lparts[3] if len(lparts) > 3 else ""
-        except Exception:
+        except (subprocess.SubprocessError, OSError, ValueError, IndexError):
             pass
 
         results.append({
@@ -723,7 +723,7 @@ def get_merge_diff_and_commits(project_path: str, source_branch: str = None, tar
         ).strip()
         if c_out:
             commits = [line.strip() for line in c_out.splitlines() if line.strip()]
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
 
     files_changed = []
@@ -734,7 +734,7 @@ def get_merge_diff_and_commits(project_path: str, source_branch: str = None, tar
         ).strip()
         if f_out:
             files_changed = [line.strip() for line in f_out.splitlines() if line.strip()]
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
 
     diff_summary = ""
@@ -744,7 +744,7 @@ def get_merge_diff_and_commits(project_path: str, source_branch: str = None, tar
             cwd=project_path, stderr=subprocess.DEVNULL, text=True
         )
         diff_summary = d_out[:6000]
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         pass
 
     if not diff_summary:
@@ -754,7 +754,7 @@ def get_merge_diff_and_commits(project_path: str, source_branch: str = None, tar
                 cwd=project_path, stderr=subprocess.DEVNULL, text=True
             )
             diff_summary = d_cached[:6000]
-        except Exception:
+        except (subprocess.SubprocessError, OSError):
             pass
 
     return {
@@ -913,7 +913,7 @@ def execute_git_merge(
             return True, output or f"Rama '{clean_branch}' fusionada exitosamente.", status
         else:
             return False, output or f"Conflicto o error al fusionar '{clean_branch}'.", status
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e), get_git_merge_status(project_path)
 
 
@@ -945,7 +945,7 @@ def execute_git_merge_into(
         if chk.returncode != 0:
             err = chk.stderr.strip() or chk.stdout.strip()
             return False, f"Fallo al cambiar a la rama destino '{clean_target}': {err}", get_git_merge_status(project_path)
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, f"Error al ejecutar checkout a rama destino: {str(e)}", get_git_merge_status(project_path)
 
     # 2. Ejecutar la fusión de source_branch dentro de target_branch
@@ -969,7 +969,7 @@ def execute_git_merge_abort(project_path: str) -> Tuple[bool, str]:
             return True, proc.stdout.strip() or "Fusión abortada de forma segura. El árbol de trabajo fue restaurado."
         else:
             return False, proc.stderr.strip() or proc.stdout.strip()
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e)
 
 
@@ -995,7 +995,7 @@ def execute_git_resolve_conflicts(project_path: str, strategy: str = "ours") -> 
             details.append(f"✔ Resuelto ({strategy}): {file}")
 
         return True, "\n".join(details)
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e)
 
 
@@ -1018,7 +1018,7 @@ def execute_git_complete_merge(project_path: str, commit_title: str, commit_body
             return True, proc.stdout.strip() or "Commit de fusión registrado exitosamente."
         else:
             return False, proc.stderr.strip() or proc.stdout.strip()
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e)
 
 
@@ -1092,7 +1092,7 @@ def get_git_sync_deep_status(project_path: str) -> Dict[str, Any]:
                 cwd=project_path, capture_output=True, text=True, timeout=4
             )
             branch = h_res.stdout.strip() or "HEAD"
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         branch = "HEAD"
     default_res["branch"] = branch
 
@@ -1112,7 +1112,7 @@ def get_git_sync_deep_status(project_path: str) -> Dict[str, Any]:
             )
             if url_res.returncode == 0:
                 remote_url = url_res.stdout.strip()
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
     default_res["remote"] = remote_name
     default_res["remote_url"] = remote_url
@@ -1127,7 +1127,7 @@ def get_git_sync_deep_status(project_path: str) -> Dict[str, Any]:
         )
         if u_res.returncode == 0 and u_res.stdout.strip():
             upstream = u_res.stdout.strip()
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
     default_res["upstream"] = upstream
     default_res["has_upstream"] = bool(upstream)
@@ -1149,7 +1149,7 @@ def get_git_sync_deep_status(project_path: str) -> Dict[str, Any]:
             if len(rev_out) >= 2:
                 ahead = int(rev_out[0])
                 behind = int(rev_out[1])
-        except Exception:
+        except (subprocess.SubprocessError, OSError, ValueError, IndexError):
             pass
 
         # Commits salientes (Ahead)
@@ -1165,7 +1165,7 @@ def get_git_sync_deep_status(project_path: str) -> Dict[str, Any]:
                         ahead_commits.append({
                             "hash": p[0], "author": p[1], "time": p[2], "subject": p[3]
                         })
-            except Exception:
+            except (subprocess.SubprocessError, OSError, ValueError, IndexError):
                 pass
 
         # Commits entrantes (Behind)
@@ -1194,7 +1194,7 @@ def get_git_sync_deep_status(project_path: str) -> Dict[str, Any]:
                     cwd=project_path, stderr=subprocess.DEVNULL, text=True
                 ).strip()
                 incoming_names = [n.strip() for n in names_out.splitlines() if n.strip()]
-            except Exception:
+            except (subprocess.SubprocessError, OSError, ValueError, IndexError):
                 pass
 
     default_res["ahead"] = ahead
@@ -1225,7 +1225,7 @@ def get_git_sync_deep_status(project_path: str) -> Dict[str, Any]:
                 unstaged_lines[pts[2].strip()] = (a, d)
                 tot_adds += a
                 tot_dels += d
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
 
     try:
@@ -1241,7 +1241,7 @@ def get_git_sync_deep_status(project_path: str) -> Dict[str, Any]:
                 staged_lines[pts[2].strip()] = (a, d)
                 tot_adds += a
                 tot_dels += d
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
 
     staged_files: List[Dict[str, Any]] = []
@@ -1294,7 +1294,7 @@ def get_git_sync_deep_status(project_path: str) -> Dict[str, Any]:
                     "adds": a,
                     "dels": d
                 })
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
 
     default_res["staged_files"] = staged_files
@@ -1334,7 +1334,7 @@ def get_git_sync_deep_status(project_path: str) -> Dict[str, Any]:
                         "time": "",
                         "message": pts[0]
                     })
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
     default_res["stashes"] = stashes
     default_res["stash_count"] = len(stashes)
@@ -1361,7 +1361,7 @@ def get_git_sync_deep_status(project_path: str) -> Dict[str, Any]:
                 last_fetch_str = f"Hace {diff_s // 3600} h ({dt.strftime('%H:%M')})"
             else:
                 last_fetch_str = dt.strftime("%Y-%m-%d %H:%M")
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
     default_res["last_fetch_str"] = last_fetch_str
 
@@ -1433,7 +1433,7 @@ def execute_git_fetch(project_path: str, remote: str = "", prune: bool = True) -
             return False, raw_output or "Fallo al ejecutar git fetch.", {}
     except subprocess.TimeoutExpired:
         return False, "La operación de git fetch excedió el tiempo límite (timeout de 45s). Verifica tu conexión de red.", {}
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e), {}
 
 
@@ -1474,7 +1474,7 @@ def execute_git_pull(project_path: str, strategy: str = "rebase", autostash: boo
             return False, combined or "Fallo al ejecutar git pull."
     except subprocess.TimeoutExpired:
         return False, "Tiempo de espera agotado durante git pull (timeout de 60s). Verifica tu conexión a internet o credenciales."
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e)
 
 
@@ -1485,7 +1485,7 @@ def execute_git_stage_path(project_path: str, file_path: str) -> Tuple[bool, str
         if proc.returncode == 0:
             return True, f"'{file_path}' agregado a staging correctamente."
         return False, proc.stderr.strip() or "Error al agregar archivo a staging."
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e)
 
 
@@ -1499,7 +1499,7 @@ def execute_git_unstage_path(project_path: str, file_path: str) -> Tuple[bool, s
         if proc2.returncode == 0:
             return True, f"'{file_path}' retirado de staging."
         return False, proc.stderr.strip() or proc2.stderr.strip()
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e)
 
 
@@ -1524,7 +1524,7 @@ def execute_git_discard_path(project_path: str, file_path: str) -> Tuple[bool, s
         if proc2.returncode == 0:
             return True, f"Cambios en '{file_path}' descartados."
         return False, proc.stderr.strip() or proc2.stderr.strip()
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e)
 
 
@@ -1535,7 +1535,7 @@ def execute_git_stash_pop(project_path: str) -> Tuple[bool, str]:
         if proc.returncode == 0:
             return True, proc.stdout.strip() or "Stash restaurado exitosamente."
         return False, proc.stderr.strip() or proc.stdout.strip()
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e)
 
 
@@ -1549,7 +1549,7 @@ def execute_git_stash_save(project_path: str, message: str = "") -> Tuple[bool, 
         if proc.returncode == 0:
             return True, proc.stdout.strip() or "Cambios guardados en stash correctamente."
         return False, proc.stderr.strip() or proc.stdout.strip()
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError) as e:
         return False, str(e)
 
 

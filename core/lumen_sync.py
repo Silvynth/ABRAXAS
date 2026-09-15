@@ -32,7 +32,7 @@ def get_project_version(project_path: str) -> str:
                 v = f.read().strip()
                 if v:
                     return f"v{v.lstrip('v')}"
-        except Exception:
+        except OSError:
             pass
 
     # 2. Tag en mensaje del último commit de Git [vX.Y.Z]
@@ -48,7 +48,7 @@ def get_project_version(project_path: str) -> str:
             match = re.search(r"\[v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?)\]", msg)
             if match:
                 return f"v{match.group(1)}"
-        except Exception:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
             pass
 
     # 3. pyproject.toml
@@ -60,7 +60,7 @@ def get_project_version(project_path: str) -> str:
                 v = d.get("project", {}).get("version") or d.get("tool", {}).get("poetry", {}).get("version")
                 if v:
                     return f"v{v.lstrip('v')}"
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     # 4. package.json
@@ -72,7 +72,7 @@ def get_project_version(project_path: str) -> str:
                 v = d.get("version")
                 if v:
                     return f"v{v.lstrip('v')}"
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             pass
 
     # 5. config.toml
@@ -84,7 +84,7 @@ def get_project_version(project_path: str) -> str:
                 v = d.get("general", {}).get("version") or d.get("version")
                 if v:
                     return f"v{v.lstrip('v')}"
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     # 6. Cargo.toml (Rust)
@@ -97,7 +97,7 @@ def get_project_version(project_path: str) -> str:
                         v = line.split("=")[1].strip().strip('"\'')
                         if v:
                             return f"v{v.lstrip('v')}"
-        except Exception:
+        except OSError:
             pass
 
     return "v0.1.0"
@@ -137,7 +137,7 @@ def get_project_git_info(project_path: str) -> Dict[str, Any]:
             )
             if res_head.returncode == 0 and res_head.stdout.strip():
                 branch = f"HEAD ({res_head.stdout.strip()})"
-    except Exception:
+    except (subprocess.TimeoutExpired, OSError):
         pass
 
     # Remoto
@@ -165,7 +165,7 @@ def get_project_git_info(project_path: str) -> Dict[str, Any]:
                 remote = url.split("/")[-1].replace(".git", "")
         else:
             remote = "origin/main"
-    except Exception:
+    except (subprocess.TimeoutExpired, OSError):
         pass
 
     return {
@@ -229,7 +229,7 @@ def get_project_docker_info(project_path: str) -> Dict[str, Any]:
             else:
                 return {"count": 0, "text": "0 activos"}
         return {"count": 0, "text": "0 activos"}
-    except Exception:
+    except (subprocess.TimeoutExpired, OSError):
         return {"count": 0, "text": "Inactivo"}
 
 
@@ -288,7 +288,7 @@ def get_project_git_hud(project_path: str) -> Dict[str, Any]:
             "untracked_str": unt_str,
             "deleted_str": str(deleted)
         }
-    except Exception:
+    except (subprocess.TimeoutExpired, OSError):
         return {
             "mod": 0,
             "untracked": 0,
@@ -341,7 +341,7 @@ def get_project_recent_commits(project_path: str, limit: int = 4) -> List[Dict[s
                     "color": palette[idx % len(palette)]
                 })
         return commits
-    except Exception:
+    except (subprocess.TimeoutExpired, OSError):
         return []
 
 

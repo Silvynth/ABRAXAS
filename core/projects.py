@@ -4,12 +4,6 @@
 # =====================================================================
 
 import os
-import sys
-import shutil
-
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT_DIR)
-
 from core.setup import read_toml_dict, get_target_config_path
 
 def get_projects_dir(config_path=None):
@@ -39,7 +33,7 @@ def get_folder_size_str(folder_path: str) -> str:
                 return f"{total_size:.1f} {unit} ({file_count} archivos)"
             total_size /= 1024.0
         return f"{total_size:.1f} PB ({file_count} archivos)"
-    except Exception:
+    except (PermissionError, OSError):
         return "Tamaño no disponible"
 
 def list_project_folders(config_path=None):

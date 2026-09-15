@@ -8,8 +8,7 @@ import sys
 import subprocess
 from datetime import datetime
 from typing import Dict, Any, List
-
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from core.paths import ROOT_DIR
 
 
 def get_current_repo_info() -> Dict[str, Any]:
@@ -27,7 +26,7 @@ def get_current_repo_info() -> Dict[str, Any]:
             )
             if b_proc.returncode == 0 and b_proc.stdout.strip():
                 branch = b_proc.stdout.strip()
-        except Exception:
+        except (subprocess.SubprocessError, OSError):
             pass
 
         try:
@@ -37,7 +36,7 @@ def get_current_repo_info() -> Dict[str, Any]:
             )
             if r_proc.returncode == 0 and r_proc.stdout.strip():
                 remote_url = r_proc.stdout.strip()
-        except Exception:
+        except (subprocess.SubprocessError, OSError):
             pass
 
         try:
@@ -47,7 +46,7 @@ def get_current_repo_info() -> Dict[str, Any]:
             )
             if c_proc.returncode == 0 and c_proc.stdout.strip():
                 current_commit = c_proc.stdout.strip()
-        except Exception:
+        except (subprocess.SubprocessError, OSError):
             pass
 
     return {
@@ -80,7 +79,7 @@ def check_for_app_updates() -> Dict[str, Any]:
             ["git", "fetch", "origin", branch],
             cwd=ROOT_DIR, capture_output=True, text=True, timeout=10
         )
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         return {
             "success": False,
             "has_updates": False,
@@ -100,7 +99,7 @@ def check_for_app_updates() -> Dict[str, Any]:
         )
         if rev_proc.returncode == 0 and rev_proc.stdout.strip().isdigit():
             pending_count = int(rev_proc.stdout.strip())
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         pending_count = 0
 
     if pending_count > 0:
@@ -119,7 +118,7 @@ def check_for_app_updates() -> Dict[str, Any]:
                             "author": parts[2],
                             "time": parts[3]
                         })
-        except Exception:
+        except (subprocess.SubprocessError, OSError):
             pass
 
     # 3. Comprobar si hay cambios locales no guardados
@@ -131,7 +130,7 @@ def check_for_app_updates() -> Dict[str, Any]:
         )
         if st_proc.returncode == 0 and st_proc.stdout.strip():
             is_dirty = True
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         pass
 
     return {
@@ -171,7 +170,7 @@ def execute_app_update(stash_dirty: bool = True) -> Dict[str, Any]:
                 if stash_proc.returncode == 0:
                     did_stash = True
                     add_log("✔ Resguardo local completado.")
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         add_log(f"⚠ Advertencia durante verificación de cambios locales: {e}")
 
     # 2. Git Pull
@@ -191,7 +190,7 @@ def execute_app_update(stash_dirty: bool = True) -> Dict[str, Any]:
                 "logs": logs,
                 "message": "Error al descargar la actualización de Git."
             }
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError) as e:
         add_log(f"✖ Excepción durante pull: {e}")
         return {
             "success": False,
@@ -205,7 +204,7 @@ def execute_app_update(stash_dirty: bool = True) -> Dict[str, Any]:
         try:
             subprocess.run(["git", "stash", "pop"], cwd=ROOT_DIR, capture_output=True, text=True)
             add_log("✔ Cambios locales re-aplicados.")
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError) as e:
             add_log(f"⚠ Aviso al restaurar stash: {e}")
 
     # 4. Actualizar versión
@@ -214,7 +213,7 @@ def execute_app_update(stash_dirty: bool = True) -> Dict[str, Any]:
         c_proc = subprocess.run(["git", "log", "-1", "--pretty=format:%h - %s"], cwd=ROOT_DIR, capture_output=True, text=True)
         if c_proc.returncode == 0:
             new_commit = c_proc.stdout.strip()
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         pass
 
     add_log(f"✔ Actualización finalizada con éxito. Commit activo: {new_commit}")

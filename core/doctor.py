@@ -10,8 +10,7 @@ import shutil
 import urllib.request
 import json
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT_DIR)
+from core.paths import ROOT_DIR
 from core import __version__
 
 C_GOLD = '\x1b[38;2;230;166;200m'
@@ -63,7 +62,7 @@ def run_doctor():
             models = [m.get('name') for m in data.get('models', [])]
             ai_ok = True
             ai_msg = f"En línea ({len(models)} modelos detectados)"
-    except Exception:
+    except (urllib.error.URLError, json.JSONDecodeError, OSError):
         ai_msg = "Servidor Ollama no activo en :11434"
     check_item("Motor de IA Local (Ollama)", ai_ok, ai_msg, ai_msg)
 

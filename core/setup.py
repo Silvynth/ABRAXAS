@@ -26,8 +26,7 @@ C_WARN = '\x1b[38;2;240;138;155m'
 BOLD = '\x1b[1m'
 RESET = '\x1b[0m'
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TEMPLATE_PATH = os.path.join(ROOT_DIR, "config.default.toml")
+from core.paths import ROOT_DIR, TEMPLATE_PATH, SKILLS_DIR
 
 def get_target_config_path():
     user_cfg = os.path.expanduser("~/.config/abraxas/config.toml")
@@ -42,11 +41,11 @@ def detect_git_identity():
     email = ""
     try:
         name = subprocess.check_output(["git", "config", "--get", "user.name"], text=True, stderr=subprocess.DEVNULL).strip()
-    except Exception:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         pass
     try:
         email = subprocess.check_output(["git", "config", "--get", "user.email"], text=True, stderr=subprocess.DEVNULL).strip()
-    except Exception:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
     if not name or not email:
@@ -57,7 +56,7 @@ def detect_git_identity():
                 name = data.get("name") or data.get("login") or ""
             if not email:
                 email = data.get("email") or ""
-        except Exception:
+        except (subprocess.CalledProcessError, json.JSONDecodeError):
             pass
 
     if not email:
@@ -67,7 +66,7 @@ def detect_git_identity():
             if isinstance(emails_data, list) and len(emails_data) > 0:
                 primary = next((e.get("email") for e in emails_data if e.get("primary")), None)
                 email = primary or emails_data[0].get("email", "")
-        except Exception:
+        except (subprocess.CalledProcessError, json.JSONDecodeError):
             pass
 
     return name, email
@@ -77,12 +76,12 @@ def sync_global_gitconfig(name: str, email: str):
     if name:
         try:
             subprocess.run(["git", "config", "--global", "user.name", name], check=False)
-        except Exception:
+        except (subprocess.CalledProcessError, OSError):
             pass
     if email:
         try:
             subprocess.run(["git", "config", "--global", "user.email", email], check=False)
-        except Exception:
+        except (subprocess.CalledProcessError, OSError):
             pass
 
 def read_toml_dict(filepath):
@@ -95,7 +94,7 @@ def read_toml_dict(filepath):
             import tomllib
             with open(filepath, "rb") as f:
                 return tomllib.load(f)
-    except Exception:
+    except (ImportError, OSError):
         pass
 
     # Parser fallback básico línea por línea
@@ -183,7 +182,7 @@ def write_toml_dict(filepath, cfg):
     # Proteger permisos a nivel usuario (chmod 600)
     try:
         os.chmod(filepath, 0o600)
-    except Exception:
+    except OSError:
         pass
 
 def prompt_input(label, default_val):
@@ -198,7 +197,7 @@ def prompt_input(label, default_val):
 
 def ensure_default_skills():
     """Genera archivos de directivas de comportamiento (vacíos por defecto) en skills/ si no existen."""
-    skills_dir = os.path.join(ROOT_DIR, "skills")
+    skills_dir = SKILLS_DIR
     os.makedirs(skills_dir, exist_ok=True)
     for fname in ["chat_skill.txt", "heavy_skill.txt", "light_skill.txt"]:
         fpath = os.path.join(skills_dir, fname)
@@ -206,7 +205,7 @@ def ensure_default_skills():
             try:
                 with open(fpath, "w", encoding="utf-8") as f:
                     f.write("")
-            except Exception:
+            except OSError:
                 pass
 
 def run_interactive_wizard(is_preview=False):
@@ -307,7 +306,7 @@ def run_interactive_wizard(is_preview=False):
                 models = [m.get('name') for m in data.get('models', [])]
                 if models:
                     print(f"     {C_GREEN}✔ Modelos locales detectados en Ollama:{RESET} {', '.join(models)}")
-        except Exception:
+        except (urllib.error.URLError, json.JSONDecodeError, OSError):
             pass
 
         if not models:

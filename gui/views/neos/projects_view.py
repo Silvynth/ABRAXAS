@@ -4,14 +4,15 @@
 # =====================================================================
 
 import os
-import subprocess
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QLineEdit, QFrame, QScrollArea,
     QTreeView, QHeaderView, QSplitter, QFileSystemModel,
     QStackedWidget
 )
-from PySide6.QtCore import Qt, QDir
+from PySide6.QtCore import Qt, QDir, QUrl
+from PySide6.QtGui import QDesktopServices
 
 from core.projects import list_project_folders, get_projects_dir
 from gui.views.neos.graph_canvas import ProjectGraphCanvas
@@ -562,10 +563,7 @@ class ProjectsView(QWidget):
 
     def open_in_file_manager(self):
         if self.selected_path and os.path.exists(self.selected_path):
-            try:
-                subprocess.Popen(["xdg-open", self.selected_path])
-            except Exception as e:
-                print(f"Error al abrir carpeta: {e}")
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.selected_path))
 
     def filter_projects(self, query):
         q = query.strip().lower()
