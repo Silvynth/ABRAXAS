@@ -311,3 +311,217 @@ def execute_commit_and_tag(
     except Exception as e:
         return False, str(e)
 
+
+# =====================================================================
+# PROTOCOLO ARTEMIS: GESTIÓN Y MATRIZ TÁCTICA DE RAMAS
+# =====================================================================
+
+def get_git_branches_matrix(project_path: str) -> Dict[str, Any]:
+    """
+    Obtiene y clasifica la matriz completa de ramas (locales y remotas) según el Protocolo Artemis.
+    Categorías:
+      - Stale/Gone: Remota eliminada en origen (#f87171)
+      - Local (Mía): Creada por el usuario actual (#fde047)
+      - Local: Rama local de otro usuario o genérica (#f3f4f6)
+      - Remota de otros: Rama remota no creada por el usuario (#4ade80)
+      - Remota (Mía): Rama remota creada por el usuario actual (#60a5fa)
+    """
+    if not project_path or not os.path.isdir(project_path):
+        return {"current_branch": "", "current_user": "", "branches": [], "undeployed": []}
+
+    current_user, _ = get_git_identity(project_path)
+    if not current_user:
+        current_user = "silvynth"
+
+    try:
+        current_branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=project_path, stderr=subprocess.DEVNULL, text=True
+        ).strip()
+    except Exception:
+        current_branch = ""
+
+    fmt = "%(refname)|%(refname:short)|%(upstream:track)|%(upstream:short)|%(authorname)|%(authordate:relative)"
+    try:
+        raw_output = subprocess.check_output(
+            ["git", "for-each-ref", f"--format={fmt}", "refs/heads/", "refs/remotes/"],
+            cwd=project_path, stderr=subprocess.DEVNULL, text=True
+        )
+    except Exception:
+        raw_output = ""
+
+    branches = []
+    curr_user_lower = current_user.lower().strip()
+
+    for line in raw_output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("|")
+        if len(parts) < 6:
+            continue
+
+        refname, shortname, track, upstream, author, date = (
+            parts[0].strip(), parts[1].strip(), parts[2].strip(),
+            parts[3].strip(), parts[4].strip(), parts[5].strip()
+        )
+
+        if refname.endswith("/HEAD"):
+            continue
+
+        is_active = (shortname == current_branch)
+        is_mine = (author.lower().strip() == curr_user_lower)
+        is_remote = refname.startswith("refs/remotes/")
+
+        if refname.startswith("refs/heads/") and "gone" in track.lower():
+            color = "#f87171"
+            category = "stale"
+            status_label = "Stale/Gone"
+        elif refname.startswith("refs/heads/"):
+            if is_mine:
+                color = "#fde047"
+                category = "local_mine"
+                status_label = "Activa (Mía)" if is_active else "Local (Mía)"
+            else:
+                color = "#f3f4f6"
+                category = "local_other"
+                status_label = "Activa" if is_active else "Local"
+        elif is_remote:
+            if not is_mine:
+                color = "#4ade80"
+                category = "remote_other"
+                status_label = f"Remota ({author})" if author else "Remota"
+            else:
+                color = "#60a5fa"
+                category = "remote_mine"
+                status_label = "Remota (Mía)"
+        else:
+            color = "#9ca3af"
+            category = "other"
+            status_label = "Desconocido"
+
+        branches.append({
+            "refname": refname,
+            "name": shortname,
+            "is_active": is_active,
+            "is_remote": is_remote,
+            "track": track,
+            "upstream": upstream,
+            "author": author,
+            "date": date,
+            "category": category,
+            "status_label": status_label,
+            "color": color
+        })
+
+    # Detectar ramas locales sin upstream
+    undeployed = []
+    try:
+        out_b = subprocess.check_output(
+            ["git", "branch", "--format=%(refname:short)|%(upstream:short)"],
+            cwd=project_path, stderr=subprocess.DEVNULL, text=True
+        )
+        for b_line in out_b.splitlines():
+            b_line = b_line.strip()
+            if not b_line:
+                continue
+            b_parts = b_line.split("|")
+            b_name = b_parts[0].strip()
+            b_up = b_parts[1].strip() if len(b_parts) > 1 else ""
+            if b_name and not b_up:
+                undeployed.append(b_name)
+    except Exception:
+        pass
+
+    return {
+        "current_branch": current_branch,
+        "current_user": current_user,
+        "branches": branches,
+        "undeployed": undeployed
+    }
+
+
+def execute_git_checkout(project_path: str, branch_name: str) -> Tuple[bool, str]:
+    """Realiza checkout a una rama local o remota."""
+    try:
+        target = branch_name
+        if target.startswith("origin/"):
+            target = target[len("origin/"):]
+
+        proc = subprocess.run(
+            ["git", "checkout", target],
+            cwd=project_path, capture_output=True, text=True, timeout=15
+        )
+        if proc.returncode == 0:
+            out = proc.stdout.strip() or proc.stderr.strip()
+            return True, out or f"Cambiado a rama '{target}'."
+        else:
+            return False, proc.stderr.strip() or proc.stdout.strip()
+    except Exception as e:
+        return False, str(e)
+
+
+def execute_git_create_branch(project_path: str, new_branch_name: str) -> Tuple[bool, str]:
+    """Crea una nueva rama táctica y conmuta a ella (git checkout -b <name>)."""
+    clean_name = new_branch_name.strip()
+    if not clean_name:
+        return False, "El nombre de la nueva rama no puede estar vacío."
+
+    if any(c in clean_name for c in [" ", "~", "^", ":", "?", "*", "[", "\\"]):
+        return False, "El nombre de rama contiene caracteres no permitidos por Git."
+
+    try:
+        proc = subprocess.run(
+            ["git", "checkout", "-b", clean_name],
+            cwd=project_path, capture_output=True, text=True, timeout=15
+        )
+        if proc.returncode == 0:
+            out = proc.stdout.strip() or proc.stderr.strip()
+            return True, out or f"Rama '{clean_name}' creada y activada."
+        else:
+            return False, proc.stderr.strip() or proc.stdout.strip()
+    except Exception as e:
+        return False, str(e)
+
+
+def execute_git_delete_branch(project_path: str, branch_name: str, force: bool = False) -> Tuple[bool, str]:
+    """Elimina una rama local de forma segura (-d) o forzada (-D)."""
+    clean_name = branch_name.strip()
+    if not clean_name:
+        return False, "No se especificó ninguna rama para eliminar."
+
+    flag = "-D" if force else "-d"
+    try:
+        proc = subprocess.run(
+            ["git", "branch", flag, clean_name],
+            cwd=project_path, capture_output=True, text=True, timeout=15
+        )
+        if proc.returncode == 0:
+            out = proc.stdout.strip() or proc.stderr.strip()
+            return True, out or f"Rama '{clean_name}' eliminada correctamente."
+        else:
+            return False, proc.stderr.strip() or proc.stdout.strip()
+    except Exception as e:
+        return False, str(e)
+
+
+def execute_git_deploy_branch(project_path: str, branch_name: str, remote: str = "origin") -> Tuple[bool, str]:
+    """Despliega una rama local al remoto estableciendo tracking (git push -u <remote> <branch>)."""
+    clean_name = branch_name.strip()
+    if not clean_name:
+        return False, "No se especificó la rama a desplegar."
+
+    try:
+        proc = subprocess.run(
+            ["git", "push", "-u", remote, clean_name],
+            cwd=project_path, capture_output=True, text=True, timeout=30
+        )
+        if proc.returncode == 0:
+            out = proc.stdout.strip() or proc.stderr.strip()
+            return True, out or f"Rama '{clean_name}' desplegada con éxito en {remote}."
+        else:
+            return False, proc.stderr.strip() or proc.stdout.strip()
+    except Exception as e:
+        return False, str(e)
+
+

@@ -10,7 +10,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QFrame, QScrollArea, QGridLayout,
     QTextEdit, QApplication, QStackedWidget, QSizePolicy,
-    QProgressBar, QLineEdit, QComboBox, QStyledItemDelegate
+    QProgressBar, QLineEdit, QComboBox, QStyledItemDelegate,
+    QCheckBox
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread
 
@@ -19,8 +20,12 @@ from core.lumen_sync import get_full_project_sync
 from core.ai import get_configured_model, audit_git_diff
 from core.git_workflow import (
     get_project_semver, bump_semver, get_next_commit_seq,
-    generate_ia_commit_proposal, execute_commit_and_tag
+    generate_ia_commit_proposal, execute_commit_and_tag,
+    get_git_branches_matrix, execute_git_checkout,
+    execute_git_create_branch, execute_git_delete_branch,
+    execute_git_deploy_branch
 )
+from gui.views.lumen.git_graph_canvas import LumenHorizontalGitGraphView
 
 
 class GitPushThread(QThread):
@@ -258,32 +263,32 @@ class LumenTerminalDisplay(QTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setReadOnly(True)
-        self.setMinimumHeight(150)
+        self.setMinimumHeight(240)
         self.setCursor(Qt.IBeamCursor)
         self.setLineWrapMode(QTextEdit.WidgetWidth)
         self.setStyleSheet("""
             QTextEdit {
-                background-color: #07090e;
+                background-color: transparent;
                 color: #e5e7eb;
                 font-family: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', 'Consolas', monospace;
                 font-size: 12.5px;
                 line-height: 1.5;
                 border: none;
                 padding: 14px 18px;
-                selection-background-color: #4f46e5;
+                selection-background-color: rgba(99, 102, 241, 0.40);
                 selection-color: #ffffff;
             }
             QScrollBar:vertical {
-                background: #090b10;
-                width: 10px;
+                background: rgba(255, 255, 255, 0.02);
+                width: 8px;
                 margin: 0px;
                 border-radius: 4px;
             }
             QScrollBar::handle:vertical {
-                background: #1f2430;
+                background: rgba(255, 255, 255, 0.12);
                 min-height: 24px;
                 border-radius: 4px;
-                border: 1px solid rgba(255, 255, 255, 0.05);
+                border: none;
             }
             QScrollBar::handle:vertical:hover {
                 background: #6366f1;
@@ -323,6 +328,40 @@ class LumenTerminalDisplay(QTextEdit):
 
     def log_error(self, tag: str, message: str):
         self.log(tag, message, tag_color="#f87171", text_color="#fecaca", prefix="✖")
+
+
+class LumenDynamicStackedWidget(QStackedWidget):
+    """
+    QStackedWidget reactivo que sincroniza su sizeHint y minimumSizeHint en tiempo real
+    con la página activa actual. Elimina el espacio muerto que dejan páginas más altas
+    en vistas compactas como los 3 pilares del Sector.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.currentChanged.connect(self._on_page_changed)
+
+    def _on_page_changed(self, index: int):
+        self.updateGeometry()
+        p = self.parentWidget()
+        while p:
+            p.updateGeometry()
+            if isinstance(p, QStackedWidget):
+                p.updateGeometry()
+                break
+            p = p.parentWidget()
+
+    def sizeHint(self):
+        cur = self.currentWidget()
+        if cur:
+            return cur.sizeHint()
+        return super().sizeHint()
+
+    def minimumSizeHint(self):
+        cur = self.currentWidget()
+        if cur:
+            return cur.minimumSizeHint()
+        return super().minimumSizeHint()
 
 
 class LumenProjectWorkspaceView(QWidget):
@@ -450,13 +489,14 @@ class LumenProjectWorkspaceView(QWidget):
         scroll_content = QWidget()
         content_layout = QVBoxLayout(scroll_content)
         content_layout.setContentsMargins(0, 0, 6, 0)
-        content_layout.setSpacing(14)
+        content_layout.setSpacing(10)
 
         # -------------------------------------------------------------
         # 2. HUD GENERAL DEL PROYECTO (CONSERVADO EN LA PARTE SUPERIOR)
         # -------------------------------------------------------------
         self.hud_card = QFrame()
         self.hud_card.setProperty("class", "surface")
+        self.hud_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self.hud_card.setStyleSheet("""
             QFrame.surface {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -467,8 +507,8 @@ class LumenProjectWorkspaceView(QWidget):
             }
         """)
         hud_layout = QVBoxLayout(self.hud_card)
-        hud_layout.setContentsMargins(20, 16, 20, 16)
-        hud_layout.setSpacing(10)
+        hud_layout.setContentsMargins(18, 12, 18, 12)
+        hud_layout.setSpacing(8)
 
         # Línea 1: Proyecto | Rama | Remoto
         row1 = QHBoxLayout()
@@ -609,19 +649,20 @@ class LumenProjectWorkspaceView(QWidget):
         # -------------------------------------------------------------
         # 3. ZONA MODULAR DE SECTORES (QStackedWidget)
         # -------------------------------------------------------------
-        self.sectors_stack = QStackedWidget()
+        self.sectors_stack = LumenDynamicStackedWidget()
 
         # =============================================================
-        # PÁGINA 0: VISTA GENERAL DE LOS 4 SECTORES
+        # PÁGINA 0: VISTA GENERAL DE LOS 3 SECTORES (FORMATO PILARES)
         # =============================================================
         self.page_overview = QWidget()
-        overview_layout = QGridLayout(self.page_overview)
+        self.page_overview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        overview_layout = QHBoxLayout(self.page_overview)
         overview_layout.setContentsMargins(0, 0, 0, 0)
         overview_layout.setSpacing(14)
 
-        # Sector 1 Card
+        # Pilar 1: Sector 1 (Protocolo Git y Ciclos)
         card_s1 = self.create_overview_sector_card(
-            title="🔄  PRIMER SECTOR : CICLOS DE TRABAJO",
+            title="🔄  SECTOR 1 : PROTOCOLO GIT",
             accent_color="#38bdf8",
             sector_idx=1,
             actions=[
@@ -631,11 +672,11 @@ class LumenProjectWorkspaceView(QWidget):
                 ("⚡", "Estado y Sincronización", "Status / Fetch / Pull")
             ]
         )
-        overview_layout.addWidget(card_s1, 0, 0)
+        overview_layout.addWidget(card_s1, 1)
 
-        # Sector 2 Card
+        # Pilar 2: Sector 2 (Entornos y Ejecución)
         card_s2 = self.create_overview_sector_card(
-            title="🚀  SEGUNDO SECTOR : ENTORNOS Y EJECUCIÓN",
+            title="🚀  SECTOR 2 : ENTORNOS & RUN",
             accent_color="#10b981",
             sector_idx=2,
             actions=[
@@ -644,11 +685,11 @@ class LumenProjectWorkspaceView(QWidget):
                 ("🐳", "Docker y puertos", "Control de contenedores, compose y mapeos")
             ]
         )
-        overview_layout.addWidget(card_s2, 0, 1)
+        overview_layout.addWidget(card_s2, 1)
 
-        # Sector 3 Card
+        # Pilar 3: Sector 3 (Herramientas & IA)
         card_s3 = self.create_overview_sector_card(
-            title="🧠  TERCER SECTOR : HERRAMIENTAS & IA",
+            title="🧠  SECTOR 3 : HERRAMIENTAS & IA",
             accent_color="#c084fc",
             sector_idx=3,
             actions=[
@@ -657,18 +698,7 @@ class LumenProjectWorkspaceView(QWidget):
                 ("🤖", "Utilidades IA", "Asistente Ollama local, refactor y ayuda dev")
             ]
         )
-        overview_layout.addWidget(card_s3, 1, 0)
-
-        # Sector 4 Card
-        card_s4 = self.create_overview_sector_card(
-            title="👤  SECTOR CUATRO : USUARIO GIT",
-            accent_color="#fbbf24",
-            sector_idx=4,
-            actions=[
-                ("🏷️", "Usuario Git", "Nombre, correo y firma de autor para commits")
-            ]
-        )
-        overview_layout.addWidget(card_s4, 1, 1)
+        overview_layout.addWidget(card_s3, 1)
 
         self.sectors_stack.addWidget(self.page_overview)
 
@@ -706,18 +736,6 @@ class LumenProjectWorkspaceView(QWidget):
         )
         self.sectors_stack.addWidget(self.page_sector3_view)
 
-        # =============================================================
-        # PÁGINA 4: VENTANA DEDICADA DEL SECTOR 4 (USUARIO GIT)
-        # =============================================================
-        self.page_sector4_view = self.create_simple_sector_view(
-            title="👤  SECTOR CUATRO : USUARIO GIT",
-            accent_color="#fbbf24",
-            actions=[
-                ("🏷️", "Usuario Git", "Nombre, correo y firma de autor para commits")
-            ]
-        )
-        self.sectors_stack.addWidget(self.page_sector4_view)
-
         content_layout.addWidget(self.sectors_stack)
 
         # -------------------------------------------------------------
@@ -727,8 +745,9 @@ class LumenProjectWorkspaceView(QWidget):
         self.terminal_frame.setProperty("class", "surface")
         self.terminal_frame.setStyleSheet("""
             QFrame.surface {
-                background-color: #07090e;
-                border: 1px solid rgba(99, 102, 241, 0.25);
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(20, 23, 33, 0.92), stop:1 rgba(14, 16, 23, 0.92));
+                border: 1px solid rgba(99, 102, 241, 0.28);
                 border-radius: 10px;
             }
         """)
@@ -757,6 +776,32 @@ class LumenProjectWorkspaceView(QWidget):
         self.lbl_t_title = QLabel("lumen-terminal@abraxas:~$")
         self.lbl_t_title.setStyleSheet("font-family: monospace; font-size: 12px; font-weight: 700; color: #a5b4fc;")
         t_bar_layout.addWidget(self.lbl_t_title)
+
+        t_bar_layout.addStretch()
+
+        # Botón Central: Alternar entre Terminal y Grafo de Ramas (GitHub Network)
+        self.btn_toggle_graph_terminal = QPushButton("📊  Ver Grafo de Ramas (Network)")
+        self.btn_toggle_graph_terminal.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_graph_terminal.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.14);
+                color: #38bdf8;
+                border: 1px solid rgba(56, 189, 248, 0.45);
+                border-radius: 5px;
+                padding: 4px 16px;
+                font-weight: 800;
+                font-size: 11.5px;
+                letter-spacing: 0.3px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.30);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        self.btn_toggle_graph_terminal.clicked.connect(self.toggle_terminal_graph_view)
+        self.btn_toggle_graph_terminal.setVisible(False)
+        t_bar_layout.addWidget(self.btn_toggle_graph_terminal)
 
         t_bar_layout.addStretch()
 
@@ -804,17 +849,27 @@ class LumenProjectWorkspaceView(QWidget):
         btn_clear.clicked.connect(self.clear_terminal_output)
         t_bar_layout.addWidget(btn_clear)
 
-        lbl_t_status = QLabel("⚡ VISOR DE SALIDA [READ-ONLY]")
-        lbl_t_status.setStyleSheet("font-size: 10px; font-weight: 800; color: #38bdf8; background-color: rgba(6, 182, 212, 0.12); border: 1px solid rgba(6, 182, 212, 0.35); border-radius: 4px; padding: 2px 8px; letter-spacing: 0.5px;")
-        t_bar_layout.addWidget(lbl_t_status)
+        self.lbl_t_status = QLabel("⚡ VISOR DE SALIDA [READ-ONLY]")
+        self.lbl_t_status.setStyleSheet("font-size: 10px; font-weight: 800; color: #38bdf8; background-color: rgba(6, 182, 212, 0.12); border: 1px solid rgba(6, 182, 212, 0.35); border-radius: 4px; padding: 2px 8px; letter-spacing: 0.5px;")
+        t_bar_layout.addWidget(self.lbl_t_status)
 
         b_layout.addWidget(term_bar)
 
-        # Visor de texto (QTextEdit de Solo Lectura con soporte HTML coloreado)
-        self.terminal_display = LumenTerminalDisplay()
-        b_layout.addWidget(self.terminal_display)
+        # Stack para conmutar entre Terminal y Grafo de Ramas (GitHub Network)
+        self.terminal_stack = QStackedWidget()
 
-        content_layout.addWidget(self.terminal_frame)
+        # Página 0: Visor de texto terminal clásico
+        self.terminal_display = LumenTerminalDisplay()
+        self.terminal_stack.addWidget(self.terminal_display)
+
+        # Página 1: Vista de Grafo de Ramas estilo GitHub Network
+        self.git_graph_container = self.create_git_graph_view()
+        self.terminal_stack.addWidget(self.git_graph_container)
+
+        b_layout.addWidget(self.terminal_stack)
+
+        self.terminal_frame.setMinimumHeight(320)
+        content_layout.addWidget(self.terminal_frame, 1)
 
         scroll_area.setWidget(scroll_content)
         root_layout.addWidget(scroll_area, 1)
@@ -826,6 +881,7 @@ class LumenProjectWorkspaceView(QWidget):
         """Crea una tarjeta para la vista general que permite entrar a la ventana limpia del sector."""
         card = QFrame()
         card.setProperty("class", "surface")
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         card.setStyleSheet(f"""
             QFrame.surface {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -836,8 +892,8 @@ class LumenProjectWorkspaceView(QWidget):
             }}
         """)
         c_layout = QVBoxLayout(card)
-        c_layout.setContentsMargins(16, 14, 16, 14)
-        c_layout.setSpacing(10)
+        c_layout.setContentsMargins(14, 10, 14, 10)
+        c_layout.setSpacing(6)
 
         # Header del Sector con botón de abrir
         h_layout = QHBoxLayout()
@@ -892,8 +948,8 @@ class LumenProjectWorkspaceView(QWidget):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
 
-        # Sub-stack interno para alternar entre Flujo y Vista IA AUDIT
-        self.sector1_sub_stack = QStackedWidget()
+        # Sub-stack interno reactivo para alternar entre Flujo y Vista IA AUDIT
+        self.sector1_sub_stack = LumenDynamicStackedWidget()
 
         # =============================================================
         # SUB-PÁGINA 0: FLUJO PRINCIPAL DE CICLOS DE TRABAJO
@@ -964,7 +1020,12 @@ class LumenProjectWorkspaceView(QWidget):
         btn_push.clicked.connect(self.run_git_push)
         w_lay.addWidget(btn_push)
 
-        # Botón 6: Volver
+        # Botón 6: Control de Ramas (Protocolo Artemis)
+        btn_branches = LumenCyberActionButton("🌿", "Control de Ramas", "Matriz táctica de ramas: checkout, creación, borrado y despliegue", accent_color="#38bdf8")
+        btn_branches.clicked.connect(self.open_branches_view)
+        w_lay.addWidget(btn_branches)
+
+        # Botón 7: Volver
         btn_volver = LumenCyberActionButton("◀", "Volver", "Regresar al menú principal de Sectores", accent_color="#9ca3af")
         btn_volver.clicked.connect(self.go_back_to_sectors_overview)
         w_lay.addWidget(btn_volver)
@@ -1534,8 +1595,387 @@ class LumenProjectWorkspaceView(QWidget):
         man_lay.addStretch()
         self.sector1_sub_stack.addWidget(page_manual)
 
+        # =============================================================
+        # SUB-PÁGINA 8: CONTROL DE RAMAS (PROTOCOLO ARTEMIS)
+        # =============================================================
+        self.page_branches = self.create_sector1_branches_view()
+        self.sector1_sub_stack.addWidget(self.page_branches)
+
         layout.addWidget(self.sector1_sub_stack)
         return card
+
+    def create_sector1_branches_view(self) -> QWidget:
+        """Crea la sub-página dedicada para el Control y Matriz Táctica de Ramas (Protocolo Artemis)."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # 1. Cabecera
+        head = QHBoxLayout()
+        head.setSpacing(10)
+
+        btn_back_main = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back_main.setCursor(Qt.PointingHandCursor)
+        btn_back_main.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #bae6fd;
+                border: 1px solid rgba(56, 189, 248, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.30);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_back_main.clicked.connect(self.go_back_to_sectors_overview)
+        head.addWidget(btn_back_main)
+
+        btn_to_work = QPushButton("🔄  Ciclos de Trabajo")
+        btn_to_work.setCursor(Qt.PointingHandCursor)
+        btn_to_work.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.15);
+                color: #c7d2fe;
+                border: 1px solid rgba(99, 102, 241, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(99, 102, 241, 0.30);
+                border-color: #818cf8;
+                color: #ffffff;
+            }
+        """)
+        btn_to_work.clicked.connect(self.go_back_to_work_cycles)
+        head.addWidget(btn_to_work)
+
+        lbl_title = QLabel("🌿  CONTROL DE RAMAS")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
+        head.addWidget(lbl_title)
+        head.addStretch()
+
+        lbl_pill = QLabel("[PROTOCOLO ARTEMIS • MATRIZ TÁCTICA]")
+        lbl_pill.setFixedHeight(24)
+        lbl_pill.setAlignment(Qt.AlignCenter)
+        lbl_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #34d399; background-color: rgba(52, 211, 153, 0.12); border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 4px; padding: 2px 8px;")
+        head.addWidget(lbl_pill)
+        layout.addLayout(head)
+
+        # 2. Barra de Leyenda Táctica
+        legend_frame = QFrame()
+        legend_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.02);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 6px;
+                padding: 4px 10px;
+            }
+        """)
+        leg_lay = QHBoxLayout(legend_frame)
+        leg_lay.setContentsMargins(8, 4, 8, 4)
+        leg_lay.setSpacing(14)
+
+        leg_title = QLabel("Leyenda:")
+        leg_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #9ca3af;")
+        leg_lay.addWidget(leg_title)
+
+        legends = [
+            ("■ Stale/Gone", "#f87171"),
+            ("■ Local (Mía)", "#fde047"),
+            ("■ Local", "#f3f4f6"),
+            ("■ Remota (Otros)", "#4ade80"),
+            ("■ Remota (Mía)", "#60a5fa")
+        ]
+        for leg_text, leg_color in legends:
+            l_lbl = QLabel(leg_text)
+            l_lbl.setStyleSheet(f"font-size: 11px; font-weight: 700; color: {leg_color};")
+            leg_lay.addWidget(l_lbl)
+        leg_lay.addStretch()
+
+        self.lbl_branch_count_info = QLabel("")
+        self.lbl_branch_count_info.setStyleSheet("font-size: 11px; color: #9ca3af; font-family: monospace;")
+        leg_lay.addWidget(self.lbl_branch_count_info)
+        layout.addWidget(legend_frame)
+
+        # 3. Lista de Ramas con Scroll (Limpio y Sin Recuadro Negro)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(220)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
+        """)
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet("background: transparent;")
+        self.branches_list_layout = QVBoxLayout(scroll_content)
+        self.branches_list_layout.setContentsMargins(4, 4, 4, 4)
+        self.branches_list_layout.setSpacing(6)
+        self.branches_list_layout.addStretch()
+        scroll.setWidget(scroll_content)
+        layout.addWidget(scroll, 1)
+
+        # 4. Cajón Dinámico de Acciones (Nueva Rama / Eliminar / Desplegar)
+        self.branches_action_drawer = QStackedWidget()
+        self.branches_action_drawer.setVisible(False)
+        self.branches_action_drawer.setStyleSheet("""
+            QStackedWidget {
+                background-color: rgba(255, 255, 255, 0.02);
+                border: 1px solid rgba(56, 189, 248, 0.25);
+                border-radius: 8px;
+            }
+        """)
+
+        # Panel 1: Crear Rama
+        p_create = QFrame()
+        p_create.setStyleSheet("background: transparent; border: none;")
+        pc_lay = QVBoxLayout(p_create)
+        pc_lay.setContentsMargins(12, 10, 12, 10)
+        pc_lay.setSpacing(8)
+
+        lbl_pc = QLabel("➕  CREAR NUEVA RAMA TÁCTICA (git checkout -b)")
+        lbl_pc.setStyleSheet("font-size: 12px; font-weight: 800; color: #34d399;")
+        pc_lay.addWidget(lbl_pc)
+
+        row_c = QHBoxLayout()
+        row_c.setSpacing(10)
+        self.txt_new_branch_name = QLineEdit()
+        self.txt_new_branch_name.setPlaceholderText("Nombre de la nueva rama (ej. feat/kanban, fix/auth)...")
+        self.txt_new_branch_name.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(255, 255, 255, 0.04);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                color: #f3f4f6;
+                padding: 6px 10px;
+                font-size: 12px;
+            }
+            QLineEdit:focus { border-color: #34d399; }
+        """)
+        self.txt_new_branch_name.returnPressed.connect(self.execute_create_branch_action)
+        row_c.addWidget(self.txt_new_branch_name, 1)
+
+        btn_confirm_create = QPushButton("Crear y Cambiar")
+        btn_confirm_create.setCursor(Qt.PointingHandCursor)
+        btn_confirm_create.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.20);
+                color: #6ee7b7;
+                border: 1px solid #34d399;
+                border-radius: 6px;
+                padding: 6px 14px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover { background-color: rgba(52, 211, 153, 0.35); color: #ffffff; }
+        """)
+        btn_confirm_create.clicked.connect(self.execute_create_branch_action)
+        row_c.addWidget(btn_confirm_create)
+
+        btn_cancel_create = QPushButton("Cancelar")
+        btn_cancel_create.setCursor(Qt.PointingHandCursor)
+        btn_cancel_create.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-size: 11.5px;
+            }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 0.10); color: #ffffff; }
+        """)
+        btn_cancel_create.clicked.connect(self.hide_branches_action_drawer)
+        row_c.addWidget(btn_cancel_create)
+        pc_lay.addLayout(row_c)
+        self.branches_action_drawer.addWidget(p_create)
+
+        # Panel 2: Eliminar Rama
+        p_delete = QFrame()
+        p_delete.setStyleSheet("background: transparent; border: none;")
+        pd_lay = QVBoxLayout(p_delete)
+        pd_lay.setContentsMargins(12, 10, 12, 10)
+        pd_lay.setSpacing(8)
+
+        lbl_pd = QLabel("🗑️  ELIMINAR RAMA LOCAL")
+        lbl_pd.setStyleSheet("font-size: 12px; font-weight: 800; color: #f87171;")
+        pd_lay.addWidget(lbl_pd)
+
+        row_d = QHBoxLayout()
+        row_d.setSpacing(10)
+        self.cmb_del_branch = QComboBox()
+        self.cmb_del_branch.setItemDelegate(QStyledItemDelegate())
+        self.cmb_del_branch.setStyleSheet("""
+            QComboBox {
+                background-color: rgba(255, 255, 255, 0.04);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                color: #f3f4f6;
+                padding: 6px 10px;
+                font-size: 12px;
+            }
+        """)
+        row_d.addWidget(self.cmb_del_branch, 1)
+
+        self.chk_del_force = QCheckBox("Forzar eliminación (-D)")
+        self.chk_del_force.setStyleSheet("color: #f87171; font-size: 11px; font-weight: 700;")
+        row_d.addWidget(self.chk_del_force)
+
+        btn_confirm_del = QPushButton("Eliminar Rama")
+        btn_confirm_del.setCursor(Qt.PointingHandCursor)
+        btn_confirm_del.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(248, 113, 113, 0.20);
+                color: #fca5a5;
+                border: 1px solid #f87171;
+                border-radius: 6px;
+                padding: 6px 14px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover { background-color: rgba(248, 113, 113, 0.35); color: #ffffff; }
+        """)
+        btn_confirm_del.clicked.connect(self.execute_delete_branch_action)
+        row_d.addWidget(btn_confirm_del)
+
+        btn_cancel_del = QPushButton("Cancelar")
+        btn_cancel_del.setCursor(Qt.PointingHandCursor)
+        btn_cancel_del.setStyleSheet(btn_cancel_create.styleSheet())
+        btn_cancel_del.clicked.connect(self.hide_branches_action_drawer)
+        row_d.addWidget(btn_cancel_del)
+        pd_lay.addLayout(row_d)
+        self.branches_action_drawer.addWidget(p_delete)
+
+        # Panel 3: Desplegar Rama (Push upstream)
+        p_deploy = QFrame()
+        p_deploy.setStyleSheet("background: transparent; border: none;")
+        pdp_lay = QVBoxLayout(p_deploy)
+        pdp_lay.setContentsMargins(12, 10, 12, 10)
+        pdp_lay.setSpacing(8)
+
+        lbl_pdp = QLabel("🚀  DESPLEGAR RAMA LOCAL (git push -u origin <rama>)")
+        lbl_pdp.setStyleSheet("font-size: 12px; font-weight: 800; color: #60a5fa;")
+        pdp_lay.addWidget(lbl_pdp)
+
+        row_dp = QHBoxLayout()
+        row_dp.setSpacing(10)
+        self.cmb_deploy_branch = QComboBox()
+        self.cmb_deploy_branch.setItemDelegate(QStyledItemDelegate())
+        self.cmb_deploy_branch.setStyleSheet(self.cmb_del_branch.styleSheet())
+        row_dp.addWidget(self.cmb_deploy_branch, 1)
+
+        btn_confirm_deploy = QPushButton("Desplegar a Origin")
+        btn_confirm_deploy.setCursor(Qt.PointingHandCursor)
+        btn_confirm_deploy.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(96, 165, 250, 0.20);
+                color: #93c5fd;
+                border: 1px solid #60a5fa;
+                border-radius: 6px;
+                padding: 6px 14px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover { background-color: rgba(96, 165, 250, 0.35); color: #ffffff; }
+        """)
+        btn_confirm_deploy.clicked.connect(self.execute_deploy_branch_action)
+        row_dp.addWidget(btn_confirm_deploy)
+
+        btn_cancel_deploy = QPushButton("Cancelar")
+        btn_cancel_deploy.setCursor(Qt.PointingHandCursor)
+        btn_cancel_deploy.setStyleSheet(btn_cancel_create.styleSheet())
+        btn_cancel_deploy.clicked.connect(self.hide_branches_action_drawer)
+        row_dp.addWidget(btn_cancel_deploy)
+        pdp_lay.addLayout(row_dp)
+        self.branches_action_drawer.addWidget(p_deploy)
+
+        layout.addWidget(self.branches_action_drawer)
+
+        # 5. Barra Inferior de Acciones Principales
+        bot_bar = QHBoxLayout()
+        bot_bar.setSpacing(10)
+
+        btn_act_new = QPushButton("➕  Crear Rama")
+        btn_act_new.setCursor(Qt.PointingHandCursor)
+        btn_act_new.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.12);
+                color: #6ee7b7;
+                border: 1px solid rgba(52, 211, 153, 0.35);
+                border-radius: 6px;
+                padding: 7px 14px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover { background-color: rgba(52, 211, 153, 0.25); color: #ffffff; }
+        """)
+        btn_act_new.clicked.connect(self.show_create_branch_drawer)
+        bot_bar.addWidget(btn_act_new)
+
+        btn_act_del = QPushButton("🗑️  Eliminar Rama")
+        btn_act_del.setCursor(Qt.PointingHandCursor)
+        btn_act_del.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(248, 113, 113, 0.12);
+                color: #fca5a5;
+                border: 1px solid rgba(248, 113, 113, 0.35);
+                border-radius: 6px;
+                padding: 7px 14px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover { background-color: rgba(248, 113, 113, 0.25); color: #ffffff; }
+        """)
+        btn_act_del.clicked.connect(self.show_delete_branch_drawer)
+        bot_bar.addWidget(btn_act_del)
+
+        btn_act_dep = QPushButton("🚀  Desplegar Rama")
+        btn_act_dep.setCursor(Qt.PointingHandCursor)
+        btn_act_dep.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(96, 165, 250, 0.12);
+                color: #93c5fd;
+                border: 1px solid rgba(96, 165, 250, 0.35);
+                border-radius: 6px;
+                padding: 7px 14px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover { background-color: rgba(96, 165, 250, 0.25); color: #ffffff; }
+        """)
+        btn_act_dep.clicked.connect(self.show_deploy_branch_drawer)
+        bot_bar.addWidget(btn_act_dep)
+
+        btn_act_ref = QPushButton("🔄  Refrescar")
+        btn_act_ref.setCursor(Qt.PointingHandCursor)
+        btn_act_ref.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #d1d5db;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                padding: 7px 14px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 0.12); color: #ffffff; }
+        """)
+        btn_act_ref.clicked.connect(self.refresh_branches_list)
+        bot_bar.addWidget(btn_act_ref)
+
+        bot_bar.addStretch()
+        layout.addLayout(bot_bar)
+
+        return page
 
     def create_simple_sector_view(self, title: str, accent_color: str, actions: list) -> QFrame:
         """Crea una ventana dedicada y limpia para un sector específico con diseño consistente."""
@@ -1601,6 +2041,10 @@ class LumenProjectWorkspaceView(QWidget):
         self.sectors_stack.setCurrentIndex(sector_idx)
         if sector_idx == 1 and hasattr(self, "sector1_sub_stack"):
             self.sector1_sub_stack.setCurrentIndex(0)
+        if hasattr(self, "btn_toggle_graph_terminal"):
+            self.btn_toggle_graph_terminal.setVisible(False)
+        if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 1:
+            self.toggle_terminal_graph_view()
         self.terminal_display.log("NAV", f"Abriendo ventana dedicada de <b>{sector_title}</b>.", tag_color="#38bdf8", prefix="📂")
 
     def open_sector_and_handle(self, sector_idx: int, sector_title: str, action_title: str):
@@ -1608,11 +2052,472 @@ class LumenProjectWorkspaceView(QWidget):
         if sector_idx == 1:
             if action_title == "Ciclos de Trabajo":
                 self.open_sector_view(1, "Ciclos de Trabajo")
+            elif action_title == "Control de Ramas":
+                self.open_branches_view()
             else:
                 self.handle_action_click(action_title)
         else:
             self.open_sector_view(sector_idx, sector_title)
             self.handle_action_click(action_title)
+
+    def open_branches_view(self):
+        """Abre la vista dedicada de Control de Ramas en el Sector 1 (Protocolo Artemis)."""
+        self.sectors_stack.setCurrentIndex(1)
+        self.sector1_sub_stack.setCurrentWidget(self.page_branches)
+        self.terminal_display.log("NAV", "Accediendo al módulo <b>Control de Ramas</b> (Protocolo Artemis)...", tag_color="#38bdf8", prefix="🌿")
+        self.refresh_branches_list()
+        self.refresh_git_graph()
+        if hasattr(self, "btn_toggle_graph_terminal"):
+            self.btn_toggle_graph_terminal.setVisible(True)
+        if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 0:
+            self.toggle_terminal_graph_view()
+        self.sector1_sub_stack.updateGeometry()
+        self.sectors_stack.updateGeometry()
+
+    def refresh_branches_list(self):
+        """Consulta y renderiza en vivo la matriz de ramas según el Protocolo Artemis."""
+        path = self.project_data.get("path")
+        if not path or not os.path.exists(path):
+            return
+
+        # Limpiar lista anterior
+        while self.branches_list_layout.count():
+            item = self.branches_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+            elif item.layout():
+                sub_lay = item.layout()
+                while sub_lay.count():
+                    sub_item = sub_lay.takeAt(0)
+                    if sub_item.widget():
+                        sub_item.widget().deleteLater()
+
+        matrix = get_git_branches_matrix(path)
+        branches = matrix.get("branches", [])
+        curr_b = matrix.get("current_branch", "")
+        undeployed = matrix.get("undeployed", [])
+
+        self.lbl_branch_count_info.setText(f"Ramas: {len(branches)} | Activa: {curr_b}")
+
+        # Poblar lista de ramas
+        for b in branches:
+            row_frame = QFrame()
+            is_active = b["is_active"]
+            accent = b["color"]
+
+            row_frame.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {"rgba(56, 189, 248, 0.08)" if is_active else "rgba(255, 255, 255, 0.02)"};
+                    border: 1px solid {"rgba(56, 189, 248, 0.40)" if is_active else "rgba(255, 255, 255, 0.06)"};
+                    border-radius: 6px;
+                    padding: 5px 10px;
+                }}
+                QFrame:hover {{
+                    background-color: rgba(255, 255, 255, 0.05);
+                    border-color: {accent};
+                }}
+            """)
+            r_lay = QHBoxLayout(row_frame)
+            r_lay.setContentsMargins(8, 4, 8, 4)
+            r_lay.setSpacing(10)
+
+            # Símbolo / Indicador
+            lbl_dot = QLabel("★" if is_active else "◈")
+            lbl_dot.setStyleSheet(f"color: {accent}; font-size: 13px; font-weight: 800; min-width: 14px;")
+            r_lay.addWidget(lbl_dot)
+
+            # Nombre de la rama
+            lbl_name = QLabel(b["name"])
+            lbl_name.setStyleSheet(f"font-size: 12.5px; font-weight: 800; color: {accent}; min-width: 150px;")
+            r_lay.addWidget(lbl_name, 1)
+
+            # Autor
+            lbl_author = QLabel(f"👤 {b['author']}")
+            lbl_author.setStyleSheet("font-size: 11.5px; color: #9ca3af; min-width: 90px;")
+            r_lay.addWidget(lbl_author)
+
+            # Fecha
+            lbl_date = QLabel(f"⏱ {b['date']}")
+            lbl_date.setStyleSheet("font-size: 11px; color: #6b7280; min-width: 90px;")
+            r_lay.addWidget(lbl_date)
+
+            # Etiqueta de Estado
+            lbl_st = QLabel(b["status_label"])
+            lbl_st.setStyleSheet(f"""
+                font-size: 10.5px;
+                font-weight: 700;
+                color: {accent};
+                background-color: rgba(255, 255, 255, 0.03);
+                border: 1px solid {accent};
+                border-radius: 4px;
+                padding: 2px 7px;
+            """)
+            r_lay.addWidget(lbl_st)
+
+            # Acción
+            if is_active:
+                lbl_act = QLabel("✔ ACTIVA")
+                lbl_act.setStyleSheet("font-size: 10.5px; font-weight: 900; color: #34d399; padding: 3px 8px;")
+                r_lay.addWidget(lbl_act)
+            else:
+                btn_checkout = QPushButton("🔀 Checkout")
+                btn_checkout.setCursor(Qt.PointingHandCursor)
+                btn_checkout.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(56, 189, 248, 0.15);
+                        color: #7dd3fc;
+                        border: 1px solid rgba(56, 189, 248, 0.40);
+                        border-radius: 4px;
+                        padding: 3px 10px;
+                        font-weight: 700;
+                        font-size: 11px;
+                    }
+                    QPushButton:hover {
+                        background-color: rgba(56, 189, 248, 0.35);
+                        border-color: #38bdf8;
+                        color: #ffffff;
+                    }
+                """)
+                btn_checkout.clicked.connect(lambda checked=False, n=b["name"]: self.do_branch_checkout(n))
+                r_lay.addWidget(btn_checkout)
+
+            self.branches_list_layout.addWidget(row_frame)
+
+        self.branches_list_layout.addStretch()
+
+        # Actualizar opciones de borrado (solo locales no activas)
+        self.cmb_del_branch.clear()
+        local_deletable = [b["name"] for b in branches if not b["is_remote"] and not b["is_active"]]
+        if local_deletable:
+            for b_name in local_deletable:
+                self.cmb_del_branch.addItem(b_name)
+        else:
+            self.cmb_del_branch.addItem("(Sin ramas para borrar)")
+
+        # Actualizar opciones de despliegue
+        self.cmb_deploy_branch.clear()
+        if undeployed:
+            for u in undeployed:
+                self.cmb_deploy_branch.addItem(u)
+        else:
+            self.cmb_deploy_branch.addItem("(Sin ramas pendientes)")
+
+    def do_branch_checkout(self, branch_name: str):
+        """Ejecuta el checkout hacia la rama solicitada."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+
+        self.terminal_display.log("BRANCH-CHECKOUT", f"Ejecutando checkout hacia <b>{branch_name}</b>...", tag_color="#38bdf8", prefix="🔀")
+        ok, msg = execute_git_checkout(path, branch_name)
+        if ok:
+            self.terminal_display.log_success("BRANCH-CHECKOUT", f"Conmutación exitosa a la rama <b>{branch_name}</b>.")
+            if msg:
+                self.terminal_display.log("GIT", msg, tag_color="#38bdf8", prefix="•")
+            self.refresh_current_project(reset_terminal=False)
+            self.refresh_branches_list()
+        else:
+            self.terminal_display.log_error("BRANCH-CHECKOUT", f"Fallo al cambiar de rama: {msg}")
+
+    def hide_branches_action_drawer(self):
+        """Oculta el cajón de acciones y recalcula la geometría dinámica del stack."""
+        if hasattr(self, "branches_action_drawer"):
+            self.branches_action_drawer.setVisible(False)
+        if hasattr(self, "sector1_sub_stack"):
+            self.sector1_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+
+    def show_create_branch_drawer(self):
+        """Muestra el cajón de creación de nueva rama."""
+        self.branches_action_drawer.setCurrentIndex(0)
+        self.branches_action_drawer.setVisible(True)
+        if hasattr(self, "sector1_sub_stack"):
+            self.sector1_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.txt_new_branch_name.setFocus()
+
+    def execute_create_branch_action(self):
+        """Crea una nueva rama táctica y conmuta a ella."""
+        path = self.project_data.get("path")
+        name = self.txt_new_branch_name.text().strip()
+        if not path or not name:
+            self.terminal_display.log_error("BRANCH-CREATE", "El nombre de la nueva rama no puede estar vacío.")
+            return
+
+        self.terminal_display.log("BRANCH-CREATE", f"Creando y conmutando a nueva rama <b>{name}</b>...", tag_color="#34d399", prefix="➕")
+        ok, msg = execute_git_create_branch(path, name)
+        if ok:
+            self.terminal_display.log_success("BRANCH-CREATE", f"Rama <b>{name}</b> creada y activada correctamente.")
+            self.txt_new_branch_name.clear()
+            self.hide_branches_action_drawer()
+            self.refresh_current_project(reset_terminal=False)
+            self.refresh_branches_list()
+        else:
+            self.terminal_display.log_error("BRANCH-CREATE", f"Fallo al crear rama: {msg}")
+
+    def show_delete_branch_drawer(self):
+        """Muestra el cajón para eliminar ramas locales."""
+        cur = self.cmb_del_branch.currentText().strip()
+        if not cur or cur.startswith("("):
+            self.terminal_display.log("BRANCH-DELETE", "ℹ️ No hay otras ramas locales que se puedan eliminar.", tag_color="#fbbf24", prefix="⚠️")
+            return
+        self.branches_action_drawer.setCurrentIndex(1)
+        self.branches_action_drawer.setVisible(True)
+        if hasattr(self, "sector1_sub_stack"):
+            self.sector1_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+
+    def execute_delete_branch_action(self):
+        """Elimina la rama local seleccionada."""
+        path = self.project_data.get("path")
+        target = self.cmb_del_branch.currentText().strip()
+        if not path or not target or target.startswith("("):
+            return
+
+        force = self.chk_del_force.isChecked()
+        flag_str = " (forzado -D)" if force else " (-d)"
+        self.terminal_display.log("BRANCH-DELETE", f"Eliminando rama local <b>{target}</b>{flag_str}...", tag_color="#f87171", prefix="🗑️")
+        ok, msg = execute_git_delete_branch(path, target, force=force)
+        if ok:
+            self.terminal_display.log_success("BRANCH-DELETE", f"Rama <b>{target}</b> eliminada exitosamente.")
+            self.hide_branches_action_drawer()
+            self.refresh_current_project(reset_terminal=False)
+            self.refresh_branches_list()
+        else:
+            tip = "\nTip: Puedes marcar la casilla 'Forzar eliminación (-D)' si la rama no ha sido fusionada aún." if not force else ""
+            self.terminal_display.log_error("BRANCH-DELETE", f"Fallo al eliminar rama '{target}':\n{msg}{tip}")
+
+    def show_deploy_branch_drawer(self):
+        """Muestra el cajón para desplegar ramas locales al remoto."""
+        cur = self.cmb_deploy_branch.currentText().strip()
+        if not cur or cur.startswith("("):
+            self.terminal_display.log("BRANCH-DEPLOY", "✅ Todas las ramas locales ya están sincronizadas con el remoto.", tag_color="#34d399", prefix="✔")
+            return
+        self.branches_action_drawer.setCurrentIndex(2)
+        self.branches_action_drawer.setVisible(True)
+        if hasattr(self, "sector1_sub_stack"):
+            self.sector1_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+
+    def execute_deploy_branch_action(self):
+        """Despliega la rama local seleccionada al remoto origin."""
+        path = self.project_data.get("path")
+        target = self.cmb_deploy_branch.currentText().strip()
+        if not path or not target or target.startswith("("):
+            return
+
+        self.terminal_display.log("BRANCH-DEPLOY", f"Desplegando rama <b>{target}</b> a origin (git push -u)...", tag_color="#60a5fa", prefix="🚀")
+        ok, msg = execute_git_deploy_branch(path, target)
+        if ok:
+            self.terminal_display.log_success("BRANCH-DEPLOY", f"Rama <b>{target}</b> desplegada con éxito en origin.")
+            self.hide_branches_action_drawer()
+            self.refresh_current_project(reset_terminal=False)
+            self.refresh_branches_list()
+        else:
+            self.terminal_display.log_error("BRANCH-DEPLOY", f"Fallo al desplegar rama '{target}':\n{msg}")
+
+    # -----------------------------------------------------------------
+    # VISTA DE GRAFOS DE RAMAS (ESTILO GITHUB NETWORK GRAPH)
+    # -----------------------------------------------------------------
+    def toggle_terminal_graph_view(self):
+        """Alterna entre el visor de Terminal y el Grafo de Ramas estilo GitHub Network."""
+        if self.terminal_stack.currentIndex() == 0:
+            # Pasar a vista de Grafo
+            self.terminal_stack.setCurrentIndex(1)
+            self.btn_toggle_graph_terminal.setText("📟  Ver Terminal de Salida")
+            self.btn_toggle_graph_terminal.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(99, 102, 241, 0.22);
+                    color: #c7d2fe;
+                    border: 1px solid #818cf8;
+                    border-radius: 5px;
+                    padding: 4px 16px;
+                    font-weight: 800;
+                    font-size: 11.5px;
+                    letter-spacing: 0.3px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(99, 102, 241, 0.35);
+                    color: #ffffff;
+                }
+            """)
+            self.lbl_t_title.setText("lumen-git-network@abraxas:~$")
+            self.lbl_t_status.setText("🌐 GRAFO DE RAMAS [GITHUB NETWORK]")
+            self.refresh_git_graph()
+        else:
+            # Volver a Terminal de salida
+            self.terminal_stack.setCurrentIndex(0)
+            self.btn_toggle_graph_terminal.setText("📊  Ver Grafo de Ramas (Network)")
+            self.btn_toggle_graph_terminal.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(56, 189, 248, 0.14);
+                    color: #38bdf8;
+                    border: 1px solid rgba(56, 189, 248, 0.45);
+                    border-radius: 5px;
+                    padding: 4px 16px;
+                    font-weight: 800;
+                    font-size: 11.5px;
+                    letter-spacing: 0.3px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(56, 189, 248, 0.30);
+                    border-color: #38bdf8;
+                    color: #ffffff;
+                }
+            """)
+            self.lbl_t_title.setText("lumen-terminal@abraxas:~$")
+            self.lbl_t_status.setText("⚡ VISOR DE SALIDA [READ-ONLY]")
+
+    def create_git_graph_view(self) -> QWidget:
+        """Crea la vista de Grafo Horizontal de Ramas estilo VS Code Git Graph / GitHub Network."""
+        widget = QWidget()
+        widget.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+
+        # Barra de cabecera interna del grafo
+        top_bar = QHBoxLayout()
+        top_bar.setContentsMargins(4, 2, 4, 2)
+        top_bar.setSpacing(8)
+
+        lbl_icon = QLabel("🌐")
+        lbl_icon.setStyleSheet("font-size: 13px;")
+        top_bar.addWidget(lbl_icon)
+
+        lbl_title = QLabel("RED HORIZONTAL DE RAMAS")
+        lbl_title.setStyleSheet("font-size: 11.5px; font-weight: 800; color: #38bdf8; letter-spacing: 0.5px;")
+        top_bar.addWidget(lbl_title)
+
+        lbl_sub = QLabel("• Estilo VS Code / GitHub Network (carriles paralelos, quiebres a 45° y nodos interactivos)")
+        lbl_sub.setStyleSheet("font-size: 10.5px; color: #9ca3af;")
+        top_bar.addWidget(lbl_sub)
+
+        top_bar.addStretch()
+
+        btn_head = QPushButton("🎯 Ir a HEAD")
+        btn_head.setCursor(Qt.PointingHandCursor)
+        btn_head.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #bae6fd;
+                border: 1px solid rgba(56, 189, 248, 0.35);
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.30);
+                color: #ffffff;
+            }
+        """)
+        btn_head.clicked.connect(lambda: self.git_graph_view.scroll_to_head() if hasattr(self, "git_graph_view") else None)
+        top_bar.addWidget(btn_head)
+
+        btn_root = QPushButton("⏪ Raíz")
+        btn_root.setCursor(Qt.PointingHandCursor)
+        btn_root.setStyleSheet(btn_head.styleSheet())
+        btn_root.clicked.connect(lambda: self.git_graph_view.scroll_to_root() if hasattr(self, "git_graph_view") else None)
+        top_bar.addWidget(btn_root)
+
+        btn_zin = QPushButton("➕")
+        btn_zin.setCursor(Qt.PointingHandCursor)
+        btn_zin.setToolTip("Aumentar Zoom")
+        btn_zin.setStyleSheet(btn_head.styleSheet())
+        btn_zin.clicked.connect(lambda: self.git_graph_view.zoom_in() if hasattr(self, "git_graph_view") else None)
+        top_bar.addWidget(btn_zin)
+
+        btn_zout = QPushButton("➖")
+        btn_zout.setCursor(Qt.PointingHandCursor)
+        btn_zout.setToolTip("Disminuir Zoom")
+        btn_zout.setStyleSheet(btn_head.styleSheet())
+        btn_zout.clicked.connect(lambda: self.git_graph_view.zoom_out() if hasattr(self, "git_graph_view") else None)
+        top_bar.addWidget(btn_zout)
+
+        btn_zres = QPushButton("🔍 100%")
+        btn_zres.setCursor(Qt.PointingHandCursor)
+        btn_zres.setToolTip("Restablecer Zoom")
+        btn_zres.setStyleSheet(btn_head.styleSheet())
+        btn_zres.clicked.connect(lambda: self.git_graph_view.reset_zoom() if hasattr(self, "git_graph_view") else None)
+        top_bar.addWidget(btn_zres)
+
+        btn_refresh = QPushButton("🔄 Refrescar")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
+        btn_refresh.setStyleSheet(btn_head.styleSheet())
+        btn_refresh.clicked.connect(self.refresh_git_graph)
+        top_bar.addWidget(btn_refresh)
+
+        layout.addLayout(top_bar)
+
+        # Lienzo horizontal interactivo de ramas
+        self.git_graph_view = LumenHorizontalGitGraphView()
+        self.git_graph_view.setMinimumHeight(260)
+        self.git_graph_view.commit_selected.connect(self.on_graph_commit_selected)
+        layout.addWidget(self.git_graph_view, 1)
+
+        # Pie de inspección rápida
+        self.lbl_graph_inspector = QLabel("💡 Haz clic en cualquier nodo para inspeccionar el commit y ver su diff o detalles.")
+        self.lbl_graph_inspector.setStyleSheet("""
+            font-size: 11px;
+            color: #9ca3af;
+            background-color: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-family: 'JetBrains Mono', 'Inter', monospace;
+        """)
+        layout.addWidget(self.lbl_graph_inspector)
+
+        return widget
+
+    def refresh_git_graph(self):
+        """Carga en vivo el grafo horizontal de ramas según el proyecto activo."""
+        path = self.project_data.get("path")
+        if not path or not os.path.exists(path):
+            return
+
+        if hasattr(self, "git_graph_view"):
+            self.git_graph_view.load_project_graph(path)
+
+    def on_graph_commit_selected(self, commit_hash: str):
+        """Manejador al hacer clic en un nodo de commit del grafo."""
+        path = self.project_data.get("path")
+        if not path or not commit_hash:
+            return
+
+        try:
+            out = subprocess.check_output(
+                ["git", "show", "-s", "--format=%h | %an (%cr) | %s", commit_hash],
+                cwd=path, stderr=subprocess.DEVNULL, text=True
+            ).strip()
+            self.lbl_graph_inspector.setText(f"📌 {out}")
+        except Exception:
+            self.lbl_graph_inspector.setText(f"📌 Commit seleccionado: {commit_hash}")
+
+        self.inspect_git_commit(commit_hash)
+
+    def inspect_git_commit(self, commit_hash: str):
+        """Muestra la información y diff del commit seleccionado en la terminal."""
+        path = self.project_data.get("path")
+        if not path or not commit_hash:
+            return
+
+        self.terminal_display.log("COMMIT-INSPECT", f"Inspeccionando detalles del commit <code>{commit_hash}</code>...", tag_color="#fbbf24", prefix="🔍")
+        try:
+            out = subprocess.check_output(
+                ["git", "show", "--stat", "--oneline", commit_hash],
+                cwd=path, stderr=subprocess.DEVNULL, text=True
+            )
+            for l in out.splitlines()[:12]:
+                self.terminal_display.log("DETAIL", l, tag_color="#a5b4fc", prefix="•")
+        except Exception as e:
+            self.terminal_display.log_error("COMMIT-INSPECT", str(e))
 
     def open_ia_audit_subview(self):
         """Abre la sub-vista de selección de modelo de IA para Auditoría de Diff."""
@@ -1626,13 +2531,23 @@ class LumenProjectWorkspaceView(QWidget):
     def go_back_to_work_cycles(self):
         """Regresa a la página principal de Ciclos de Trabajo."""
         self.sector1_sub_stack.setCurrentIndex(0)
+        if hasattr(self, "btn_toggle_graph_terminal"):
+            self.btn_toggle_graph_terminal.setVisible(False)
+        if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 1:
+            self.toggle_terminal_graph_view()
+        self.hide_branches_action_drawer()
         self.terminal_display.log("NAV", "Regresando al menú de Ciclos de Trabajo.", tag_color="#9ca3af", prefix="◀")
 
     def go_back_to_sectors_overview(self):
-        """Regresa directamente al menú principal de los 4 sectores en un solo clic."""
+        """Regresa directamente al menú principal de los 3 sectores en un solo clic."""
         self.sectors_stack.setCurrentIndex(0)
         if hasattr(self, "sector1_sub_stack"):
             self.sector1_sub_stack.setCurrentIndex(0)
+        if hasattr(self, "btn_toggle_graph_terminal"):
+            self.btn_toggle_graph_terminal.setVisible(False)
+        if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 1:
+            self.toggle_terminal_graph_view()
+        self.hide_branches_action_drawer()
         self.terminal_display.log("NAV", "Regresando al menú principal de Sectores.", tag_color="#9ca3af", prefix="◀")
 
     # -----------------------------------------------------------------
