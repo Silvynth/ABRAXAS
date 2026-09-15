@@ -97,6 +97,66 @@ def fetch_repos_api(username: str = "", token: str = "") -> List[Dict]:
     except Exception as e:
         raise RuntimeError(f"Error al conectar con GitHub: {e}")
 
+def fetch_single_repo_api(owner_repo: str, token: str = "") -> Dict:
+    """Obtiene información de un único repositorio (owner/repo) usando la API de GitHub."""
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "Abraxas-Neos-App"
+    }
+    if token.strip():
+        headers["Authorization"] = f"Bearer {token.strip()}"
+    
+    clean_target = owner_repo.strip().strip("/")
+    url = f"https://api.github.com/repos/{clean_target}"
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            item = json.loads(resp.read().decode("utf-8"))
+            lang = item.get("language") or "Varios"
+            return {
+                "name": item.get("name", ""),
+                "full_name": item.get("full_name", item.get("name", "")),
+                "description": item.get("description") or "Sin descripción.",
+                "url": item.get("html_url", item.get("clone_url", "")),
+                "clone_url": item.get("clone_url", ""),
+                "ssh_url": item.get("ssh_url", ""),
+                "is_private": item.get("private", False),
+                "pushed_at": item.get("pushed_at", "")[:10] if item.get("pushed_at") else "",
+                "stars": item.get("stargazers_count", 0),
+                "language": lang
+            }
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise ValueError(f"No se encontró el repositorio '{owner_repo}' en GitHub.")
+        raise RuntimeError(f"Error HTTP {e.code} de GitHub: {e.reason}")
+    except Exception as e:
+        raise RuntimeError(f"Error al conectar con GitHub: {e}")
+
+def parse_git_url_repo_data(url: str) -> Dict:
+    """Genera una estructura de repositorio a partir de un enlace arbitrario de Git clone."""
+    clean_url = url.strip()
+    if clean_url.startswith("git clone "):
+        clean_url = clean_url[10:].strip()
+    
+    # Extraer nombre del repositorio (ej. https://github.com/pallets/flask.git -> flask)
+    parts = clean_url.rstrip("/").split("/")
+    repo_name = parts[-1] if parts else "repo"
+    if repo_name.endswith(".git"):
+        repo_name = repo_name[:-4]
+
+    return {
+        "name": repo_name,
+        "full_name": clean_url,
+        "description": f"Repositorio remoto ({clean_url})",
+        "url": clean_url,
+        "clone_url": clean_url,
+        "ssh_url": clean_url if clean_url.startswith("git@") else "",
+        "is_private": False,
+        "pushed_at": "Reciente",
+        "stars": 0,
+        "language": "Git"
+    }
+
 def clone_repository(repo_target: str, dest_dir: str, full_repo_name: str = "") -> None:
     """Clona un repositorio remoto utilizando GitHub CLI ('gh repo clone') para repositorios privados y públicos."""
     # 1. Si GitHub CLI está autenticado, usar 'gh repo clone' (soporta repos privados sin prompts interactivos)

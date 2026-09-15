@@ -14,7 +14,8 @@ from PySide6.QtCore import Qt, Signal, QThread
 from core.projects import get_projects_dir
 from core.github import (
     check_gh_cli_authenticated, fetch_repos_gh_cli, 
-    fetch_repos_api, clone_repository, pull_repository
+    fetch_repos_api, fetch_single_repo_api, parse_git_url_repo_data,
+    clone_repository, pull_repository
 )
 
 class GitActionWorker(QThread):
@@ -178,7 +179,7 @@ class SyncProjectsView(QWidget):
         # Fila de Entrada Manual (Usuario de GitHub o Token)
         r_manual = QHBoxLayout()
         self.txt_github_user = QLineEdit()
-        self.txt_github_user.setPlaceholderText("Usuario de GitHub o Token Personal (PAT) para repositorios privados...")
+        self.txt_github_user.setPlaceholderText("Usuario/Org, enlace git clone (https://... / git@...), 'owner/repo' o Token PAT...")
         self.txt_github_user.returnPressed.connect(self.load_from_input)
         
         btn_fetch = QPushButton("🔍 Explorar")
@@ -268,13 +269,43 @@ class SyncProjectsView(QWidget):
             self.detect_and_load_github()
             return
 
-        self.lbl_status.setText("⏳ Consultando repositorios en GitHub...")
+        if query.startswith("git clone "):
+            query = query[10:].strip()
+
+        self.lbl_status.setText("⏳ Consultando repositorio(s)...")
         self.lbl_status.setStyleSheet("font-size: 12px; font-weight: 600; color: #a855f7;")
         self.lbl_status.setVisible(True)
 
         try:
-            if query.startswith("ghp_") or query.startswith("github_pat_"):
+            # 1. ¿Es una URL directa de Git? (ej. https://github.com/pallets/flask.git o git@...)
+            if query.startswith("http://") or query.startswith("https://") or query.startswith("git@"):
+                repo_data = None
+                if "github.com" in query:
+                    import re
+                    m = re.search(r"github\.com[/:]([^/]+)/([^/\.]+)", query)
+                    if m:
+                        owner_repo = f"{m.group(1)}/{m.group(2)}"
+                        try:
+                            repo_data = fetch_single_repo_api(owner_repo)
+                        except Exception:
+                            pass
+                if not repo_data:
+                    repo_data = parse_git_url_repo_data(query)
+                self.repos_data = [repo_data]
+
+            # 2. ¿Es formato 'owner/repo'? (ej. pallets/flask)
+            elif "/" in query and not query.startswith("ghp_") and not query.startswith("github_pat_"):
+                try:
+                    repo_data = fetch_single_repo_api(query)
+                    self.repos_data = [repo_data]
+                except Exception:
+                    self.repos_data = fetch_repos_api(username=query.split("/")[0])
+
+            # 3. Token Personal (PAT)
+            elif query.startswith("ghp_") or query.startswith("github_pat_"):
                 self.repos_data = fetch_repos_api(token=query)
+
+            # 4. Usuario u Organización
             else:
                 self.repos_data = fetch_repos_api(username=query)
 

@@ -27,7 +27,10 @@ from core.git_workflow import (
     get_git_merge_status, get_mergeable_branches,
     get_merge_diff_and_commits, generate_ia_merge_proposal,
     execute_git_merge, execute_git_merge_into, execute_git_merge_abort,
-    execute_git_resolve_conflicts, execute_git_complete_merge
+    execute_git_resolve_conflicts, execute_git_complete_merge,
+    get_git_sync_deep_status, execute_git_fetch, execute_git_pull,
+    execute_git_stage_path, execute_git_unstage_path, execute_git_discard_path,
+    execute_git_stash_pop, execute_git_stash_save
 )
 from gui.views.lumen.git_graph_canvas import LumenHorizontalGitGraphView
 
@@ -112,6 +115,42 @@ class GitPushThread(QThread):
                 self.finished_push.emit(False, branch, err_msg)
         except Exception as e:
             self.finished_push.emit(False, "unknown", str(e))
+
+
+class GitFetchThread(QThread):
+    """Hilo para ejecutar git fetch hacia el remoto sin congelar la GUI."""
+    finished_fetch = Signal(bool, str, dict)
+
+    def __init__(self, project_path: str, remote: str = "", prune: bool = True):
+        super().__init__()
+        self.project_path = project_path
+        self.remote = remote
+        self.prune = prune
+
+    def run(self):
+        try:
+            ok, msg, status = execute_git_fetch(self.project_path, self.remote, self.prune)
+            self.finished_fetch.emit(ok, msg, status)
+        except Exception as e:
+            self.finished_fetch.emit(False, str(e), {})
+
+
+class GitPullThread(QThread):
+    """Hilo para ejecutar git pull seguro sin congelar la GUI."""
+    finished_pull = Signal(bool, str)
+
+    def __init__(self, project_path: str, strategy: str = "rebase", autostash: bool = True):
+        super().__init__()
+        self.project_path = project_path
+        self.strategy = strategy
+        self.autostash = autostash
+
+    def run(self):
+        try:
+            ok, msg = execute_git_pull(self.project_path, self.strategy, self.autostash)
+            self.finished_pull.emit(ok, msg)
+        except Exception as e:
+            self.finished_pull.emit(False, str(e))
 
 
 class IACommitThread(QThread):
@@ -1637,6 +1676,12 @@ class LumenProjectWorkspaceView(QWidget):
         self.page_merge = self.create_sector1_merge_view()
         self.sector1_sub_stack.addWidget(self.page_merge)
 
+        # =============================================================
+        # SUB-PÁGINA 10: ESTADO Y SINCRONIZACIÓN (STATUS • FETCH • PULL)
+        # =============================================================
+        self.page_sync = self.create_sector1_sync_view()
+        self.sector1_sub_stack.addWidget(self.page_sync)
+
         layout.addWidget(self.sector1_sub_stack)
         return card
 
@@ -1713,6 +1758,27 @@ class LumenProjectWorkspaceView(QWidget):
         """)
         btn_to_merge.clicked.connect(self.open_merge_view)
         head.addWidget(btn_to_merge)
+
+        btn_to_sync = QPushButton("⚡  Estado y Sync")
+        btn_to_sync.setCursor(Qt.PointingHandCursor)
+        btn_to_sync.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border: 1px solid rgba(52, 211, 153, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.30);
+                border-color: #34d399;
+                color: #ffffff;
+            }
+        """)
+        btn_to_sync.clicked.connect(self.open_sync_view)
+        head.addWidget(btn_to_sync)
 
         lbl_title = QLabel("🌿  CONTROL DE RAMAS")
         lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
@@ -2113,11 +2179,27 @@ class LumenProjectWorkspaceView(QWidget):
                 self.open_branches_view()
             elif action_title == "Fusión de Ramas":
                 self.open_merge_view()
+            elif action_title == "Estado y Sincronización":
+                self.open_sync_view()
             else:
                 self.handle_action_click(action_title)
         else:
             self.open_sector_view(sector_idx, sector_title)
             self.handle_action_click(action_title)
+
+    def open_sync_view(self):
+        """Abre la vista dedicada de Estado y Sincronización (Status / Fetch / Pull) en el Sector 1."""
+        self.sectors_stack.setCurrentIndex(1)
+        self.sector1_sub_stack.setCurrentWidget(self.page_sync)
+        self.terminal_display.log("NAV", "Accediendo al módulo <b>Estado y Sincronización (Status • Fetch • Pull)</b>...", tag_color="#34d399", prefix="⚡")
+        self.refresh_sync_view()
+        self.refresh_git_graph()
+        if hasattr(self, "btn_toggle_graph_terminal"):
+            self.btn_toggle_graph_terminal.setVisible(True)
+        if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 0:
+            self.toggle_terminal_graph_view()
+        self.sector1_sub_stack.updateGeometry()
+        self.sectors_stack.updateGeometry()
 
     def open_branches_view(self):
         """Abre la vista dedicada de Control de Ramas en el Sector 1."""
@@ -2470,6 +2552,27 @@ class LumenProjectWorkspaceView(QWidget):
         """)
         btn_to_branches.clicked.connect(self.open_branches_view)
         head.addWidget(btn_to_branches)
+
+        btn_to_sync = QPushButton("⚡  Estado y Sync")
+        btn_to_sync.setCursor(Qt.PointingHandCursor)
+        btn_to_sync.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border: 1px solid rgba(52, 211, 153, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.30);
+                border-color: #34d399;
+                color: #ffffff;
+            }
+        """)
+        btn_to_sync.clicked.connect(self.open_sync_view)
+        head.addWidget(btn_to_sync)
 
         lbl_title = QLabel("🔀  FUSIÓN DE RAMAS (GIT MERGE)")
         lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
@@ -3650,6 +3753,1103 @@ class LumenProjectWorkspaceView(QWidget):
         self.run_git_push()
         self.merge_inner_stack.setCurrentIndex(0)
 
+    # =================================================================
+    # MÓDULO 4 DEL SECTOR 1: ESTADO Y SINCRONIZACIÓN (STATUS • FETCH • PULL)
+    # =================================================================
+    def create_sector1_sync_view(self) -> QWidget:
+        """Crea la sub-página dedicada para el Estado y Sincronización Táctica de Red."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # 1. Cabecera de Navegación del Módulo 4
+        head = QHBoxLayout()
+        head.setSpacing(10)
+
+        btn_back_main = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back_main.setCursor(Qt.PointingHandCursor)
+        btn_back_main.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #bae6fd;
+                border: 1px solid rgba(56, 189, 248, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.30);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_back_main.clicked.connect(self.go_back_to_sectors_overview)
+        head.addWidget(btn_back_main)
+
+        btn_to_work = QPushButton("🔄  Ciclos de Trabajo")
+        btn_to_work.setCursor(Qt.PointingHandCursor)
+        btn_to_work.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.15);
+                color: #c7d2fe;
+                border: 1px solid rgba(99, 102, 241, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(99, 102, 241, 0.30);
+                border-color: #818cf8;
+                color: #ffffff;
+            }
+        """)
+        btn_to_work.clicked.connect(self.go_back_to_work_cycles)
+        head.addWidget(btn_to_work)
+
+        btn_to_branches = QPushButton("🌿  Control de Ramas")
+        btn_to_branches.setCursor(Qt.PointingHandCursor)
+        btn_to_branches.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border: 1px solid rgba(52, 211, 153, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.30);
+                border-color: #34d399;
+                color: #ffffff;
+            }
+        """)
+        btn_to_branches.clicked.connect(self.open_branches_view)
+        head.addWidget(btn_to_branches)
+
+        btn_to_merge = QPushButton("🔀  Fusión de Ramas")
+        btn_to_merge.setCursor(Qt.PointingHandCursor)
+        btn_to_merge.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #bae6fd;
+                border: 1px solid rgba(56, 189, 248, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.30);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_to_merge.clicked.connect(self.open_merge_view)
+        head.addWidget(btn_to_merge)
+
+        lbl_title = QLabel("⚡  ESTADO Y SINCRONIZACIÓN")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #34d399; letter-spacing: 0.5px;")
+        head.addWidget(lbl_title)
+        head.addStretch()
+
+        btn_toggle_graph = QPushButton("📊  Alternar Grafo / Terminal")
+        btn_toggle_graph.setCursor(Qt.PointingHandCursor)
+        btn_toggle_graph.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.12);
+                color: #6ee7b7;
+                border: 1px solid rgba(52, 211, 153, 0.35);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.25);
+                color: #ffffff;
+            }
+        """)
+        btn_toggle_graph.clicked.connect(self.toggle_terminal_graph_view)
+        head.addWidget(btn_toggle_graph)
+
+        lbl_pill = QLabel("[LUMEN • PROTOCOLO SYNC]")
+        lbl_pill.setFixedHeight(24)
+        lbl_pill.setAlignment(Qt.AlignCenter)
+        lbl_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #34d399; background-color: rgba(52, 211, 153, 0.12); border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 4px; padding: 2px 8px;")
+        head.addWidget(lbl_pill)
+        layout.addLayout(head)
+
+        # 2. Panel HUD de Telemetría Táctica (3 Columnas)
+        telemetry_frame = QFrame()
+        telemetry_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.02);
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 8px;
+            }
+        """)
+        t_lay = QHBoxLayout(telemetry_frame)
+        t_lay.setContentsMargins(12, 10, 12, 10)
+        t_lay.setSpacing(14)
+
+        # Columna 1: Rama Activa y Tracking Upstream
+        c1 = QFrame()
+        c1.setStyleSheet("background: transparent; border: none;")
+        v1 = QVBoxLayout(c1)
+        v1.setContentsMargins(0, 0, 0, 0)
+        v1.setSpacing(3)
+        lbl_t1 = QLabel("🌿 RAMA ACTIVA & UPSTREAM")
+        lbl_t1.setStyleSheet("font-size: 10px; font-weight: 800; color: #9ca3af; letter-spacing: 0.5px;")
+        v1.addWidget(lbl_t1)
+        r_b = QHBoxLayout()
+        r_b.setSpacing(8)
+        self.lbl_sync_branch = QLabel("HEAD")
+        self.lbl_sync_branch.setStyleSheet("font-size: 13px; font-weight: 900; color: #f3f4f6;")
+        r_b.addWidget(self.lbl_sync_branch)
+        self.lbl_sync_state_badge = QLabel("[Verificando]")
+        self.lbl_sync_state_badge.setStyleSheet("font-size: 10px; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 4px; padding: 1px 6px;")
+        r_b.addWidget(self.lbl_sync_state_badge)
+        r_b.addStretch()
+        v1.addLayout(r_b)
+        self.lbl_sync_upstream = QLabel("origin/...")
+        self.lbl_sync_upstream.setStyleSheet("font-family: monospace; font-size: 11px; color: #60a5fa;")
+        v1.addWidget(self.lbl_sync_upstream)
+        t_lay.addWidget(c1, 1)
+
+        # Separador vertical
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.VLine)
+        sep1.setStyleSheet("color: rgba(255, 255, 255, 0.08);")
+        t_lay.addWidget(sep1)
+
+        # Columna 2: Árbol Local y Líneas (+/-)
+        c2 = QFrame()
+        c2.setStyleSheet("background: transparent; border: none;")
+        v2 = QVBoxLayout(c2)
+        v2.setContentsMargins(0, 0, 0, 0)
+        v2.setSpacing(3)
+        lbl_t2 = QLabel("📁 ÁRBOL LOCAL & LÍNEAS (+/-)")
+        lbl_t2.setStyleSheet("font-size: 10px; font-weight: 800; color: #9ca3af; letter-spacing: 0.5px;")
+        v2.addWidget(lbl_t2)
+        r_w = QHBoxLayout()
+        r_w.setSpacing(8)
+        self.lbl_sync_worktree_badge = QLabel("0 modificaciones")
+        self.lbl_sync_worktree_badge.setStyleSheet("font-size: 12.5px; font-weight: 800; color: #fbbf24;")
+        r_w.addWidget(self.lbl_sync_worktree_badge)
+        self.lbl_sync_lines_badge = QLabel("+0 / -0")
+        self.lbl_sync_lines_badge.setStyleSheet("font-family: monospace; font-size: 11px; font-weight: 700; color: #9ca3af;")
+        r_w.addWidget(self.lbl_sync_lines_badge)
+        r_w.addStretch()
+        v2.addLayout(r_w)
+        self.lbl_sync_stash_info = QLabel("📦 0 stashes guardados")
+        self.lbl_sync_stash_info.setStyleSheet("font-size: 11px; color: #9ca3af;")
+        v2.addWidget(self.lbl_sync_stash_info)
+        t_lay.addWidget(c2, 1)
+
+        # Separador vertical
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.VLine)
+        sep2.setStyleSheet("color: rgba(255, 255, 255, 0.08);")
+        t_lay.addWidget(sep2)
+
+        # Columna 3: Pulso de Red & Seguridad Pre-Pull
+        c3 = QFrame()
+        c3.setStyleSheet("background: transparent; border: none;")
+        v3 = QVBoxLayout(c3)
+        v3.setContentsMargins(0, 0, 0, 0)
+        v3.setSpacing(3)
+        lbl_t3 = QLabel("🛰️ PULSO DE RED & SEGURIDAD")
+        lbl_t3.setStyleSheet("font-size: 10px; font-weight: 800; color: #9ca3af; letter-spacing: 0.5px;")
+        v3.addWidget(lbl_t3)
+        self.lbl_sync_last_fetch = QLabel("🕒 Último fetch: -")
+        self.lbl_sync_last_fetch.setStyleSheet("font-size: 11.5px; font-weight: 700; color: #e5e7eb;")
+        v3.addWidget(self.lbl_sync_last_fetch)
+        self.lbl_sync_safety_badge = QLabel("[🛡️ Diagnóstico Pre-Pull]")
+        self.lbl_sync_safety_badge.setStyleSheet("font-size: 10.5px; font-weight: 800; color: #34d399;")
+        v3.addWidget(self.lbl_sync_safety_badge)
+        t_lay.addWidget(c3, 1)
+
+        layout.addWidget(telemetry_frame)
+
+        # 3. Baraja de Acciones Tácticas (Status, Fetch, Pull)
+        deck_frame = QFrame()
+        deck_frame.setStyleSheet("background: transparent; border: none;")
+        d_lay = QHBoxLayout(deck_frame)
+        d_lay.setContentsMargins(0, 0, 0, 0)
+        d_lay.setSpacing(10)
+
+        self.btn_action_status = LumenCyberActionButton(
+            "📋", "Inspeccionar Árbol (Status)", 
+            "Audita archivos modificados, stage, deltas de líneas (+/-) y stashes", 
+            accent_color="#38bdf8"
+        )
+        self.btn_action_status.clicked.connect(lambda _: self.execute_status_inspect())
+        d_lay.addWidget(self.btn_action_status)
+
+        self.btn_action_fetch = LumenCyberActionButton(
+            "📡", "Descargar Metadatos (Fetch)", 
+            "Consulta commits y ramas del remoto con poda (--prune) sin alterar código", 
+            accent_color="#c084fc"
+        )
+        self.btn_action_fetch.clicked.connect(lambda _: self.execute_fetch_action())
+        d_lay.addWidget(self.btn_action_fetch)
+
+        self.btn_action_pull = LumenCyberActionButton(
+            "📥", "Sincronizar Cambios (Pull)", 
+            "Descarga e integra commits entrantes con Rebase + Autostash inteligente", 
+            accent_color="#34d399"
+        )
+        self.btn_action_pull.clicked.connect(lambda _: self.execute_pull_action())
+        d_lay.addWidget(self.btn_action_pull)
+
+        layout.addWidget(deck_frame)
+
+        # 4. Barra de Opciones de Pull y Controles Stash
+        opts_frame = QFrame()
+        opts_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.02);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 6px;
+                padding: 4px 10px;
+            }
+        """)
+        o_lay = QHBoxLayout(opts_frame)
+        o_lay.setContentsMargins(8, 4, 8, 4)
+        o_lay.setSpacing(12)
+
+        lbl_strat = QLabel("Estrategia Pull:")
+        lbl_strat.setStyleSheet("font-size: 11px; font-weight: 700; color: #9ca3af;")
+        o_lay.addWidget(lbl_strat)
+
+        self.cmb_pull_strategy = QComboBox()
+        self.cmb_pull_strategy.setItemDelegate(QStyledItemDelegate())
+        self.cmb_pull_strategy.setStyleSheet("""
+            QComboBox {
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                color: #f3f4f6;
+                padding: 3px 8px;
+                font-size: 11px;
+                min-width: 230px;
+            }
+        """)
+        self.cmb_pull_strategy.addItem("⚡ Rebase Seguro (Recomendado • Sin merge commits)", "rebase")
+        self.cmb_pull_strategy.addItem("🔀 Merge Estándar (git pull --no-rebase)", "merge")
+        self.cmb_pull_strategy.addItem("⏩ Fast-Forward Únicamente (--ff-only)", "ff-only")
+        o_lay.addWidget(self.cmb_pull_strategy)
+
+        self.chk_pull_autostash = QCheckBox("Autostash automático")
+        self.chk_pull_autostash.setChecked(True)
+        self.chk_pull_autostash.setToolTip("Guarda tus cambios locales en un stash temporal y los re-aplica automáticamente tras el pull")
+        self.chk_pull_autostash.setStyleSheet("QCheckBox { font-size: 11px; color: #9ca3af; font-weight: 600; } QCheckBox:hover { color: #f3f4f6; }")
+        o_lay.addWidget(self.chk_pull_autostash)
+
+        o_lay.addStretch()
+
+        self.btn_toggle_stash = QPushButton("📦 Guardar Stash")
+        self.btn_toggle_stash.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_stash.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.04);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover { color: #f3f4f6; border-color: rgba(255, 255, 255, 0.25); }
+        """)
+        self.btn_toggle_stash.clicked.connect(self.toggle_stash_drawer)
+        o_lay.addWidget(self.btn_toggle_stash)
+
+        self.btn_pop_stash = QPushButton("⚡ Pop Stash")
+        self.btn_pop_stash.setCursor(Qt.PointingHandCursor)
+        self.btn_pop_stash.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(251, 191, 36, 0.12);
+                color: #fde047;
+                border: 1px solid rgba(251, 191, 36, 0.35);
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover { background-color: rgba(251, 191, 36, 0.25); color: #ffffff; }
+        """)
+        self.btn_pop_stash.clicked.connect(self.execute_stash_pop_action)
+        o_lay.addWidget(self.btn_pop_stash)
+
+        layout.addWidget(opts_frame)
+
+        # Cajón Dinámico de Stash (Guardar)
+        self.drawer_stash_save = QFrame()
+        self.drawer_stash_save.setVisible(False)
+        self.drawer_stash_save.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(251, 191, 36, 0.35);
+                border-radius: 6px;
+                padding: 6px 12px;
+            }
+        """)
+        ds_lay = QHBoxLayout(self.drawer_stash_save)
+        ds_lay.setContentsMargins(6, 4, 6, 4)
+        ds_lay.setSpacing(10)
+
+        lbl_s_prompt = QLabel("Mensaje de Stash:")
+        lbl_s_prompt.setStyleSheet("font-size: 11px; font-weight: 700; color: #fde047;")
+        ds_lay.addWidget(lbl_s_prompt)
+
+        self.txt_stash_msg = QLineEdit()
+        self.txt_stash_msg.setPlaceholderText("Descripción del trabajo en pausa (ej. feat/auth en progreso)...")
+        self.txt_stash_msg.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                color: #f3f4f6;
+                padding: 4px 8px;
+                font-size: 11.5px;
+            }
+            QLineEdit:focus { border-color: #fde047; }
+        """)
+        self.txt_stash_msg.returnPressed.connect(self.execute_stash_save_action)
+        ds_lay.addWidget(self.txt_stash_msg, 1)
+
+        btn_confirm_stash = QPushButton("Confirmar Stash")
+        btn_confirm_stash.setCursor(Qt.PointingHandCursor)
+        btn_confirm_stash.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(251, 191, 36, 0.20);
+                color: #fde047;
+                border: 1px solid #fbbf24;
+                border-radius: 4px;
+                padding: 4px 12px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: rgba(251, 191, 36, 0.35); color: #ffffff; }
+        """)
+        btn_confirm_stash.clicked.connect(self.execute_stash_save_action)
+        ds_lay.addWidget(btn_confirm_stash)
+
+        btn_cancel_stash = QPushButton("Cancelar")
+        btn_cancel_stash.setCursor(Qt.PointingHandCursor)
+        btn_cancel_stash.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.04);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 11px;
+            }
+        """)
+        btn_cancel_stash.clicked.connect(lambda: self.drawer_stash_save.setVisible(False))
+        ds_lay.addWidget(btn_cancel_stash)
+
+        layout.addWidget(self.drawer_stash_save)
+
+        # 5. Selector de Pestañas de Detalle
+        tabs_bar = QFrame()
+        tabs_bar.setStyleSheet("background: transparent; border: none;")
+        tb_lay = QHBoxLayout(tabs_bar)
+        tb_lay.setContentsMargins(0, 4, 0, 2)
+        tb_lay.setSpacing(8)
+
+        self.btn_sync_tab_tree = QPushButton("📁  Árbol Local & Líneas (+/-)")
+        self.btn_sync_tab_tree.setCursor(Qt.PointingHandCursor)
+        self.btn_sync_tab_tree.clicked.connect(lambda: self.switch_sync_tab(0))
+        tb_lay.addWidget(self.btn_sync_tab_tree)
+
+        self.btn_sync_tab_incoming = QPushButton("🛰️  Radar de Commits (Entrantes / Salientes)")
+        self.btn_sync_tab_incoming.setCursor(Qt.PointingHandCursor)
+        self.btn_sync_tab_incoming.clicked.connect(lambda: self.switch_sync_tab(1))
+        tb_lay.addWidget(self.btn_sync_tab_incoming)
+
+        tb_lay.addStretch()
+        layout.addWidget(tabs_bar)
+
+        # Sub-stack para los detalles
+        self.sync_details_stack = QStackedWidget()
+        self.sync_details_stack.setStyleSheet("background: transparent; border: none;")
+
+        # --- Sub-página 0: Árbol Local & Archivos ---
+        page_tree = QWidget()
+        pt_lay = QVBoxLayout(page_tree)
+        pt_lay.setContentsMargins(0, 0, 0, 0)
+        pt_lay.setSpacing(8)
+
+        # Filtros rápidos para el árbol
+        filter_bar = QHBoxLayout()
+        filter_bar.setSpacing(8)
+        self.sync_filter_buttons = {}
+        for f_key, f_lbl in [("ALL", "Todos"), ("UNSTAGED", "Modificados"), ("STAGED", "En Stage"), ("UNTRACKED", "Nuevos"), ("CONFLICT", "Conflictos")]:
+            f_btn = QPushButton(f_lbl)
+            f_btn.setCursor(Qt.PointingHandCursor)
+            f_btn.clicked.connect(lambda _, k=f_key: self.filter_sync_tree(k))
+            filter_bar.addWidget(f_btn)
+            self.sync_filter_buttons[f_key] = f_btn
+        filter_bar.addStretch()
+        pt_lay.addLayout(filter_bar)
+
+        # Scroll Area para la lista de archivos
+        tree_scroll = QScrollArea()
+        tree_scroll.setWidgetResizable(True)
+        tree_scroll.setMinimumHeight(180)
+        tree_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        tree_content = QWidget()
+        tree_content.setStyleSheet("background: transparent;")
+        self.sync_files_layout = QVBoxLayout(tree_content)
+        self.sync_files_layout.setContentsMargins(0, 0, 0, 0)
+        self.sync_files_layout.setSpacing(6)
+        self.sync_files_layout.addStretch()
+        tree_scroll.setWidget(tree_content)
+        pt_lay.addWidget(tree_scroll, 1)
+
+        self.sync_details_stack.addWidget(page_tree)
+
+        # --- Sub-página 1: Radar de Commits Entrantes / Salientes ---
+        page_radar = QWidget()
+        pr_lay = QVBoxLayout(page_radar)
+        pr_lay.setContentsMargins(0, 0, 0, 0)
+        pr_lay.setSpacing(8)
+
+        radar_scroll = QScrollArea()
+        radar_scroll.setWidgetResizable(True)
+        radar_scroll.setMinimumHeight(180)
+        radar_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        radar_content = QWidget()
+        radar_content.setStyleSheet("background: transparent;")
+        self.sync_radar_layout = QVBoxLayout(radar_content)
+        self.sync_radar_layout.setContentsMargins(0, 0, 0, 0)
+        self.sync_radar_layout.setSpacing(6)
+        self.sync_radar_layout.addStretch()
+        radar_scroll.setWidget(radar_content)
+        pr_lay.addWidget(radar_scroll, 1)
+
+        self.sync_details_stack.addWidget(page_radar)
+
+        layout.addWidget(self.sync_details_stack, 1)
+
+        # Variables internas de estado
+        self.current_sync_filter = "ALL"
+        self.last_sync_status = {}
+        self.switch_sync_tab(0)
+
+        return page
+
+    def switch_sync_tab(self, tab_idx: int):
+        """Alterna visualmente entre la pestaña del Árbol Local y el Radar de Commits."""
+        self.sync_details_stack.setCurrentIndex(tab_idx)
+        active_style = """
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.20);
+                color: #6ee7b7;
+                border: 1px solid #34d399;
+                border-radius: 6px;
+                padding: 5px 14px;
+                font-weight: 800;
+                font-size: 11.5px;
+            }
+        """
+        inactive_style = """
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.03);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 6px;
+                padding: 5px 14px;
+                font-weight: 600;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.07);
+                color: #f3f4f6;
+            }
+        """
+        if tab_idx == 0:
+            self.btn_sync_tab_tree.setStyleSheet(active_style)
+            self.btn_sync_tab_incoming.setStyleSheet(inactive_style)
+        else:
+            self.btn_sync_tab_tree.setStyleSheet(inactive_style)
+            self.btn_sync_tab_incoming.setStyleSheet(active_style)
+        if hasattr(self, "sector1_sub_stack"):
+            self.sector1_sub_stack.updateGeometry()
+
+    def filter_sync_tree(self, filter_key: str):
+        """Filtra los archivos del árbol de trabajo según su categoría."""
+        self.current_sync_filter = filter_key
+        self.update_filter_button_styles()
+        self.render_sync_local_tree(self.last_sync_status)
+
+    def update_filter_button_styles(self):
+        """Actualiza los estilos visuales de los chips de filtrado del árbol."""
+        status = self.last_sync_status
+        counts = {
+            "ALL": status.get("total_unstaged", 0) + status.get("total_staged", 0) + status.get("total_untracked", 0) + status.get("total_conflicts", 0),
+            "UNSTAGED": status.get("total_unstaged", 0),
+            "STAGED": status.get("total_staged", 0),
+            "UNTRACKED": status.get("total_untracked", 0),
+            "CONFLICT": status.get("total_conflicts", 0)
+        }
+        labels = {
+            "ALL": "Todos",
+            "UNSTAGED": "Modificados",
+            "STAGED": "En Stage",
+            "UNTRACKED": "Nuevos",
+            "CONFLICT": "Conflictos"
+        }
+        for k, btn in self.sync_filter_buttons.items():
+            cnt = counts.get(k, 0)
+            btn.setText(f"{labels[k]} ({cnt})")
+            if k == self.current_sync_filter:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(56, 189, 248, 0.20);
+                        color: #7dd3fc;
+                        border: 1px solid #38bdf8;
+                        border-radius: 4px;
+                        padding: 3px 10px;
+                        font-weight: 700;
+                        font-size: 11px;
+                    }
+                """)
+            else:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(255, 255, 255, 0.03);
+                        color: #9ca3af;
+                        border: 1px solid rgba(255, 255, 255, 0.08);
+                        border-radius: 4px;
+                        padding: 3px 10px;
+                        font-size: 11px;
+                    }
+                    QPushButton:hover { color: #f3f4f6; background-color: rgba(255, 255, 255, 0.06); }
+                """)
+
+    def refresh_sync_view(self):
+        """Consulta y renderiza en vivo el estado completo de sincronización y árbol."""
+        path = self.project_data.get("path")
+        if not path or not os.path.exists(path):
+            return
+
+        status = get_git_sync_deep_status(path)
+        self.last_sync_status = status
+
+        # 1. Telemetría - Rama y Upstream
+        branch = status.get("branch", "HEAD")
+        upstream = status.get("upstream", "")
+        self.lbl_sync_branch.setText(branch)
+        if upstream:
+            self.lbl_sync_upstream.setText(f"↳ {upstream}")
+        else:
+            self.lbl_sync_upstream.setText("↳ Sin tracking remoto")
+
+        ahead = status.get("ahead", 0)
+        behind = status.get("behind", 0)
+        if not status.get("has_remote"):
+            self.lbl_sync_state_badge.setText("Modo Local")
+            self.lbl_sync_state_badge.setStyleSheet("font-size: 10px; font-weight: 800; color: #9ca3af; background: rgba(156, 163, 175, 0.12); border: 1px solid rgba(156, 163, 175, 0.3); border-radius: 4px; padding: 1px 6px;")
+        elif not status.get("has_upstream"):
+            self.lbl_sync_state_badge.setText("Sin Upstream")
+            self.lbl_sync_state_badge.setStyleSheet("font-size: 10px; font-weight: 800; color: #fbbf24; background: rgba(251, 191, 36, 0.12); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 4px; padding: 1px 6px;")
+        elif status.get("diverged"):
+            self.lbl_sync_state_badge.setText(f"▲ Ahead +{ahead} / ▼ Behind -{behind}")
+            self.lbl_sync_state_badge.setStyleSheet("font-size: 10px; font-weight: 800; color: #f87171; background: rgba(248, 113, 113, 0.15); border: 1px solid rgba(248, 113, 113, 0.35); border-radius: 4px; padding: 1px 6px;")
+        elif behind > 0:
+            self.lbl_sync_state_badge.setText(f"▼ Behind -{behind} (Pull pendiente)")
+            self.lbl_sync_state_badge.setStyleSheet("font-size: 10px; font-weight: 800; color: #c084fc; background: rgba(192, 132, 252, 0.15); border: 1px solid rgba(192, 132, 252, 0.35); border-radius: 4px; padding: 1px 6px;")
+        elif ahead > 0:
+            self.lbl_sync_state_badge.setText(f"▲ Ahead +{ahead} (Push pendiente)")
+            self.lbl_sync_state_badge.setStyleSheet("font-size: 10px; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 4px; padding: 1px 6px;")
+        else:
+            self.lbl_sync_state_badge.setText("● Al Día (Sincronizado)")
+            self.lbl_sync_state_badge.setStyleSheet("font-size: 10px; font-weight: 800; color: #34d399; background: rgba(52, 211, 153, 0.15); border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 4px; padding: 1px 6px;")
+
+        # 2. Telemetría - Árbol Local & Líneas
+        staged_cnt = status.get("total_staged", 0)
+        unstaged_cnt = status.get("total_unstaged", 0)
+        untracked_cnt = status.get("total_untracked", 0)
+        conflicts_cnt = status.get("total_conflicts", 0)
+        tot_files = staged_cnt + unstaged_cnt + untracked_cnt + conflicts_cnt
+
+        if status.get("is_clean"):
+            self.lbl_sync_worktree_badge.setText("✨ Árbol Limpio")
+            self.lbl_sync_worktree_badge.setStyleSheet("font-size: 12.5px; font-weight: 800; color: #34d399;")
+        else:
+            self.lbl_sync_worktree_badge.setText(f"{tot_files} archivo(s) con cambios")
+            self.lbl_sync_worktree_badge.setStyleSheet("font-size: 12.5px; font-weight: 800; color: #fbbf24;")
+
+        adds = status.get("total_lines_added", 0)
+        dels = status.get("total_lines_deleted", 0)
+        self.lbl_sync_lines_badge.setText(f"+{adds} / -{dels} líneas")
+
+        scnt = status.get("stash_count", 0)
+        self.lbl_sync_stash_info.setText(f"📦 {scnt} stash(es) guardados")
+        self.btn_pop_stash.setEnabled(scnt > 0)
+        if scnt == 0:
+            self.btn_pop_stash.setStyleSheet("QPushButton { background-color: rgba(255, 255, 255, 0.03); color: #6b7280; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 4px; padding: 3px 10px; font-size: 11px; }")
+        else:
+            self.btn_pop_stash.setStyleSheet("QPushButton { background-color: rgba(251, 191, 36, 0.15); color: #fde047; border: 1px solid rgba(251, 191, 36, 0.40); border-radius: 4px; padding: 3px 10px; font-size: 11px; font-weight: 700; } QPushButton:hover { background-color: rgba(251, 191, 36, 0.30); color: #ffffff; }")
+
+        # 3. Telemetría - Pulso de Red & Seguridad
+        self.lbl_sync_last_fetch.setText(f"🕒 {status.get('last_fetch_str', 'Sin registro')}")
+        rec = status.get("recommended_action", "Al día")
+        self.lbl_sync_safety_badge.setText(f"[{rec}]")
+
+        # 4. Actualizar Listas de Detalle
+        self.update_filter_button_styles()
+        self.render_sync_local_tree(status)
+        self.render_sync_incoming_radar(status)
+
+        if hasattr(self, "sector1_sub_stack"):
+            self.sector1_sub_stack.updateGeometry()
+
+    def render_sync_local_tree(self, status: dict):
+        """Renderiza los archivos del árbol de trabajo con métricas de líneas y botones de acción rápida."""
+        while self.sync_files_layout.count():
+            item = self.sync_files_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        staged = status.get("staged_files", [])
+        unstaged = status.get("unstaged_files", [])
+        untracked = status.get("untracked_files", [])
+        conflicts = status.get("conflict_files", [])
+
+        items_to_show = []
+
+        if self.current_sync_filter in ("ALL", "CONFLICT"):
+            for cf in conflicts:
+                items_to_show.append(("CONFLICT", cf, 0, 0))
+
+        if self.current_sync_filter in ("ALL", "STAGED"):
+            for sf in staged:
+                items_to_show.append(("STAGED", sf["path"], sf.get("adds", 0), sf.get("dels", 0)))
+
+        if self.current_sync_filter in ("ALL", "UNSTAGED"):
+            for uf in unstaged:
+                items_to_show.append(("UNSTAGED", uf["path"], uf.get("adds", 0), uf.get("dels", 0)))
+
+        if self.current_sync_filter in ("ALL", "UNTRACKED"):
+            for ut in untracked:
+                items_to_show.append(("UNTRACKED", ut, 0, 0))
+
+        if not items_to_show:
+            empty_frame = QFrame()
+            empty_frame.setStyleSheet("""
+                QFrame {
+                    background-color: rgba(255, 255, 255, 0.02);
+                    border: 1px dashed rgba(255, 255, 255, 0.10);
+                    border-radius: 8px;
+                    padding: 24px;
+                }
+            """)
+            ef_lay = QVBoxLayout(empty_frame)
+            ef_lay.setAlignment(Qt.AlignCenter)
+            if status.get("is_clean", True):
+                msg_lbl = QLabel("✨ Árbol de trabajo 100% limpio. No hay modificaciones pendientes.")
+                msg_lbl.setStyleSheet("font-size: 12.5px; font-weight: 700; color: #34d399;")
+            else:
+                msg_lbl = QLabel("ℹ️ No hay archivos en esta categoría.")
+                msg_lbl.setStyleSheet("font-size: 12px; color: #9ca3af;")
+            ef_lay.addWidget(msg_lbl)
+            self.sync_files_layout.addWidget(empty_frame)
+            self.sync_files_layout.addStretch()
+            return
+
+        for kind, fpath, adds, dels in items_to_show:
+            row = QFrame()
+            row.setStyleSheet("""
+                QFrame {
+                    background-color: rgba(255, 255, 255, 0.02);
+                    border: 1px solid rgba(255, 255, 255, 0.06);
+                    border-radius: 6px;
+                    padding: 4px 8px;
+                }
+                QFrame:hover {
+                    background-color: rgba(255, 255, 255, 0.05);
+                    border-color: rgba(255, 255, 255, 0.12);
+                }
+            """)
+            r_lay = QHBoxLayout(row)
+            r_lay.setContentsMargins(8, 4, 8, 4)
+            r_lay.setSpacing(10)
+
+            badge = QLabel()
+            badge.setFixedHeight(20)
+            badge.setAlignment(Qt.AlignCenter)
+            if kind == "STAGED":
+                badge.setText("STAGE")
+                badge.setStyleSheet("font-size: 9.5px; font-weight: 800; color: #34d399; background: rgba(52, 211, 153, 0.15); border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 3px; padding: 1px 6px;")
+            elif kind == "UNSTAGED":
+                badge.setText("MOD")
+                badge.setStyleSheet("font-size: 9.5px; font-weight: 800; color: #fbbf24; background: rgba(251, 191, 36, 0.15); border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 3px; padding: 1px 6px;")
+            elif kind == "UNTRACKED":
+                badge.setText("NEW")
+                badge.setStyleSheet("font-size: 9.5px; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 3px; padding: 1px 6px;")
+            else:
+                badge.setText("CONFLICT")
+                badge.setStyleSheet("font-size: 9.5px; font-weight: 800; color: #f87171; background: rgba(248, 113, 113, 0.15); border: 1px solid rgba(248, 113, 113, 0.35); border-radius: 3px; padding: 1px 6px;")
+            r_lay.addWidget(badge)
+
+            lbl_fp = QLabel(fpath)
+            lbl_fp.setStyleSheet("font-family: monospace; font-size: 11.5px; color: #f3f4f6;")
+            lbl_fp.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            r_lay.addWidget(lbl_fp, 1)
+
+            if adds > 0 or dels > 0:
+                lbl_l = QLabel(f"<span style='color: #34d399; font-weight: 700;'>+{adds}</span>  <span style='color: #f87171; font-weight: 700;'>-{dels}</span>")
+                lbl_l.setStyleSheet("font-family: monospace; font-size: 11px;")
+                r_lay.addWidget(lbl_l)
+
+            if kind == "UNSTAGED":
+                btn_st = QPushButton("+ Stage")
+                btn_st.setCursor(Qt.PointingHandCursor)
+                btn_st.setStyleSheet("QPushButton { background-color: rgba(52, 211, 153, 0.15); color: #6ee7b7; border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 4px; padding: 2px 8px; font-size: 10.5px; font-weight: 700; } QPushButton:hover { background-color: rgba(52, 211, 153, 0.30); color: #fff; }")
+                btn_st.clicked.connect(lambda _, p=fpath: self.execute_stage_file(p))
+                r_lay.addWidget(btn_st)
+
+                btn_dc = QPushButton("↺ Descartar")
+                btn_dc.setCursor(Qt.PointingHandCursor)
+                btn_dc.setStyleSheet("QPushButton { background-color: rgba(248, 113, 113, 0.12); color: #fca5a5; border: 1px solid rgba(248, 113, 113, 0.35); border-radius: 4px; padding: 2px 8px; font-size: 10.5px; font-weight: 600; } QPushButton:hover { background-color: rgba(248, 113, 113, 0.25); color: #fff; }")
+                btn_dc.clicked.connect(lambda _, p=fpath: self.execute_discard_file(p))
+                r_lay.addWidget(btn_dc)
+            elif kind == "STAGED":
+                btn_unst = QPushButton("- Unstage")
+                btn_unst.setCursor(Qt.PointingHandCursor)
+                btn_unst.setStyleSheet("QPushButton { background-color: rgba(251, 191, 36, 0.15); color: #fde047; border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 4px; padding: 2px 8px; font-size: 10.5px; font-weight: 700; } QPushButton:hover { background-color: rgba(251, 191, 36, 0.30); color: #fff; }")
+                btn_unst.clicked.connect(lambda _, p=fpath: self.execute_unstage_file(p))
+                r_lay.addWidget(btn_unst)
+
+                btn_dc = QPushButton("↺ Descartar")
+                btn_dc.setCursor(Qt.PointingHandCursor)
+                btn_dc.setStyleSheet("QPushButton { background-color: rgba(248, 113, 113, 0.12); color: #fca5a5; border: 1px solid rgba(248, 113, 113, 0.35); border-radius: 4px; padding: 2px 8px; font-size: 10.5px; font-weight: 600; } QPushButton:hover { background-color: rgba(248, 113, 113, 0.25); color: #fff; }")
+                btn_dc.clicked.connect(lambda _, p=fpath: self.execute_discard_file(p))
+                r_lay.addWidget(btn_dc)
+            elif kind == "UNTRACKED":
+                btn_st = QPushButton("+ Stage")
+                btn_st.setCursor(Qt.PointingHandCursor)
+                btn_st.setStyleSheet("QPushButton { background-color: rgba(56, 189, 248, 0.15); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 4px; padding: 2px 8px; font-size: 10.5px; font-weight: 700; } QPushButton:hover { background-color: rgba(56, 189, 248, 0.30); color: #fff; }")
+                btn_st.clicked.connect(lambda _, p=fpath: self.execute_stage_file(p))
+                r_lay.addWidget(btn_st)
+
+                btn_del = QPushButton("🗑️ Eliminar")
+                btn_del.setCursor(Qt.PointingHandCursor)
+                btn_del.setStyleSheet("QPushButton { background-color: rgba(248, 113, 113, 0.12); color: #fca5a5; border: 1px solid rgba(248, 113, 113, 0.35); border-radius: 4px; padding: 2px 8px; font-size: 10.5px; font-weight: 600; } QPushButton:hover { background-color: rgba(248, 113, 113, 0.25); color: #fff; }")
+                btn_del.clicked.connect(lambda _, p=fpath: self.execute_discard_file(p))
+                r_lay.addWidget(btn_del)
+
+            self.sync_files_layout.addWidget(row)
+
+        self.sync_files_layout.addStretch()
+
+    def render_sync_incoming_radar(self, status: dict):
+        """Renderiza la telemetría de commits entrantes y salientes (Radar de Sincronización)."""
+        while self.sync_radar_layout.count():
+            item = self.sync_radar_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        behind_commits = status.get("behind_commits", [])
+        ahead_commits = status.get("ahead_commits", [])
+        incoming_stat = status.get("incoming_files_stat", "").strip()
+
+        has_data = False
+
+        # 1. Commits Entrantes (Behind)
+        if behind_commits:
+            has_data = True
+            lbl_bh_h = QLabel(f"📥  COMMITS ENTRANTES DESDE EL REMOTO ({len(behind_commits)} pendientes de pull):")
+            lbl_bh_h.setStyleSheet("font-size: 11.5px; font-weight: 800; color: #c084fc; letter-spacing: 0.5px;")
+            self.sync_radar_layout.addWidget(lbl_bh_h)
+
+            for c in behind_commits:
+                crow = QFrame()
+                crow.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(192, 132, 252, 0.05);
+                        border: 1px solid rgba(192, 132, 252, 0.15);
+                        border-radius: 6px;
+                        padding: 4px 8px;
+                    }
+                """)
+                c_lay = QHBoxLayout(crow)
+                c_lay.setContentsMargins(8, 4, 8, 4)
+                c_lay.setSpacing(10)
+
+                h_badge = QLabel(c.get("hash", ""))
+                h_badge.setStyleSheet("font-family: monospace; font-size: 11px; font-weight: 800; color: #c084fc; background: rgba(192, 132, 252, 0.15); border-radius: 3px; padding: 1px 6px;")
+                c_lay.addWidget(h_badge)
+
+                s_lbl = QLabel(c.get("subject", ""))
+                s_lbl.setStyleSheet("font-size: 12px; font-weight: 700; color: #f3f4f6;")
+                s_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                c_lay.addWidget(s_lbl, 1)
+
+                a_lbl = QLabel(f"{c.get('author', '')} • {c.get('time', '')}")
+                a_lbl.setStyleSheet("font-size: 10.5px; color: #9ca3af;")
+                c_lay.addWidget(a_lbl)
+
+                self.sync_radar_layout.addWidget(crow)
+
+            if incoming_stat:
+                stat_card = QFrame()
+                stat_card.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(0, 0, 0, 0.35);
+                        border: 1px solid rgba(255, 255, 255, 0.08);
+                        border-radius: 6px;
+                        padding: 8px;
+                    }
+                """)
+                sc_lay = QVBoxLayout(stat_card)
+                sc_lay.setContentsMargins(6, 4, 6, 4)
+                sc_lay.setSpacing(4)
+                lbl_st_title = QLabel("Resumen de archivos modificados en el remoto (Pre-pull diff):")
+                lbl_st_title.setStyleSheet("font-size: 10.5px; font-weight: 700; color: #9ca3af;")
+                sc_lay.addWidget(lbl_st_title)
+
+                txt_st = QTextEdit()
+                txt_st.setReadOnly(True)
+                txt_st.setMaximumHeight(110)
+                txt_st.setPlainText(incoming_stat)
+                txt_st.setStyleSheet("QTextEdit { background: transparent; border: none; font-family: monospace; font-size: 11px; color: #a5b4fc; }")
+                sc_lay.addWidget(txt_st)
+                self.sync_radar_layout.addWidget(stat_card)
+
+        # 2. Commits Salientes (Ahead)
+        if ahead_commits:
+            has_data = True
+            lbl_ah_h = QLabel(f"🚀  COMMITS SALIENTES LOCALES ({len(ahead_commits)} listos para push):")
+            lbl_ah_h.setStyleSheet("font-size: 11.5px; font-weight: 800; color: #38bdf8; letter-spacing: 0.5px; margin-top: 6px;")
+            self.sync_radar_layout.addWidget(lbl_ah_h)
+
+            for c in ahead_commits:
+                crow = QFrame()
+                crow.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(56, 189, 248, 0.05);
+                        border: 1px solid rgba(56, 189, 248, 0.15);
+                        border-radius: 6px;
+                        padding: 4px 8px;
+                    }
+                """)
+                c_lay = QHBoxLayout(crow)
+                c_lay.setContentsMargins(8, 4, 8, 4)
+                c_lay.setSpacing(10)
+
+                h_badge = QLabel(c.get("hash", ""))
+                h_badge.setStyleSheet("font-family: monospace; font-size: 11px; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.15); border-radius: 3px; padding: 1px 6px;")
+                c_lay.addWidget(h_badge)
+
+                s_lbl = QLabel(c.get("subject", ""))
+                s_lbl.setStyleSheet("font-size: 12px; font-weight: 700; color: #f3f4f6;")
+                s_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                c_lay.addWidget(s_lbl, 1)
+
+                a_lbl = QLabel(f"{c.get('author', '')} • {c.get('time', '')}")
+                a_lbl.setStyleSheet("font-size: 10.5px; color: #9ca3af;")
+                c_lay.addWidget(a_lbl)
+
+                self.sync_radar_layout.addWidget(crow)
+
+        # 3. Estado en Sincronía
+        if not has_data:
+            synced_frame = QFrame()
+            synced_frame.setStyleSheet("""
+                QFrame {
+                    background-color: rgba(52, 211, 153, 0.03);
+                    border: 1px dashed rgba(52, 211, 153, 0.25);
+                    border-radius: 8px;
+                    padding: 24px;
+                }
+            """)
+            sf_lay = QVBoxLayout(synced_frame)
+            sf_lay.setAlignment(Qt.AlignCenter)
+            lbl_ok = QLabel("✨  Repositorio 100% Sincronizado")
+            lbl_ok.setStyleSheet("font-size: 13px; font-weight: 800; color: #34d399;")
+            sf_lay.addWidget(lbl_ok)
+            up = status.get("upstream") or "origin"
+            lbl_ok_sub = QLabel(f"Tu rama local y la rama remota '{up}' están exactamente en paridad. No hay commits pendientes.")
+            lbl_ok_sub.setStyleSheet("font-size: 11.5px; color: #9ca3af;")
+            sf_lay.addWidget(lbl_ok_sub)
+            self.sync_radar_layout.addWidget(synced_frame)
+
+        self.sync_radar_layout.addStretch()
+
+    def execute_status_inspect(self):
+        """Audita en profundidad el estado del repositorio y emite telemetría detallada en la terminal."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        self.terminal_display.log("GIT-STATUS", "Ejecutando inspección táctica profunda del árbol de trabajo...", tag_color="#38bdf8", prefix="📋")
+        self.refresh_sync_view()
+        status = self.last_sync_status
+        branch = status.get("branch", "HEAD")
+        remote = status.get("remote", "origin")
+        upstream = status.get("upstream", "Sin tracking")
+        ahead = status.get("ahead", 0)
+        behind = status.get("behind", 0)
+        staged = status.get("total_staged", 0)
+        unstaged = status.get("total_unstaged", 0)
+        untracked = status.get("total_untracked", 0)
+        adds = status.get("total_lines_added", 0)
+        dels = status.get("total_lines_deleted", 0)
+        stashes = status.get("stash_count", 0)
+        rec = status.get("recommended_action", "Al día")
+
+        self.terminal_display.log("GIT-STATUS", f"Rama activa: <b>{branch}</b> • Remoto: <b>{remote}</b> (<code>{upstream}</code>)", tag_color="#60a5fa", prefix="🌿")
+        self.terminal_display.log("GIT-STATUS", f"Árbol local: <b>{unstaged}</b> modificado(s), <b>{staged}</b> en staging, <b>{untracked}</b> nuevo(s) • Deltas: <span style='color:#34d399;'>+{adds}</span> / <span style='color:#f87171;'>-{dels}</span> líneas", tag_color="#fbbf24", prefix="📁")
+        self.terminal_display.log("GIT-STATUS", f"Red: <b>+{ahead}</b> Ahead | <b>-{behind}</b> Behind • Stashes: <b>{stashes}</b> guardado(s)", tag_color="#c084fc", prefix="🛰️")
+        self.terminal_display.log_success("GIT-STATUS", f"Diagnóstico de sincronización: <b>{rec}</b>")
+
+    def execute_fetch_action(self):
+        """Inicia la descarga de metadatos remotos (fetch) en segundo plano."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        self.terminal_display.log("GIT-FETCH", "Contactando remotos y descargando metadatos con poda (git fetch --all --prune)...", tag_color="#c084fc", prefix="📡")
+        self.btn_action_fetch.set_subtitle("Conectando con remotos...")
+        self.fetch_thread = GitFetchThread(path, remote="", prune=True)
+        self.fetch_thread.finished_fetch.connect(self._on_fetch_finished)
+        self.fetch_thread.start()
+
+    def _on_fetch_finished(self, ok: bool, msg: str, status: dict):
+        """Callback cuando termina el hilo de fetch."""
+        self.btn_action_fetch.set_subtitle("Consulta commits y ramas del remoto con poda (--prune) sin alterar código")
+        if ok:
+            self.terminal_display.log_success("GIT-FETCH", f"Fetch completado exitosamente.")
+            behind = status.get("behind", 0)
+            if behind > 0:
+                self.terminal_display.log("GIT-FETCH", f"📥 Se detectaron <b>{behind}</b> commit(s) nuevos en el remoto. Pulsa <b>'Sincronizar Cambios (Pull)'</b> para integrarlos.", tag_color="#c084fc", prefix="⚡")
+            else:
+                self.terminal_display.log("GIT-FETCH", "✨ El repositorio local ya cuenta con los últimos commits del remoto.", tag_color="#34d399", prefix="✔")
+        else:
+            self.terminal_display.log_error("GIT-FETCH", f"Fallo al ejecutar git fetch:\n{msg}")
+
+        self.refresh_sync_view()
+        self.refresh_git_graph()
+
+    def execute_pull_action(self):
+        """Ejecuta git pull aplicando la estrategia táctica seleccionada."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+
+        strat = self.cmb_pull_strategy.currentData() or "rebase"
+        autostash = self.chk_pull_autostash.isChecked()
+        strat_lbl = "Rebase + Autostash" if strat == "rebase" else ("Fast-Forward Only" if strat == "ff-only" else "Merge Commit")
+
+        self.terminal_display.log("GIT-PULL", f"Iniciando sincronización mediante <b>{strat_lbl}</b>...", tag_color="#34d399", prefix="📥")
+        self.btn_action_pull.set_subtitle("Descargando e integrando commits...")
+
+        self.pull_thread = GitPullThread(path, strategy=strat, autostash=autostash)
+        self.pull_thread.finished_pull.connect(self._on_pull_finished)
+        self.pull_thread.start()
+
+    def _on_pull_finished(self, ok: bool, msg: str):
+        """Callback cuando finaliza git pull."""
+        self.btn_action_pull.set_subtitle("Descarga e integra commits entrantes con Rebase + Autostash inteligente")
+        if ok:
+            self.terminal_display.log_success("GIT-PULL", f"Git Pull completado con éxito:\n{msg}")
+        else:
+            self.terminal_display.log_error("GIT-PULL", f"Fallo durante la sincronización Git Pull:\n{msg}")
+
+        self.refresh_sync_view()
+        self.refresh_current_project(reset_terminal=False)
+        self.refresh_git_graph()
+
+    def execute_stage_file(self, file_path: str):
+        """Agrega un archivo individual al staging."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        ok, msg = execute_git_stage_path(path, file_path)
+        if ok:
+            self.terminal_display.log_git("STAGE", f"Archivo añadido a staging: <b>{file_path}</b>")
+            self.refresh_sync_view()
+            self.refresh_current_project(reset_terminal=False)
+        else:
+            self.terminal_display.log_error("STAGE", f"Error al añadir '{file_path}': {msg}")
+
+    def execute_unstage_file(self, file_path: str):
+        """Quita un archivo individual del staging."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        ok, msg = execute_git_unstage_path(path, file_path)
+        if ok:
+            self.terminal_display.log_git("UNSTAGE", f"Archivo retirado de staging: <b>{file_path}</b>")
+            self.refresh_sync_view()
+            self.refresh_current_project(reset_terminal=False)
+        else:
+            self.terminal_display.log_error("UNSTAGE", f"Error al retirar '{file_path}': {msg}")
+
+    def execute_discard_file(self, file_path: str):
+        """Descarta cambios locales en un archivo."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        self.terminal_display.log("DISCARD", f"Descartando modificaciones en <b>{file_path}</b>...", tag_color="#f87171", prefix="↺")
+        ok, msg = execute_git_discard_path(path, file_path)
+        if ok:
+            self.terminal_display.log_warn("DISCARD", f"Cambios descartados en <b>{file_path}</b>.")
+            self.refresh_sync_view()
+            self.refresh_current_project(reset_terminal=False)
+        else:
+            self.terminal_display.log_error("DISCARD", f"Error al descartar '{file_path}': {msg}")
+
+    def toggle_stash_drawer(self):
+        """Alterna el cajón para guardar un stash rápido."""
+        vis = not self.drawer_stash_save.isVisible()
+        self.drawer_stash_save.setVisible(vis)
+        if vis:
+            self.txt_stash_msg.setFocus()
+        if hasattr(self, "sector1_sub_stack"):
+            self.sector1_sub_stack.updateGeometry()
+
+    def execute_stash_save_action(self):
+        """Guarda un stash con el mensaje especificado."""
+        path = self.project_data.get("path")
+        msg = self.txt_stash_msg.text().strip()
+        if not path:
+            return
+        self.terminal_display.log("STASH", f"Guardando cambios en stash ('{msg or 'WIP'}')...", tag_color="#fde047", prefix="📦")
+        ok, res = execute_git_stash_save(path, msg)
+        if ok:
+            self.terminal_display.log_success("STASH", f"Cambios guardados en stash exitosamente.")
+            self.txt_stash_msg.clear()
+            self.drawer_stash_save.setVisible(False)
+            self.refresh_sync_view()
+            self.refresh_current_project(reset_terminal=False)
+        else:
+            self.terminal_display.log_error("STASH", f"Error al guardar stash: {res}")
+
+    def execute_stash_pop_action(self):
+        """Restaura el stash más reciente en el árbol de trabajo."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        self.terminal_display.log("STASH", "Restaurando último stash (git stash pop)...", tag_color="#fde047", prefix="⚡")
+        ok, res = execute_git_stash_pop(path)
+        if ok:
+            self.terminal_display.log_success("STASH", f"Stash restaurado en el árbol de trabajo exitosamente.")
+            self.refresh_sync_view()
+            self.refresh_current_project(reset_terminal=False)
+        else:
+            self.terminal_display.log_error("STASH", f"Error al restaurar stash:\n{res}")
+
     # -----------------------------------------------------------------
     # VISTA DE GRAFOS DE RAMAS (ESTILO GITHUB NETWORK GRAPH)
     # -----------------------------------------------------------------
@@ -3908,6 +5108,8 @@ class LumenProjectWorkspaceView(QWidget):
             self.drawer_switch_dest.setVisible(False)
         if hasattr(self, "merge_inner_stack"):
             self.merge_inner_stack.setCurrentIndex(0)
+        if hasattr(self, "drawer_stash_save"):
+            self.drawer_stash_save.setVisible(False)
         self.terminal_display.log("NAV", "Regresando al menú principal de Sectores.", tag_color="#9ca3af", prefix="◀")
 
     # -----------------------------------------------------------------
@@ -4463,4 +5665,7 @@ class LumenProjectWorkspaceView(QWidget):
         """Re-sincroniza el proyecto actual con el disco."""
         if self.project_data:
             self.set_project(self.project_data, reset_terminal=reset_terminal)
+            if hasattr(self, "sector1_sub_stack") and hasattr(self, "page_sync"):
+                if self.sector1_sub_stack.currentWidget() == self.page_sync:
+                    self.refresh_sync_view()
             self.terminal_display.log_success("SYNC", "HUD y estado del repositorio actualizados.")

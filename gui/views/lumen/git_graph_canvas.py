@@ -374,10 +374,11 @@ class LumenHorizontalGitGraphView(QGraphicsView):
             return
 
         # 3. Asignación de carriles horizontales (Topología de Ramas)
-        # Ordenamos de más antiguo (izquierda) a más reciente (derecha)
-        commits.reverse()
-
+        # Se calcula con los commits de más reciente a más antiguo para seguir el linaje hacia atrás
         lane_mapping, commit_lanes = self._calculate_branch_lanes(commits, branch_info)
+
+        # Ahora sí, ordenamos de más antiguo (izquierda) a más reciente (derecha) para el eje temporal
+        commits.reverse()
 
         # 4. Dimensiones de la cuadrícula horizontal
         x_step = 100.0   # Espacio horizontal entre commits consecutivos
@@ -385,15 +386,19 @@ class LumenHorizontalGitGraphView(QGraphicsView):
         base_x = 120.0   # Margen izquierdo para etiquetas de carril
         base_y = 50.0
 
-        # Dibujar guías de carril horizontales a la izquierda
-        for lane_idx, b_name in lane_mapping.items():
+        # Dibujar guías de carril solo para los carriles que realmente contienen commits
+        used_lanes = sorted(set(commit_lanes.values())) if commit_lanes else [0]
+        total_guide_width = base_x + (len(commits) + (2 if simulated_merge else 1)) * x_step + 60
+
+        for lane_idx in used_lanes:
+            b_name = lane_mapping.get(lane_idx, f"Rama #{lane_idx}")
             color = LUMEN_BRANCH_PALETTE[lane_idx % len(LUMEN_BRANCH_PALETTE)]
             lane_y = base_y + lane_idx * y_step
 
             # Línea guía horizontal muy tenue
             guide_path = QPainterPath()
             guide_path.moveTo(base_x - 30, lane_y)
-            guide_path.lineTo(base_x + (len(commits) + (2 if simulated_merge else 1)) * x_step + 60, lane_y)
+            guide_path.lineTo(total_guide_width, lane_y)
             guide_item = QGraphicsPathItem(guide_path)
             guide_pen = QPen(QColor(color.red(), color.green(), color.blue(), 30), 1.0, Qt.DashLine)
             guide_item.setPen(guide_pen)
@@ -453,8 +458,9 @@ class LumenHorizontalGitGraphView(QGraphicsView):
 
             tgt_node = self.head_node
             if tgt_b:
+                clean_tgt = tgt_b.replace("origin/", "").strip()
                 for n in reversed(self.nodes):
-                    if any(tgt_b in r for r in n.refs):
+                    if any(tgt_b in r or clean_tgt in r for r in n.refs):
                         tgt_node = n
                         break
 
@@ -578,6 +584,7 @@ class LumenHorizontalGitGraphView(QGraphicsView):
         """
         Asigna a cada commit un carril horizontal persistente según su linaje y rama.
         El carril 0 siempre está reservado para la rama activa (HEAD).
+        Debe invocarse con commits ordenados de más reciente a más antiguo.
         """
         lane_mapping = {}  # lane_idx -> branch_name
         commit_lanes = {}  # hash -> lane_idx
@@ -594,50 +601,67 @@ class LumenHorizontalGitGraphView(QGraphicsView):
 
         lane_mapping[0] = active_branch
 
-        # Identificar ramas adicionales detectadas
-        next_lane = 1
-        for b in branches:
-            b_name = b["name"]
-            if b_name != active_branch and b_name not in lane_mapping.values():
-                lane_mapping[next_lane] = b_name
-                next_lane += 1
+        # Identificar nombres de ramas conocidas pasadas como contexto
+        known_branch_names = [
+            b["name"] for b in branches
+            if b.get("name") and b["name"] != active_branch and b["name"] != "HEAD"
+        ]
 
-        # Algoritmo de asignación de carril por linaje
-        active_lanes = []  # commits esperados por carril
-        for c in reversed(commits):  # De más nuevo a más antiguo
+        # Algoritmo de asignación de carril por linaje (de más nuevo a más antiguo)
+        active_lanes = []  # commit_hash esperado por carril
+        for c in commits:
             chash = c["hash"]
 
-            # Si el commit tiene una etiqueta de rama conocida, forzar a ese carril
-            explicit_lane = None
-            for lane_idx, b_name in lane_mapping.items():
-                if any(b_name in r for r in c.get("refs", [])):
-                    explicit_lane = lane_idx
-                    break
-
-            if explicit_lane is not None:
-                lane = explicit_lane
-            elif chash in active_lanes:
+            # 1. Prioridad principal: ¿Este commit continúa un carril activo existente?
+            if chash in active_lanes:
                 lane = active_lanes.index(chash)
+                # Si múltiples carriles convergían a este commit (punto de fork previo), liberar los otros
+                for idx in range(len(active_lanes)):
+                    if active_lanes[idx] == chash:
+                        active_lanes[idx] = None
             else:
-                # Si no hay slot libre, asignar carril 0 o el primer disponible
-                if None in active_lanes:
+                # 2. Si no viene de un carril activo, ver si pertenece a una rama con carril ya mapeado
+                explicit_lane = None
+                for lane_idx, b_name in lane_mapping.items():
+                    if any(b_name in r for r in c.get("refs", [])):
+                        explicit_lane = lane_idx
+                        break
+
+                if explicit_lane is not None:
+                    lane = explicit_lane
+                elif None in active_lanes:
                     lane = active_lanes.index(None)
-                    active_lanes[lane] = chash
                 else:
                     lane = len(active_lanes)
-                    active_lanes.append(chash)
 
+            # Asegurar dimensión de active_lanes
+            while len(active_lanes) <= lane:
+                active_lanes.append(None)
+
+            active_lanes[lane] = chash
             commit_lanes[chash] = lane
 
-            # Actualizar active_lanes con los padres
+            # Asignar nombre descriptivo de rama al carril si aún no tiene uno
+            if lane not in lane_mapping:
+                found_name = None
+                for r in c.get("refs", []):
+                    clean = r.replace("HEAD ->", "").replace("origin/", "").strip()
+                    if clean and "tag:" not in clean:
+                        found_name = clean
+                        break
+                if not found_name and known_branch_names:
+                    found_name = known_branch_names.pop(0)
+                lane_mapping[lane] = found_name or f"Rama #{lane}"
+
+            # 3. Propagar expectativas de padres hacia los carriles
             parents = c.get("parents", [])
             if not parents:
-                if lane < len(active_lanes):
-                    active_lanes[lane] = None
+                # Fin del linaje para este carril (commit raíz)
+                active_lanes[lane] = None
             else:
-                p0 = parents[0]
-                if lane < len(active_lanes):
-                    active_lanes[lane] = p0
+                # El padre primario continúa en este mismo carril
+                active_lanes[lane] = parents[0]
+                # Los padres secundarios (bifurcaciones / merges entrantes) toman slots libres o nuevos
                 for p_extra in parents[1:]:
                     if p_extra not in active_lanes:
                         if None in active_lanes:
