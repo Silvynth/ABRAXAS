@@ -23,7 +23,11 @@ from core.git_workflow import (
     generate_ia_commit_proposal, execute_commit_and_tag,
     get_git_branches_matrix, execute_git_checkout,
     execute_git_create_branch, execute_git_delete_branch,
-    execute_git_deploy_branch
+    execute_git_deploy_branch,
+    get_git_merge_status, get_mergeable_branches,
+    get_merge_diff_and_commits, generate_ia_merge_proposal,
+    execute_git_merge, execute_git_merge_into, execute_git_merge_abort,
+    execute_git_resolve_conflicts, execute_git_complete_merge
 )
 from gui.views.lumen.git_graph_canvas import LumenHorizontalGitGraphView
 
@@ -111,7 +115,7 @@ class GitPushThread(QThread):
 
 
 class IACommitThread(QThread):
-    """Hilo para generar la propuesta de commit con IA (Protocolo Artemis) sin congelar la GUI."""
+    """Hilo para generar la propuesta de commit con IA sin congelar la GUI."""
     finished_commit = Signal(bool, str, dict)
 
     def __init__(self, project_path: str, model_type: str, impact_type: str, target_ver: str):
@@ -178,6 +182,30 @@ class IAAuditThread(QThread):
             self.finished_audit.emit(True, "", res)
         except Exception as e:
             self.finished_audit.emit(False, str(e), {})
+
+
+class IAMergeThread(QThread):
+    """Hilo para generar la propuesta de commit de merge con IA sin congelar la GUI."""
+    finished_merge = Signal(bool, str, dict)
+
+    def __init__(self, project_path: str, source_branch: str, target_branch: str = "", model_type: str = "light"):
+        super().__init__()
+        self.project_path = project_path
+        self.source_branch = source_branch
+        self.target_branch = target_branch
+        self.model_type = model_type
+
+    def run(self):
+        try:
+            res = generate_ia_merge_proposal(
+                self.project_path,
+                self.source_branch,
+                self.model_type,
+                target_branch=self.target_branch
+            )
+            self.finished_merge.emit(True, "", res)
+        except Exception as e:
+            self.finished_merge.emit(False, str(e), {})
 
 
 class LumenCyberActionButton(QFrame):
@@ -381,6 +409,12 @@ class LumenProjectWorkspaceView(QWidget):
         self.selected_model_type = "light"
         self.current_commit_proposal = {}
         self.cur_semver_options = {}
+        self.merge_thread = None
+        self.selected_merge_branch = ""
+        self.selected_merge_source = ""
+        self.selected_merge_target = ""
+        self.selected_merge_author = ""
+        self.selected_merge_commits = []
         self.init_ui()
 
         # Temporizador para la hora en vivo
@@ -659,6 +693,7 @@ class LumenProjectWorkspaceView(QWidget):
         overview_layout = QHBoxLayout(self.page_overview)
         overview_layout.setContentsMargins(0, 0, 0, 0)
         overview_layout.setSpacing(14)
+        overview_layout.setAlignment(Qt.AlignTop)
 
         # Pilar 1: Sector 1 (Protocolo Git y Ciclos)
         card_s1 = self.create_overview_sector_card(
@@ -881,7 +916,7 @@ class LumenProjectWorkspaceView(QWidget):
         """Crea una tarjeta para la vista general que permite entrar a la ventana limpia del sector."""
         card = QFrame()
         card.setProperty("class", "surface")
-        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         card.setStyleSheet(f"""
             QFrame.surface {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -1020,12 +1055,7 @@ class LumenProjectWorkspaceView(QWidget):
         btn_push.clicked.connect(self.run_git_push)
         w_lay.addWidget(btn_push)
 
-        # Botón 6: Control de Ramas (Protocolo Artemis)
-        btn_branches = LumenCyberActionButton("🌿", "Control de Ramas", "Matriz táctica de ramas: checkout, creación, borrado y despliegue", accent_color="#38bdf8")
-        btn_branches.clicked.connect(self.open_branches_view)
-        w_lay.addWidget(btn_branches)
-
-        # Botón 7: Volver
+        # Botón 6: Volver
         btn_volver = LumenCyberActionButton("◀", "Volver", "Regresar al menú principal de Sectores", accent_color="#9ca3af")
         btn_volver.clicked.connect(self.go_back_to_sectors_overview)
         w_lay.addWidget(btn_volver)
@@ -1113,7 +1143,7 @@ class LumenProjectWorkspaceView(QWidget):
         self.sector1_sub_stack.addWidget(page_ia_audit)
 
         # =============================================================
-        # SUB-PÁGINA 2: CONTROL DE VERSIONES (SemVer - Protocolo Artemis)
+        # SUB-PÁGINA 2: CONTROL DE VERSIONES (SemVer - Protocolo Táctico)
         # =============================================================
         page_semver = QWidget()
         semver_lay = QVBoxLayout(page_semver)
@@ -1209,7 +1239,7 @@ class LumenProjectWorkspaceView(QWidget):
         self.sector1_sub_stack.addWidget(page_semver)
 
         # =============================================================
-        # SUB-PÁGINA 3: MOTOR IA PARA PROCESAMIENTO (Protocolo Artemis)
+        # SUB-PÁGINA 3: MOTOR IA PARA PROCESAMIENTO (Protocolo Táctico)
         # =============================================================
         page_ia_model = QWidget()
         ia_mod_lay = QVBoxLayout(page_ia_model)
@@ -1349,7 +1379,7 @@ class LumenProjectWorkspaceView(QWidget):
         self.sector1_sub_stack.addWidget(page_loading)
 
         # =============================================================
-        # SUB-PÁGINA 5: CONFIRMAR REGISTRO DE COMMIT (Protocolo Artemis)
+        # SUB-PÁGINA 5: CONFIRMAR REGISTRO DE COMMIT (Protocolo Táctico)
         # =============================================================
         page_confirm = QWidget()
         conf_lay = QVBoxLayout(page_confirm)
@@ -1596,16 +1626,22 @@ class LumenProjectWorkspaceView(QWidget):
         self.sector1_sub_stack.addWidget(page_manual)
 
         # =============================================================
-        # SUB-PÁGINA 8: CONTROL DE RAMAS (PROTOCOLO ARTEMIS)
+        # SUB-PÁGINA 8: CONTROL DE RAMAS
         # =============================================================
         self.page_branches = self.create_sector1_branches_view()
         self.sector1_sub_stack.addWidget(self.page_branches)
+
+        # =============================================================
+        # SUB-PÁGINA 9: FUSIÓN DE RAMAS (GIT MERGE)
+        # =============================================================
+        self.page_merge = self.create_sector1_merge_view()
+        self.sector1_sub_stack.addWidget(self.page_merge)
 
         layout.addWidget(self.sector1_sub_stack)
         return card
 
     def create_sector1_branches_view(self) -> QWidget:
-        """Crea la sub-página dedicada para el Control y Matriz Táctica de Ramas (Protocolo Artemis)."""
+        """Crea la sub-página dedicada para el Control y Matriz Táctica de Ramas."""
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1657,12 +1693,33 @@ class LumenProjectWorkspaceView(QWidget):
         btn_to_work.clicked.connect(self.go_back_to_work_cycles)
         head.addWidget(btn_to_work)
 
+        btn_to_merge = QPushButton("🔀  Fusión de Ramas")
+        btn_to_merge.setCursor(Qt.PointingHandCursor)
+        btn_to_merge.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #bae6fd;
+                border: 1px solid rgba(56, 189, 248, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.30);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_to_merge.clicked.connect(self.open_merge_view)
+        head.addWidget(btn_to_merge)
+
         lbl_title = QLabel("🌿  CONTROL DE RAMAS")
         lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
         head.addWidget(lbl_title)
         head.addStretch()
 
-        lbl_pill = QLabel("[PROTOCOLO ARTEMIS • MATRIZ TÁCTICA]")
+        lbl_pill = QLabel("[LUMEN • CONTROL DE RAMAS]")
         lbl_pill.setFixedHeight(24)
         lbl_pill.setAlignment(Qt.AlignCenter)
         lbl_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #34d399; background-color: rgba(52, 211, 153, 0.12); border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 4px; padding: 2px 8px;")
@@ -2054,6 +2111,8 @@ class LumenProjectWorkspaceView(QWidget):
                 self.open_sector_view(1, "Ciclos de Trabajo")
             elif action_title == "Control de Ramas":
                 self.open_branches_view()
+            elif action_title == "Fusión de Ramas":
+                self.open_merge_view()
             else:
                 self.handle_action_click(action_title)
         else:
@@ -2061,10 +2120,10 @@ class LumenProjectWorkspaceView(QWidget):
             self.handle_action_click(action_title)
 
     def open_branches_view(self):
-        """Abre la vista dedicada de Control de Ramas en el Sector 1 (Protocolo Artemis)."""
+        """Abre la vista dedicada de Control de Ramas en el Sector 1."""
         self.sectors_stack.setCurrentIndex(1)
         self.sector1_sub_stack.setCurrentWidget(self.page_branches)
-        self.terminal_display.log("NAV", "Accediendo al módulo <b>Control de Ramas</b> (Protocolo Artemis)...", tag_color="#38bdf8", prefix="🌿")
+        self.terminal_display.log("NAV", "Accediendo al módulo <b>Control de Ramas</b>...", tag_color="#38bdf8", prefix="🌿")
         self.refresh_branches_list()
         self.refresh_git_graph()
         if hasattr(self, "btn_toggle_graph_terminal"):
@@ -2074,8 +2133,22 @@ class LumenProjectWorkspaceView(QWidget):
         self.sector1_sub_stack.updateGeometry()
         self.sectors_stack.updateGeometry()
 
+    def open_merge_view(self):
+        """Abre la vista dedicada de Fusión de Ramas (Git Merge) en el Sector 1."""
+        self.sectors_stack.setCurrentIndex(1)
+        self.sector1_sub_stack.setCurrentWidget(self.page_merge)
+        self.terminal_display.log("NAV", "Accediendo al módulo <b>Fusión de Ramas (Git Merge)</b>...", tag_color="#38bdf8", prefix="🔀")
+        self.refresh_merge_view()
+        self.refresh_git_graph()
+        if hasattr(self, "btn_toggle_graph_terminal"):
+            self.btn_toggle_graph_terminal.setVisible(True)
+        if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 0:
+            self.toggle_terminal_graph_view()
+        self.sector1_sub_stack.updateGeometry()
+        self.sectors_stack.updateGeometry()
+
     def refresh_branches_list(self):
-        """Consulta y renderiza en vivo la matriz de ramas según el Protocolo Artemis."""
+        """Consulta y renderiza en vivo la matriz de ramas."""
         path = self.project_data.get("path")
         if not path or not os.path.exists(path):
             return
@@ -2322,6 +2395,1291 @@ class LumenProjectWorkspaceView(QWidget):
             self.terminal_display.log_error("BRANCH-DEPLOY", f"Fallo al desplegar rama '{target}':\n{msg}")
 
     # -----------------------------------------------------------------
+    # MÓDULO 3: FUSIÓN TÁCTICA DE RAMAS (GIT MERGE)
+    # -----------------------------------------------------------------
+    def create_sector1_merge_view(self) -> QWidget:
+        """Crea la sub-página dedicada para la Fusión Táctica de Ramas (Git Merge)."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # 1. Cabecera de Navegación del Módulo 3
+        head = QHBoxLayout()
+        head.setSpacing(10)
+
+        btn_back_main = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back_main.setCursor(Qt.PointingHandCursor)
+        btn_back_main.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #bae6fd;
+                border: 1px solid rgba(56, 189, 248, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.30);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_back_main.clicked.connect(self.go_back_to_sectors_overview)
+        head.addWidget(btn_back_main)
+
+        btn_to_work = QPushButton("🔄  Ciclos de Trabajo")
+        btn_to_work.setCursor(Qt.PointingHandCursor)
+        btn_to_work.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.15);
+                color: #c7d2fe;
+                border: 1px solid rgba(99, 102, 241, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(99, 102, 241, 0.30);
+                border-color: #818cf8;
+                color: #ffffff;
+            }
+        """)
+        btn_to_work.clicked.connect(self.go_back_to_work_cycles)
+        head.addWidget(btn_to_work)
+
+        btn_to_branches = QPushButton("🌿  Control de Ramas")
+        btn_to_branches.setCursor(Qt.PointingHandCursor)
+        btn_to_branches.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border: 1px solid rgba(52, 211, 153, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.30);
+                border-color: #34d399;
+                color: #ffffff;
+            }
+        """)
+        btn_to_branches.clicked.connect(self.open_branches_view)
+        head.addWidget(btn_to_branches)
+
+        lbl_title = QLabel("🔀  FUSIÓN DE RAMAS (GIT MERGE)")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
+        head.addWidget(lbl_title)
+        head.addStretch()
+
+        btn_toggle_graph = QPushButton("📊  Alternar Grafo / Terminal")
+        btn_toggle_graph.setCursor(Qt.PointingHandCursor)
+        btn_toggle_graph.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.12);
+                color: #7dd3fc;
+                border: 1px solid rgba(56, 189, 248, 0.35);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.25);
+                color: #ffffff;
+            }
+        """)
+        btn_toggle_graph.clicked.connect(self.toggle_terminal_graph_view)
+        head.addWidget(btn_toggle_graph)
+
+        lbl_pill = QLabel("[LUMEN • INTEGRACIÓN TÁCTICA]")
+        lbl_pill.setFixedHeight(24)
+        lbl_pill.setAlignment(Qt.AlignCenter)
+        lbl_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #38bdf8; background-color: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 4px; padding: 2px 8px;")
+        head.addWidget(lbl_pill)
+        layout.addLayout(head)
+
+        # 2. Barra HUD de Estado de Fusión
+        hud_frame = QFrame()
+        hud_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.02);
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 6px;
+                padding: 6px 12px;
+            }
+        """)
+        h_lay = QHBoxLayout(hud_frame)
+        h_lay.setContentsMargins(10, 6, 10, 6)
+        h_lay.setSpacing(12)
+
+        self.lbl_merge_dest_info = QLabel("📤 Rama Activa a Integrar (Origen): main • Autor: silvynth")
+        self.lbl_merge_dest_info.setStyleSheet("font-size: 11.5px; font-weight: 800; color: #f3f4f6;")
+        h_lay.addWidget(self.lbl_merge_dest_info)
+
+        self.btn_switch_dest = QPushButton("🔄 Conmutar Rama Activa")
+        self.btn_switch_dest.setCursor(Qt.PointingHandCursor)
+        self.btn_switch_dest.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.04);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                color: #38bdf8;
+                border-color: #38bdf8;
+                background-color: rgba(56, 189, 248, 0.10);
+            }
+        """)
+        self.btn_switch_dest.clicked.connect(self.toggle_switch_dest_drawer)
+        h_lay.addWidget(self.btn_switch_dest)
+
+        h_lay.addStretch()
+
+        self.lbl_merge_status_badge = QLabel("✔ ESTADO: LISTO PARA INTEGRACIÓN")
+        self.lbl_merge_status_badge.setStyleSheet("font-size: 10.5px; font-weight: 800; color: #34d399; background-color: rgba(52, 211, 153, 0.12); border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 4px; padding: 2px 8px;")
+        h_lay.addWidget(self.lbl_merge_status_badge)
+        layout.addWidget(hud_frame)
+
+        # Cajón desplegable para cambiar rama destino (checkout)
+        self.drawer_switch_dest = QFrame()
+        self.drawer_switch_dest.setVisible(False)
+        self.drawer_switch_dest.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(56, 189, 248, 0.30);
+                border-radius: 6px;
+                padding: 8px 12px;
+            }
+        """)
+        sw_lay = QHBoxLayout(self.drawer_switch_dest)
+        sw_lay.setContentsMargins(8, 4, 8, 4)
+        sw_lay.setSpacing(10)
+
+        lbl_sw = QLabel("Seleccionar nueva rama destino (receptora):")
+        lbl_sw.setStyleSheet("font-size: 11.5px; color: #9ca3af; font-weight: 700;")
+        sw_lay.addWidget(lbl_sw)
+
+        self.cmb_switch_dest = QComboBox()
+        self.cmb_switch_dest.setItemDelegate(QStyledItemDelegate())
+        self.cmb_switch_dest.setStyleSheet("""
+            QComboBox {
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                color: #f3f4f6;
+                padding: 4px 10px;
+                font-size: 11.5px;
+            }
+        """)
+        sw_lay.addWidget(self.cmb_switch_dest, 1)
+
+        btn_confirm_switch = QPushButton("Cambiar Rama (Checkout)")
+        btn_confirm_switch.setCursor(Qt.PointingHandCursor)
+        btn_confirm_switch.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.20);
+                color: #38bdf8;
+                border: 1px solid #38bdf8;
+                border-radius: 4px;
+                padding: 4px 12px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.35);
+                color: #ffffff;
+            }
+        """)
+        btn_confirm_switch.clicked.connect(self.execute_switch_dest_checkout)
+        sw_lay.addWidget(btn_confirm_switch)
+
+        btn_cancel_sw = QPushButton("Cerrar")
+        btn_cancel_sw.setCursor(Qt.PointingHandCursor)
+        btn_cancel_sw.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 11px;
+            }
+        """)
+        btn_cancel_sw.clicked.connect(lambda: self.drawer_switch_dest.setVisible(False))
+        sw_lay.addWidget(btn_cancel_sw)
+        layout.addWidget(self.drawer_switch_dest)
+
+        # 3. Dynamic Stack Interno de Fusión
+        self.merge_inner_stack = LumenDynamicStackedWidget()
+
+        # =============================================================
+        # PÁGINA 0: DASHBOARD / SELECTOR DE RAMA ORIGEN
+        # =============================================================
+        p_select = QWidget()
+        p0_lay = QVBoxLayout(p_select)
+        p0_lay.setContentsMargins(0, 0, 0, 0)
+        p0_lay.setSpacing(8)
+
+        # Banner de fusión activa o de emergencia si aplica
+        self.frame_active_merge_alert = QFrame()
+        self.frame_active_merge_alert.setVisible(False)
+        self.frame_active_merge_alert.setStyleSheet("""
+            QFrame {
+                background-color: rgba(248, 113, 113, 0.08);
+                border: 1px solid rgba(248, 113, 113, 0.40);
+                border-radius: 6px;
+                padding: 8px 12px;
+            }
+        """)
+        f_ama_lay = QVBoxLayout(self.frame_active_merge_alert)
+        f_ama_lay.setContentsMargins(8, 6, 8, 6)
+        f_ama_lay.setSpacing(6)
+
+        self.lbl_active_merge_msg = QLabel("⚠️ FUSIÓN EN CURSO DETECTADA")
+        self.lbl_active_merge_msg.setStyleSheet("font-size: 12px; font-weight: 800; color: #f87171;")
+        f_ama_lay.addWidget(self.lbl_active_merge_msg)
+
+        self.lbl_conflicts_list = QLabel("")
+        self.lbl_conflicts_list.setStyleSheet("font-size: 11px; color: #fca5a5; font-family: monospace;")
+        f_ama_lay.addWidget(self.lbl_conflicts_list)
+
+        row_ama_btns = QHBoxLayout()
+        row_ama_btns.setSpacing(8)
+
+        btn_ama_abort = QPushButton("💥 Abortar Fusión (--abort)")
+        btn_ama_abort.setCursor(Qt.PointingHandCursor)
+        btn_ama_abort.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(248, 113, 113, 0.20);
+                color: #fca5a5;
+                border: 1px solid #f87171;
+                border-radius: 4px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: rgba(248, 113, 113, 0.35); color: #ffffff; }
+        """)
+        btn_ama_abort.clicked.connect(self.do_merge_abort)
+        row_ama_btns.addWidget(btn_ama_abort)
+
+        btn_ama_ours = QPushButton("🛡️ Resolver con NUESTRAS (ours)")
+        btn_ama_ours.setCursor(Qt.PointingHandCursor)
+        btn_ama_ours.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(251, 191, 36, 0.15);
+                color: #fde047;
+                border: 1px solid rgba(251, 191, 36, 0.40);
+                border-radius: 4px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: rgba(251, 191, 36, 0.30); color: #ffffff; }
+        """)
+        btn_ama_ours.clicked.connect(lambda: self.do_merge_resolve_conflicts("ours"))
+        row_ama_btns.addWidget(btn_ama_ours)
+
+        btn_ama_theirs = QPushButton("⚔️ Resolver con SUS (theirs)")
+        btn_ama_theirs.setCursor(Qt.PointingHandCursor)
+        btn_ama_theirs.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.15);
+                color: #c7d2fe;
+                border: 1px solid rgba(99, 102, 241, 0.40);
+                border-radius: 4px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: rgba(99, 102, 241, 0.30); color: #ffffff; }
+        """)
+        btn_ama_theirs.clicked.connect(lambda: self.do_merge_resolve_conflicts("theirs"))
+        row_ama_btns.addWidget(btn_ama_theirs)
+
+        self.btn_ama_complete = QPushButton("💾 Completar Fusión")
+        self.btn_ama_complete.setCursor(Qt.PointingHandCursor)
+        self.btn_ama_complete.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.20);
+                color: #6ee7b7;
+                border: 1px solid #34d399;
+                border-radius: 4px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: rgba(52, 211, 153, 0.35); color: #ffffff; }
+        """)
+        self.btn_ama_complete.clicked.connect(self.prepare_complete_active_merge)
+        row_ama_btns.addWidget(self.btn_ama_complete)
+        row_ama_btns.addStretch()
+
+        f_ama_lay.addLayout(row_ama_btns)
+        p0_lay.addWidget(self.frame_active_merge_alert)
+
+        # Título de la lista
+        self.lbl_p0_desc = QLabel("Selecciona la RAMA DESTINO donde deseas integrar los cambios de la rama activa:")
+        self.lbl_p0_desc.setStyleSheet("font-size: 11.5px; color: #9ca3af; font-weight: 600;")
+        p0_lay.addWidget(self.lbl_p0_desc)
+
+        # Scroll de ramas mergeables
+        scroll_merge = QScrollArea()
+        scroll_merge.setWidgetResizable(True)
+        scroll_merge.setMinimumHeight(200)
+        scroll_merge.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        scroll_merge_content = QWidget()
+        scroll_merge_content.setStyleSheet("background: transparent;")
+        self.merge_branches_list_layout = QVBoxLayout(scroll_merge_content)
+        self.merge_branches_list_layout.setContentsMargins(4, 4, 4, 4)
+        self.merge_branches_list_layout.setSpacing(6)
+        self.merge_branches_list_layout.addStretch()
+        scroll_merge.setWidget(scroll_merge_content)
+        p0_lay.addWidget(scroll_merge, 1)
+
+        # Barra inferior con botón de refresco
+        p0_bot = QHBoxLayout()
+        p0_bot.setSpacing(10)
+        btn_ref_merge = QPushButton("🔄  Refrescar Ramas")
+        btn_ref_merge.setCursor(Qt.PointingHandCursor)
+        btn_ref_merge.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #d1d5db;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                padding: 6px 14px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 0.12); color: #ffffff; }
+        """)
+        btn_ref_merge.clicked.connect(self.refresh_merge_view)
+        p0_bot.addWidget(btn_ref_merge)
+        p0_bot.addStretch()
+        p0_lay.addLayout(p0_bot)
+
+        self.merge_inner_stack.addWidget(p_select)
+
+        # =============================================================
+        # PÁGINA 1: CONFIRMACIÓN Y CONFIGURACIÓN DE FUSIÓN
+        # =============================================================
+        p_confirm = QWidget()
+        p1_lay = QVBoxLayout(p_confirm)
+        p1_lay.setContentsMargins(0, 0, 0, 0)
+        p1_lay.setSpacing(10)
+
+        # Diagrama Visual de Fusión
+        diagram_frame = QFrame()
+        diagram_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.02);
+                border: 1px solid rgba(56, 189, 248, 0.25);
+                border-radius: 8px;
+                padding: 10px 14px;
+            }
+        """)
+        d_lay = QVBoxLayout(diagram_frame)
+        d_lay.setSpacing(6)
+
+        lbl_diag_title = QLabel("❖ PANEL DE CONTROL DE FUSIÓN TÁCTICA ❖")
+        lbl_diag_title.setStyleSheet("font-size: 12px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
+        d_lay.addWidget(lbl_diag_title)
+
+        d_row_info = QHBoxLayout()
+        self.lbl_diag_incoming = QLabel("RAMA ORIGEN (Incoming): feature/test • Autor: silvynth")
+        self.lbl_diag_incoming.setStyleSheet("font-size: 12px; font-weight: 800; color: #fbbf24;")
+        d_row_info.addWidget(self.lbl_diag_incoming)
+        d_row_info.addStretch()
+
+        btn_view_sim_canvas = QPushButton("👁️ Ver Simulación en Grafo")
+        btn_view_sim_canvas.setCursor(Qt.PointingHandCursor)
+        btn_view_sim_canvas.setToolTip("Conmuta al visor horizontal de grafo para observar el nodo interactivo simulado.")
+        btn_view_sim_canvas.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #bae6fd;
+                border: 1px solid rgba(56, 189, 248, 0.40);
+                border-radius: 4px;
+                padding: 4px 12px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover { background-color: rgba(56, 189, 248, 0.30); color: #ffffff; }
+        """)
+        btn_view_sim_canvas.clicked.connect(self.show_simulated_canvas)
+        d_row_info.addWidget(btn_view_sim_canvas)
+        d_lay.addLayout(d_row_info)
+
+        lbl_arrow = QLabel("         │\n         ▼  (Integrando cambios en la rama destino)")
+        lbl_arrow.setStyleSheet("font-size: 11px; font-weight: 700; color: #9ca3af; font-family: monospace;")
+        d_lay.addWidget(lbl_arrow)
+
+        self.lbl_diag_receiver = QLabel("RAMA DESTINO (HEAD / Receiver): main • Autor: silvynth")
+        self.lbl_diag_receiver.setStyleSheet("font-size: 12px; font-weight: 800; color: #34d399;")
+        d_lay.addWidget(self.lbl_diag_receiver)
+
+        p1_lay.addWidget(diagram_frame)
+
+        # Resumen de commits entrantes
+        self.lbl_commits_preview = QLabel("Commits a integrar:")
+        self.lbl_commits_preview.setStyleSheet("font-size: 11px; color: #9ca3af; font-family: monospace;")
+        p1_lay.addWidget(self.lbl_commits_preview)
+
+        # Opciones de Ejecución (git merge vs git merge --no-ff)
+        opt_box = QFrame()
+        opt_box.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.02);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 6px;
+                padding: 8px 12px;
+            }
+        """)
+        opt_lay = QHBoxLayout(opt_box)
+        opt_lay.setContentsMargins(6, 4, 6, 4)
+        opt_lay.setSpacing(14)
+
+        lbl_opt_title = QLabel("Método:")
+        lbl_opt_title.setStyleSheet("font-size: 11.5px; font-weight: 800; color: #f3f4f6;")
+        opt_lay.addWidget(lbl_opt_title)
+
+        self.chk_merge_no_ff = QCheckBox("Forzar commit de merge (--no-ff)")
+        self.chk_merge_no_ff.setStyleSheet("color: #e5e7eb; font-size: 11.5px; font-weight: 600;")
+        self.chk_merge_no_ff.setToolTip("Crea siempre un commit explícito de fusión incluso si es posible avanzar de forma rápida (fast-forward).")
+        opt_lay.addWidget(self.chk_merge_no_ff)
+        opt_lay.addStretch()
+        p1_lay.addWidget(opt_box)
+
+        # Asistente de Mensaje de Commit (con IA o Estándar)
+        msg_box = QFrame()
+        msg_box.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.02);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 6px;
+                padding: 10px 14px;
+            }
+        """)
+        mb_lay = QVBoxLayout(msg_box)
+        mb_lay.setSpacing(8)
+
+        mb_head = QHBoxLayout()
+        lbl_mb_title = QLabel("Mensaje de Commit de Fusión:")
+        lbl_mb_title.setStyleSheet("font-size: 11.5px; font-weight: 800; color: #c084fc;")
+        mb_head.addWidget(lbl_mb_title)
+        mb_head.addStretch()
+
+        btn_gen_ai_light = QPushButton("🤖 IA Ligero (HEX)")
+        btn_gen_ai_light.setCursor(Qt.PointingHandCursor)
+        btn_gen_ai_light.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #7dd3fc;
+                border: 1px solid rgba(56, 189, 248, 0.40);
+                border-radius: 4px;
+                padding: 3px 9px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover { background-color: rgba(56, 189, 248, 0.30); color: #ffffff; }
+        """)
+        btn_gen_ai_light.clicked.connect(lambda: self.start_ia_merge_generation("light"))
+        mb_head.addWidget(btn_gen_ai_light)
+
+        btn_gen_ai_heavy = QPushButton("🧠 IA Pesado (HENDRIX)")
+        btn_gen_ai_heavy.setCursor(Qt.PointingHandCursor)
+        btn_gen_ai_heavy.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(192, 132, 252, 0.15);
+                color: #d8b4fe;
+                border: 1px solid rgba(192, 132, 252, 0.40);
+                border-radius: 4px;
+                padding: 3px 9px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover { background-color: rgba(192, 132, 252, 0.30); color: #ffffff; }
+        """)
+        btn_gen_ai_heavy.clicked.connect(lambda: self.start_ia_merge_generation("heavy"))
+        mb_head.addWidget(btn_gen_ai_heavy)
+
+        btn_gen_std = QPushButton("✍️ Estándar")
+        btn_gen_std.setCursor(Qt.PointingHandCursor)
+        btn_gen_std.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #d1d5db;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 4px;
+                padding: 3px 9px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 0.10); color: #ffffff; }
+        """)
+        btn_gen_std.clicked.connect(self.set_default_merge_message)
+        mb_head.addWidget(btn_gen_std)
+
+        mb_lay.addLayout(mb_head)
+
+        self.txt_merge_title = QLineEdit()
+        self.txt_merge_title.setPlaceholderText("Título del commit de fusión...")
+        self.txt_merge_title.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(255, 255, 255, 0.04);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                color: #f3f4f6;
+                padding: 6px 10px;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            QLineEdit:focus { border-color: #38bdf8; }
+        """)
+        mb_lay.addWidget(self.txt_merge_title)
+
+        self.txt_merge_body = QTextEdit()
+        self.txt_merge_body.setPlaceholderText("Cuerpo descriptivo del commit de fusión...")
+        self.txt_merge_body.setMaximumHeight(70)
+        self.txt_merge_body.setStyleSheet("""
+            QTextEdit {
+                background-color: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 6px;
+                color: #e5e7eb;
+                padding: 6px 10px;
+                font-size: 11.5px;
+            }
+            QTextEdit:focus { border-color: #38bdf8; }
+        """)
+        mb_lay.addWidget(self.txt_merge_body)
+        p1_lay.addWidget(msg_box)
+
+        # Botones de Acción de Fusión
+        row_act1 = QHBoxLayout()
+        row_act1.setSpacing(10)
+
+        self.btn_confirm_merge = QPushButton("🔀  Confirmar e Integrar en Destino")
+        self.btn_confirm_merge.setCursor(Qt.PointingHandCursor)
+        self.btn_confirm_merge.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.20);
+                color: #38bdf8;
+                border: 1px solid #38bdf8;
+                border-radius: 6px;
+                padding: 8px 18px;
+                font-weight: 800;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.35);
+                color: #ffffff;
+            }
+        """)
+        self.btn_confirm_merge.clicked.connect(self.execute_merge_action)
+        row_act1.addWidget(self.btn_confirm_merge)
+
+        btn_cancel_p1 = QPushButton("Cancelar y Volver")
+        btn_cancel_p1.setCursor(Qt.PointingHandCursor)
+        btn_cancel_p1.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                padding: 8px 14px;
+                font-size: 12px;
+            }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 0.10); color: #ffffff; }
+        """)
+        btn_cancel_p1.clicked.connect(lambda: self.merge_inner_stack.setCurrentIndex(0))
+        row_act1.addWidget(btn_cancel_p1)
+        row_act1.addStretch()
+
+        p1_lay.addLayout(row_act1)
+        self.merge_inner_stack.addWidget(p_confirm)
+
+        # =============================================================
+        # PÁGINA 2: CARGA / ANÁLISIS IA DE FUSIÓN
+        # =============================================================
+        p_loading = QWidget()
+        p2_lay = QVBoxLayout(p_loading)
+        p2_lay.setContentsMargins(0, 20, 0, 20)
+        p2_lay.setSpacing(12)
+        p2_lay.setAlignment(Qt.AlignCenter)
+
+        c_load = QFrame()
+        c_load.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(26, 22, 38, 0.95), stop:1 rgba(15, 12, 25, 0.95));
+                border: 1px solid rgba(56, 189, 248, 0.35);
+                border-radius: 12px;
+                padding: 24px;
+            }
+        """)
+        cl_lay = QVBoxLayout(c_load)
+        cl_lay.setSpacing(12)
+        cl_lay.setAlignment(Qt.AlignCenter)
+
+        lbl_load_ico = QLabel("⏳")
+        lbl_load_ico.setAlignment(Qt.AlignCenter)
+        lbl_load_ico.setStyleSheet("font-size: 32px;")
+        cl_lay.addWidget(lbl_load_ico)
+
+        self.lbl_merge_loading_title = QLabel("ANALIZANDO COMMITS Y DIFF DE FUSIÓN CON IA...")
+        self.lbl_merge_loading_title.setAlignment(Qt.AlignCenter)
+        self.lbl_merge_loading_title.setStyleSheet("font-size: 13.5px; font-weight: 900; color: #38bdf8; letter-spacing: 0.8px;")
+        cl_lay.addWidget(self.lbl_merge_loading_title)
+
+        lbl_load_sub = QLabel("Sintetizando cambios clave para estructurar el mensaje de commit de merge...")
+        lbl_load_sub.setAlignment(Qt.AlignCenter)
+        lbl_load_sub.setStyleSheet("font-size: 11.5px; color: #9ca3af;")
+        cl_lay.addWidget(lbl_load_sub)
+
+        pbar = QProgressBar()
+        pbar.setRange(0, 0)
+        pbar.setFixedHeight(8)
+        pbar.setTextVisible(False)
+        pbar.setStyleSheet("""
+            QProgressBar {
+                background-color: #0b0c13;
+                border: 1px solid rgba(56, 189, 248, 0.30);
+                border-radius: 4px;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #38bdf8, stop:0.5 #818cf8, stop:1 #34d399);
+                border-radius: 4px;
+            }
+        """)
+        cl_lay.addWidget(pbar)
+
+        p2_lay.addWidget(c_load)
+        self.merge_inner_stack.addWidget(p_loading)
+
+        # =============================================================
+        # PÁGINA 3: MANEJO DE CONFLICTOS DE EMERGENCIA
+        # =============================================================
+        p_conflict = QWidget()
+        p3_lay = QVBoxLayout(p_conflict)
+        p3_lay.setContentsMargins(0, 0, 0, 0)
+        p3_lay.setSpacing(10)
+
+        alert_box = QFrame()
+        alert_box.setStyleSheet("""
+            QFrame {
+                background-color: rgba(248, 113, 113, 0.10);
+                border: 1px solid #f87171;
+                border-radius: 8px;
+                padding: 12px 16px;
+            }
+        """)
+        ab_lay = QVBoxLayout(alert_box)
+        ab_lay.setSpacing(8)
+
+        lbl_ab_title = QLabel("⚠️ ALERTA DE CONFLICTOS DETECTADOS")
+        lbl_ab_title.setStyleSheet("font-size: 13px; font-weight: 900; color: #f87171; letter-spacing: 0.5px;")
+        ab_lay.addWidget(lbl_ab_title)
+
+        lbl_ab_desc = QLabel("La fusión no pudo completarse de forma automática debido a conflictos en los siguientes archivos:")
+        lbl_ab_desc.setStyleSheet("font-size: 11.5px; color: #fca5a5;")
+        ab_lay.addWidget(lbl_ab_desc)
+
+        self.lbl_conflict_files_box = QLabel("")
+        self.lbl_conflict_files_box.setStyleSheet("font-size: 11.5px; font-family: monospace; color: #ffffff; background-color: rgba(0, 0, 0, 0.25); border-radius: 4px; padding: 6px 10px;")
+        ab_lay.addWidget(self.lbl_conflict_files_box)
+
+        lbl_ab_help = QLabel("Opciones de resolución táctica:")
+        lbl_ab_help.setStyleSheet("font-size: 11px; font-weight: 700; color: #e5e7eb; margin-top: 4px;")
+        ab_lay.addWidget(lbl_ab_help)
+
+        row_c_acts = QHBoxLayout()
+        row_c_acts.setSpacing(8)
+
+        btn_c_abort = QPushButton("💥 Abortar Fusión (git merge --abort)")
+        btn_c_abort.setCursor(Qt.PointingHandCursor)
+        btn_c_abort.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(248, 113, 113, 0.25);
+                color: #fca5a5;
+                border: 1px solid #f87171;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: rgba(248, 113, 113, 0.40); color: #ffffff; }
+        """)
+        btn_c_abort.clicked.connect(self.do_merge_abort)
+        row_c_acts.addWidget(btn_c_abort)
+
+        btn_c_ours = QPushButton("🛡️ Resolver con NUESTRAS (ours)")
+        btn_c_ours.setCursor(Qt.PointingHandCursor)
+        btn_c_ours.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(251, 191, 36, 0.20);
+                color: #fde047;
+                border: 1px solid #fbbf24;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: rgba(251, 191, 36, 0.35); color: #ffffff; }
+        """)
+        btn_c_ours.clicked.connect(lambda: self.do_merge_resolve_conflicts("ours"))
+        row_c_acts.addWidget(btn_c_ours)
+
+        btn_c_theirs = QPushButton("⚔️ Resolver con SUS (theirs)")
+        btn_c_theirs.setCursor(Qt.PointingHandCursor)
+        btn_c_theirs.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.20);
+                color: #c7d2fe;
+                border: 1px solid #818cf8;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: rgba(99, 102, 241, 0.35); color: #ffffff; }
+        """)
+        btn_c_theirs.clicked.connect(lambda: self.do_merge_resolve_conflicts("theirs"))
+        row_c_acts.addWidget(btn_c_theirs)
+
+        btn_c_manual = QPushButton("🚪 Resolver Manualmente en Editor")
+        btn_c_manual.setCursor(Qt.PointingHandCursor)
+        btn_c_manual.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #d1d5db;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 0.12); color: #ffffff; }
+        """)
+        btn_c_manual.clicked.connect(self.notice_manual_resolution)
+        row_c_acts.addWidget(btn_c_manual)
+        row_c_acts.addStretch()
+
+        ab_lay.addLayout(row_c_acts)
+        p3_lay.addWidget(alert_box)
+
+        # Panel para completar el merge una vez resueltos
+        self.frame_complete_conflict = QFrame()
+        self.frame_complete_conflict.setStyleSheet("""
+            QFrame {
+                background-color: rgba(52, 211, 153, 0.06);
+                border: 1px solid rgba(52, 211, 153, 0.35);
+                border-radius: 8px;
+                padding: 10px 14px;
+            }
+        """)
+        fcc_lay = QHBoxLayout(self.frame_complete_conflict)
+        fcc_lay.setContentsMargins(8, 6, 8, 6)
+        fcc_lay.setSpacing(10)
+
+        lbl_fcc = QLabel("Una vez resueltos los conflictos, finaliza la integración:")
+        lbl_fcc.setStyleSheet("font-size: 11.5px; color: #6ee7b7; font-weight: 700;")
+        fcc_lay.addWidget(lbl_fcc)
+        fcc_lay.addStretch()
+
+        btn_finish_c_merge = QPushButton("💾  Completar Fusión (Registrar Commit)")
+        btn_finish_c_merge.setCursor(Qt.PointingHandCursor)
+        btn_finish_c_merge.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.25);
+                color: #6ee7b7;
+                border: 1px solid #34d399;
+                border-radius: 5px;
+                padding: 6px 16px;
+                font-weight: 800;
+                font-size: 11.5px;
+            }
+            QPushButton:hover { background-color: rgba(52, 211, 153, 0.40); color: #ffffff; }
+        """)
+        btn_finish_c_merge.clicked.connect(self.prepare_complete_active_merge)
+        fcc_lay.addWidget(btn_finish_c_merge)
+        p3_lay.addWidget(self.frame_complete_conflict)
+
+        p3_lay.addStretch()
+        self.merge_inner_stack.addWidget(p_conflict)
+
+        # =============================================================
+        # PÁGINA 4: FUSIÓN COMPLETADA & DESPLIEGUE INMEDIATO (PUSH)
+        # =============================================================
+        p_success = QWidget()
+        p4_lay = QVBoxLayout(p_success)
+        p4_lay.setContentsMargins(0, 10, 0, 10)
+        p4_lay.setSpacing(12)
+
+        card_suc = QFrame()
+        card_suc.setStyleSheet("""
+            QFrame {
+                background-color: rgba(52, 211, 153, 0.08);
+                border: 1px solid rgba(52, 211, 153, 0.45);
+                border-radius: 10px;
+                padding: 16px 20px;
+            }
+        """)
+        cs_lay = QVBoxLayout(card_suc)
+        cs_lay.setSpacing(10)
+
+        lbl_suc_title = QLabel("🎉  FUSIÓN COMPLETADA EXITOSAMENTE")
+        lbl_suc_title.setStyleSheet("font-size: 13.5px; font-weight: 900; color: #34d399; letter-spacing: 0.5px;")
+        cs_lay.addWidget(lbl_suc_title)
+
+        self.lbl_suc_desc = QLabel("La rama ha sido integrada satisfactoriamente en la rama activa.")
+        self.lbl_suc_desc.setStyleSheet("font-size: 12px; color: #e5e7eb;")
+        cs_lay.addWidget(self.lbl_suc_desc)
+
+        # Caja de Despliegue Inmediato (Push)
+        push_box = QFrame()
+        push_box.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.02);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+                padding: 12px 14px;
+            }
+        """)
+        pb_lay = QVBoxLayout(push_box)
+        pb_lay.setSpacing(8)
+
+        lbl_pb_title = QLabel("🚀  SECUENCIA DE DESPLIEGUE TÁCTICO (GIT PUSH)")
+        lbl_pb_title.setStyleSheet("font-size: 12px; font-weight: 800; color: #60a5fa;")
+        pb_lay.addWidget(lbl_pb_title)
+
+        lbl_pb_sub = QLabel("¿Deseas desplegar (hacer git push) de los cambios integrados a origin?")
+        lbl_pb_sub.setStyleSheet("font-size: 11.5px; color: #9ca3af;")
+        pb_lay.addWidget(lbl_pb_sub)
+
+        row_pb_acts = QHBoxLayout()
+        row_pb_acts.setSpacing(10)
+
+        btn_push_yes = QPushButton("🚀  Desplegar Cambios a Origin (git push)")
+        btn_push_yes.setCursor(Qt.PointingHandCursor)
+        btn_push_yes.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(96, 165, 250, 0.20);
+                color: #93c5fd;
+                border: 1px solid #60a5fa;
+                border-radius: 6px;
+                padding: 8px 18px;
+                font-weight: 800;
+                font-size: 12px;
+            }
+            QPushButton:hover { background-color: rgba(96, 165, 250, 0.35); color: #ffffff; }
+        """)
+        btn_push_yes.clicked.connect(self.execute_merge_push)
+        row_pb_acts.addWidget(btn_push_yes)
+
+        btn_push_no = QPushButton("✔ Finalizar sin Desplegar")
+        btn_push_no.setCursor(Qt.PointingHandCursor)
+        btn_push_no.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #d1d5db;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                padding: 8px 14px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 0.12); color: #ffffff; }
+        """)
+        btn_push_no.clicked.connect(lambda: self.merge_inner_stack.setCurrentIndex(0))
+        row_pb_acts.addWidget(btn_push_no)
+        row_pb_acts.addStretch()
+
+        pb_lay.addLayout(row_pb_acts)
+        cs_lay.addWidget(push_box)
+
+        p4_lay.addWidget(card_suc)
+        p4_lay.addStretch()
+        self.merge_inner_stack.addWidget(p_success)
+
+        layout.addWidget(self.merge_inner_stack)
+        return page
+
+    def toggle_switch_dest_drawer(self):
+        """Alterna el cajón para cambiar la rama destino (receptora) de la fusión."""
+        cur = self.drawer_switch_dest.isVisible()
+        self.drawer_switch_dest.setVisible(not cur)
+        if hasattr(self, "sector1_sub_stack"):
+            self.sector1_sub_stack.updateGeometry()
+
+    def execute_switch_dest_checkout(self):
+        """Cambia de rama local para usarla como destino de fusión."""
+        path = self.project_data.get("path")
+        target = self.cmb_switch_dest.currentText().strip()
+        if not path or not target or target.startswith("("):
+            return
+
+        self.terminal_display.log("NAV", f"Cambiando rama activa (HEAD) a <b>{target}</b> para fusión...", tag_color="#38bdf8", prefix="🔄")
+        ok, msg = execute_git_checkout(path, target)
+        if ok:
+            self.terminal_display.log_success("NAV", f"Rama activa cambiada a <b>{target}</b>.")
+            self.drawer_switch_dest.setVisible(False)
+            self.refresh_current_project(reset_terminal=False)
+            self.refresh_merge_view()
+            self.refresh_git_graph()
+        else:
+            self.terminal_display.log_error("NAV", f"Fallo al cambiar a la rama destino '{target}':\n{msg}")
+
+    def refresh_merge_view(self):
+        """Consulta el estado del repositorio y lista las ramas destino disponibles para recibir la rama activa."""
+        path = self.project_data.get("path")
+        if not path or not os.path.exists(path):
+            return
+
+        status = get_git_merge_status(path)
+        cur_branch = status.get("current_branch", "HEAD")
+        cur_author = status.get("current_author", "")
+        self.selected_merge_source = cur_branch
+        self.lbl_merge_dest_info.setText(f"📤 Rama de Trabajo Activa (Origen): <b>{cur_branch}</b> • Autor: {cur_author}")
+        self.lbl_p0_desc.setText(f"Selecciona la RAMA DESTINO donde deseas volcar e integrar los cambios de <b>{cur_branch}</b>:")
+
+        # Poblar combo de cambio rápido de rama activa
+        self.cmb_switch_dest.clear()
+        matrix = get_git_branches_matrix(path)
+        branches_mat = matrix.get("branches", [])
+        local_branches = [b["name"] for b in branches_mat if not b["is_remote"] and not b["is_active"]]
+        if local_branches:
+            for b_name in local_branches:
+                self.cmb_switch_dest.addItem(b_name)
+        else:
+            self.cmb_switch_dest.addItem("(Sin otras ramas locales)")
+
+        # Manejo de estado de merge activo / conflictos
+        if status.get("is_merge_active", False):
+            self.frame_active_merge_alert.setVisible(True)
+            if status.get("has_conflicts", False):
+                self.lbl_merge_status_badge.setText("⚠️ FUSIÓN EN PROCESO (CONFLICTOS)")
+                self.lbl_merge_status_badge.setStyleSheet("font-size: 10.5px; font-weight: 800; color: #f87171; background-color: rgba(248, 113, 113, 0.12); border: 1px solid rgba(248, 113, 113, 0.35); border-radius: 4px; padding: 2px 8px;")
+                self.lbl_active_merge_msg.setText("⚠️ FUSIÓN EN CURSO CON CONFLICTOS PENDIENTES")
+                self.lbl_conflicts_list.setText("Archivos en conflicto: " + ", ".join(status.get("conflicts", [])))
+                self.btn_ama_complete.setEnabled(False)
+            else:
+                self.lbl_merge_status_badge.setText("⚠️ FUSIÓN EN PROCESO (LISTO PARA COMMIT)")
+                self.lbl_merge_status_badge.setStyleSheet("font-size: 10.5px; font-weight: 800; color: #fbbf24; background-color: rgba(251, 191, 36, 0.12); border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 4px; padding: 2px 8px;")
+                self.lbl_active_merge_msg.setText("⚠️ FUSIÓN EN CURSO (CONFLICTOS RESUELTOS)")
+                self.lbl_conflicts_list.setText("Todos los conflictos están resueltos. Puedes registrar el commit de fusión.")
+                self.btn_ama_complete.setEnabled(True)
+        else:
+            self.frame_active_merge_alert.setVisible(False)
+            self.lbl_merge_status_badge.setText("✔ ESTADO: LISTO PARA INTEGRACIÓN")
+            self.lbl_merge_status_badge.setStyleSheet("font-size: 10.5px; font-weight: 800; color: #34d399; background-color: rgba(52, 211, 153, 0.12); border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 4px; padding: 2px 8px;")
+
+        # Limpiar lista anterior
+        while self.merge_branches_list_layout.count():
+            item = self.merge_branches_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+            elif item.layout():
+                sub_lay = item.layout()
+                while sub_lay.count():
+                    sub_item = sub_lay.takeAt(0)
+                    if sub_item.widget():
+                        sub_item.widget().deleteLater()
+
+        mergeable = get_mergeable_branches(path)
+        if not mergeable:
+            lbl_none = QLabel("No hay otras ramas destino detectadas en este repositorio.")
+            lbl_none.setStyleSheet("color: #9ca3af; font-size: 12px; padding: 12px;")
+            self.merge_branches_list_layout.addWidget(lbl_none)
+        else:
+            for b in mergeable:
+                r_frame = QFrame()
+                r_frame.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(255, 255, 255, 0.02);
+                        border: 1px solid rgba(255, 255, 255, 0.06);
+                        border-radius: 6px;
+                        padding: 6px 10px;
+                    }
+                    QFrame:hover {
+                        background-color: rgba(255, 255, 255, 0.05);
+                        border-color: #38bdf8;
+                    }
+                """)
+                rf_lay = QHBoxLayout(r_frame)
+                rf_lay.setContentsMargins(8, 4, 8, 4)
+                rf_lay.setSpacing(10)
+
+                icon_str = "🌐" if b["is_remote"] else "🌿"
+                lbl_ico = QLabel(icon_str)
+                lbl_ico.setStyleSheet("font-size: 13px;")
+                rf_lay.addWidget(lbl_ico)
+
+                lbl_bname = QLabel(b["name"])
+                lbl_bname.setStyleSheet("font-size: 12.5px; font-weight: 800; color: #f3f4f6; min-width: 140px;")
+                rf_lay.addWidget(lbl_bname)
+
+                # Desfase commits: ahead indica cuántos commits de cur_branch se volcarán en esta rama destino
+                ahead = b.get("ahead", 0)
+                behind = b.get("behind", 0)
+
+                if ahead > 0:
+                    lbl_badge = QLabel(f"⬆️ +{ahead} commits a transferir")
+                    lbl_badge.setStyleSheet("font-size: 10.5px; font-weight: 800; color: #34d399; background-color: rgba(52, 211, 153, 0.12); border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 4px; padding: 2px 7px;")
+                else:
+                    lbl_badge = QLabel("✔ Al día (sin cambios nuevos)")
+                    lbl_badge.setStyleSheet("font-size: 10.5px; font-weight: 800; color: #9ca3af; background-color: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 4px; padding: 2px 7px;")
+                rf_lay.addWidget(lbl_badge)
+
+                if behind > 0:
+                    lbl_behind = QLabel(f"⚠️ +{behind} en destino")
+                    lbl_behind.setStyleSheet("font-size: 10.5px; font-weight: 800; color: #fbbf24; background-color: rgba(251, 191, 36, 0.12); border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 4px; padding: 2px 7px;")
+                    lbl_behind.setToolTip(f"La rama destino '{b['name']}' tiene {behind} commits nuevos por delante.")
+                    rf_lay.addWidget(lbl_behind)
+
+                # Info autor y fecha
+                lbl_auth = QLabel(f"👤 {b['last_commit_author']} ({b['last_commit_date']})")
+                lbl_auth.setStyleSheet("font-size: 11px; color: #9ca3af; min-width: 100px;")
+                rf_lay.addWidget(lbl_auth)
+
+                # Último commit truncado
+                subj = b["last_commit_subject"]
+                if len(subj) > 30:
+                    subj = subj[:27] + "..."
+                lbl_sub = QLabel(f"\"{subj}\"")
+                lbl_sub.setStyleSheet("font-size: 11px; color: #6b7280; font-style: italic;")
+                rf_lay.addWidget(lbl_sub, 1)
+
+                # Botón Inspeccionar en Grafo
+                h = b["last_commit_hash"]
+                btn_see_graph = QPushButton("👁️ Ver en Grafo")
+                btn_see_graph.setCursor(Qt.PointingHandCursor)
+                btn_see_graph.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(255, 255, 255, 0.04);
+                        color: #bae6fd;
+                        border: 1px solid rgba(56, 189, 248, 0.30);
+                        border-radius: 4px;
+                        padding: 3px 8px;
+                        font-size: 10.5px;
+                        font-weight: 700;
+                    }
+                    QPushButton:hover { background-color: rgba(56, 189, 248, 0.20); color: #ffffff; }
+                """)
+                btn_see_graph.clicked.connect(lambda checked=False, chash=h: self.on_graph_commit_selected(chash))
+                rf_lay.addWidget(btn_see_graph)
+
+                # Botón Seleccionar Destino e Integrar
+                b_name = b["name"]
+                b_author = b["last_commit_author"]
+                btn_integrate = QPushButton(f"🔀 Integrar en {b_name}")
+                btn_integrate.setCursor(Qt.PointingHandCursor)
+                btn_integrate.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(56, 189, 248, 0.20);
+                        color: #38bdf8;
+                        border: 1px solid #38bdf8;
+                        border-radius: 4px;
+                        padding: 4px 12px;
+                        font-weight: 800;
+                        font-size: 11px;
+                    }
+                    QPushButton:hover { background-color: rgba(56, 189, 248, 0.35); color: #ffffff; }
+                """)
+                btn_integrate.clicked.connect(lambda checked=False, bn=b_name, ba=b_author: self.prepare_merge_into_target(bn, ba))
+                rf_lay.addWidget(btn_integrate)
+
+                self.merge_branches_list_layout.addWidget(r_frame)
+
+        self.merge_branches_list_layout.addStretch()
+
+    def prepare_merge_into_target(self, target_branch: str, target_author: str):
+        """Prepara los datos para integrar la rama activa actual dentro de la rama destino seleccionada."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        status = get_git_merge_status(path)
+        source_branch = status.get("current_branch", "HEAD")
+        source_author = status.get("current_author", "")
+
+        self.selected_merge_source = source_branch
+        self.selected_merge_target = target_branch
+        self.selected_merge_branch = target_branch  # compatibilidad
+        self.selected_merge_author = target_author
+
+        self.lbl_diag_incoming.setText(f"RAMA ORIGEN (Tus cambios):  <b>{source_branch}</b> • Autor: {source_author}")
+        self.lbl_diag_receiver.setText(f"RAMA DESTINO (Receptora):  <b>{target_branch}</b> • Autor: {target_author}")
+
+        data = get_merge_diff_and_commits(path, source_branch=source_branch, target_branch=target_branch)
+        commits = data.get("commits", [])
+        self.selected_merge_commits = commits
+
+        if commits:
+            prev_str = f"<b>Commits de '{source_branch}' a transferir a '{target_branch}' ({len(commits)}):</b><br>" + "<br>".join([f"• {c}" for c in commits[:5]])
+            if len(commits) > 5:
+                prev_str += f"<br>• ... y {len(commits) - 5} commits más."
+        else:
+            prev_str = f"<i>La rama destino '{target_branch}' ya se encuentra al día con los cambios de '{source_branch}'.</i>"
+        self.lbl_commits_preview.setText(prev_str)
+
+        self.set_default_merge_message()
+        self.btn_confirm_merge.setText(f"🔀  Confirmar e Integrar '{source_branch}' en '{target_branch}'")
+
+        # Proyectar nodo fantasma en el visor de grafo (la rama activa descenderá en diagonal a la rama destino)
+        self.refresh_git_graph(simulated_merge={
+            "source_branch": source_branch,
+            "target_branch": target_branch,
+            "title": self.txt_merge_title.text()
+        })
+
+        self.merge_inner_stack.setCurrentIndex(1)
+
+    def prepare_merge_with_branch(self, branch_name: str, author: str):
+        """Alias para compatibilidad."""
+        self.prepare_merge_into_target(branch_name, author)
+
+    def set_default_merge_message(self):
+        """Establece el mensaje de commit estándar correlativo para la fusión."""
+        path = self.project_data.get("path")
+        next_id = get_next_commit_seq(path) if path else "0001"
+        src_name = self.selected_merge_source or "origen"
+        tgt_name = self.selected_merge_target or "destino"
+        self.txt_merge_title.setText(f"HEX:{next_id} | Integración de {src_name} en {tgt_name}")
+        self.txt_merge_body.setText(f"Fusión e integración táctica de la rama '{src_name}' en la rama destino '{tgt_name}'.")
+
+    def start_ia_merge_generation(self, model_type: str = "light"):
+        """Inicia el análisis de IA para redactar la propuesta semántica de merge."""
+        path = self.project_data.get("path")
+        if not path or not self.selected_merge_target:
+            return
+        self.merge_inner_stack.setCurrentIndex(2)
+        m_label = "HEX (Ligero / Qwen)" if model_type == "light" else "HENDRIX (Pesado / Qwen)"
+        src = self.selected_merge_source or "origen"
+        tgt = self.selected_merge_target or "destino"
+        self.lbl_merge_loading_title.setText(f"ANALIZANDO FUSIÓN CON IA ({m_label})...")
+        self.terminal_display.log("AI-MERGE", f"Analizando commits y diferencias de <b>{src}</b> ➔ <b>{tgt}</b> con IA ({model_type})...", tag_color="#c084fc", prefix="🤖")
+        self.merge_thread = IAMergeThread(
+            path,
+            source_branch=src,
+            target_branch=tgt,
+            model_type=model_type
+        )
+        self.merge_thread.finished_merge.connect(self.on_ia_merge_finished)
+        self.merge_thread.start()
+
+    def on_ia_merge_finished(self, success: bool, err_msg: str, res: dict):
+        """Callback al finalizar la generación de mensaje de fusión con IA."""
+        if success and res:
+            self.txt_merge_title.setText(res.get("full_commit_title", ""))
+            self.txt_merge_body.setText(res.get("body", ""))
+            self.terminal_display.log_success("AI-MERGE", "Propuesta de commit de fusión generada con IA exitosamente.")
+        else:
+            self.terminal_display.log_warn("AI-MERGE", f"No se pudo consultar el modelo IA: {err_msg}. Se aplicará mensaje estándar.")
+            self.set_default_merge_message()
+        self.merge_inner_stack.setCurrentIndex(1)
+
+    def execute_merge_action(self):
+        """Ejecuta la operación de git merge en el repositorio integrando la rama origen en destino."""
+        path = self.project_data.get("path")
+        if not path or not self.selected_merge_target:
+            return
+
+        no_ff = self.chk_merge_no_ff.isChecked()
+        title = self.txt_merge_title.text().strip()
+        body = self.txt_merge_body.toPlainText().strip()
+
+        src = self.selected_merge_source
+        tgt = self.selected_merge_target
+        no_ff_str = " (forzando commit --no-ff)" if no_ff else ""
+        self.terminal_display.log("GIT-MERGE", f"Iniciando secuencia de integración de <b>{src}</b> en <b>{tgt}</b>{no_ff_str}...", tag_color="#38bdf8", prefix="🔀")
+
+        ok, out, status = execute_git_merge_into(
+            project_path=path,
+            target_branch=tgt,
+            source_branch=src,
+            no_ff=no_ff,
+            commit_title=title,
+            commit_body=body
+        )
+
+        if ok and not status.get("has_conflicts", False):
+            self.terminal_display.log_success("GIT-MERGE", f"¡Rama <b>{src}</b> fusionada e integrada exitosamente en <b>{tgt}</b>!")
+            self.lbl_suc_desc.setText(f"La rama <b>{src}</b> fue integrada con éxito en la rama destino <b>{tgt}</b>.<br><pre style='color:#a5b4fc;'>{out[:300]}</pre>")
+            self.refresh_current_project(reset_terminal=False)
+            self.refresh_git_graph()
+            self.merge_inner_stack.setCurrentIndex(4)
+        else:
+            if status.get("has_conflicts", False):
+                conflicts = status.get("conflicts", [])
+                self.terminal_display.log_error("GIT-MERGE", f"¡Conflicto detectado durante la fusión en {tgt}!\nArchivos afectados: {', '.join(conflicts)}")
+                self.lbl_conflict_files_box.setText("\n".join(conflicts))
+                self.refresh_git_graph()
+                self.merge_inner_stack.setCurrentIndex(3)
+            else:
+                self.terminal_display.log_error("GIT-MERGE", f"Fallo al ejecutar fusión en '{tgt}':\n{out}")
+                self.refresh_merge_view()
+
+    def prepare_complete_active_merge(self):
+        """Prepara el paso para confirmar el commit de una fusión en proceso."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        status = get_git_merge_status(path)
+        b_name = status.get("incoming_branch") or self.selected_merge_branch or "rama_externa"
+        self.prepare_merge_with_branch(b_name, "silvynth")
+        self.merge_inner_stack.setCurrentIndex(1)
+
+    def do_merge_abort(self):
+        """Aborta de forma segura una fusión en curso."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        self.terminal_display.log("GIT-MERGE", "Abortando fusión en curso (git merge --abort)...", tag_color="#f87171", prefix="💥")
+        ok, out = execute_git_merge_abort(path)
+        if ok:
+            self.terminal_display.log_success("GIT-MERGE", "Fusión abortada. El árbol de trabajo fue restaurado al estado anterior.")
+        else:
+            self.terminal_display.log_error("GIT-MERGE", f"Error al abortar fusión:\n{out}")
+        self.refresh_current_project(reset_terminal=False)
+        self.refresh_merge_view()
+        self.refresh_git_graph()
+        self.merge_inner_stack.setCurrentIndex(0)
+
+    def do_merge_resolve_conflicts(self, strategy: str):
+        """Resuelve los archivos conflictivos con la estrategia elegida ('ours' o 'theirs')."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        strat_lbl = "NUESTRAS VERSIONES (ours)" if strategy == "ours" else "SUS VERSIONES (theirs)"
+        self.terminal_display.log("GIT-MERGE", f"Resolviendo conflictos aplicando <b>{strat_lbl}</b>...", tag_color="#fbbf24", prefix="🛡️")
+        ok, out = execute_git_resolve_conflicts(path, strategy)
+        if ok:
+            self.terminal_display.log_success("GIT-MERGE", f"Resolución completada:\n{out}\nPuedes pulsar 'Completar Fusión' para registrar el commit.")
+        else:
+            self.terminal_display.log_error("GIT-MERGE", f"Fallo al resolver conflictos:\n{out}")
+        self.refresh_merge_view()
+
+    def notice_manual_resolution(self):
+        """Notifica cómo proceder con la resolución manual de conflictos en el editor."""
+        self.terminal_display.log("GIT-MERGE", "ℹ️ Los archivos conflictivos tienen marcadores estándar (<code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code>). Ábrelos en tu editor, resuelve las diferencias, añade los cambios con <code>git add</code> y pulsa <b>'Completar Fusión'</b>.", tag_color="#38bdf8", prefix="📝")
+
+    def execute_merge_push(self):
+        """Despliega los cambios recién integrados hacia el remoto origin."""
+        self.run_git_push()
+        self.merge_inner_stack.setCurrentIndex(0)
+
+    # -----------------------------------------------------------------
     # VISTA DE GRAFOS DE RAMAS (ESTILO GITHUB NETWORK GRAPH)
     # -----------------------------------------------------------------
     def toggle_terminal_graph_view(self):
@@ -2476,19 +3834,42 @@ class LumenProjectWorkspaceView(QWidget):
 
         return widget
 
-    def refresh_git_graph(self):
+    def refresh_git_graph(self, simulated_merge: Optional[Dict[str, Any]] = None):
         """Carga en vivo el grafo horizontal de ramas según el proyecto activo."""
         path = self.project_data.get("path")
         if not path or not os.path.exists(path):
             return
 
         if hasattr(self, "git_graph_view"):
-            self.git_graph_view.load_project_graph(path)
+            self.git_graph_view.load_project_graph(path, simulated_merge=simulated_merge)
+
+    def show_simulated_canvas(self):
+        """Conmuta al visor horizontal de grafo para observar el nodo interactivo simulado."""
+        self.terminal_stack.setCurrentIndex(1)
+        self.lbl_t_status.setText("🌿 VISOR DE GRAFO [SIMULACIÓN]")
+        path = self.project_data.get("path")
+        if not path:
+            return
+        status = get_git_merge_status(path)
+        tgt_b = status.get("current_branch", "HEAD")
+        src_b = self.selected_merge_branch or "origen"
+        m_title = self.txt_merge_title.text() or f"Fusión: {src_b} ➔ {tgt_b}"
+        self.refresh_git_graph(simulated_merge={
+            "source_branch": src_b,
+            "target_branch": tgt_b,
+            "title": m_title
+        })
+
 
     def on_graph_commit_selected(self, commit_hash: str):
         """Manejador al hacer clic en un nodo de commit del grafo."""
         path = self.project_data.get("path")
         if not path or not commit_hash:
+            return
+
+        if commit_hash.startswith("~"):
+            self.lbl_graph_inspector.setText("📌 🧪 [SIMULACIÓN ESTÉTICA] Nodo de fusión proyectado • Sin cambios aplicados en Git.")
+            self.terminal_display.log("SIMULACIÓN", "Nodo seleccionado es una proyección táctica temporal (no destructiva).", tag_color="#c084fc", prefix="🧪")
             return
 
         try:
@@ -2536,6 +3917,10 @@ class LumenProjectWorkspaceView(QWidget):
         if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 1:
             self.toggle_terminal_graph_view()
         self.hide_branches_action_drawer()
+        if hasattr(self, "drawer_switch_dest"):
+            self.drawer_switch_dest.setVisible(False)
+        if hasattr(self, "merge_inner_stack"):
+            self.merge_inner_stack.setCurrentIndex(0)
         self.terminal_display.log("NAV", "Regresando al menú de Ciclos de Trabajo.", tag_color="#9ca3af", prefix="◀")
 
     def go_back_to_sectors_overview(self):
@@ -2548,6 +3933,10 @@ class LumenProjectWorkspaceView(QWidget):
         if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 1:
             self.toggle_terminal_graph_view()
         self.hide_branches_action_drawer()
+        if hasattr(self, "drawer_switch_dest"):
+            self.drawer_switch_dest.setVisible(False)
+        if hasattr(self, "merge_inner_stack"):
+            self.merge_inner_stack.setCurrentIndex(0)
         self.terminal_display.log("NAV", "Regresando al menú principal de Sectores.", tag_color="#9ca3af", prefix="◀")
 
     # -----------------------------------------------------------------
@@ -2666,10 +4055,10 @@ class LumenProjectWorkspaceView(QWidget):
         self.terminal_display.verticalScrollBar().setValue(self.terminal_display.verticalScrollBar().maximum())
 
     # -----------------------------------------------------------------
-    # PROTOCOLO ARTEMIS: FLUJO DE IA COMMIT (VERSIONS ➔ MODEL ➔ CONFIRM ➔ PUSH)
+    # FLUJO DE IA COMMIT (VERSIONS ➔ MODEL ➔ CONFIRM ➔ PUSH)
     # -----------------------------------------------------------------
     def start_ia_commit_workflow(self):
-        """Inicia el flujo de commit semántico con IA según los protocolos de Artemis."""
+        """Inicia el flujo de commit semántico con IA según los protocolos de Abraxas."""
         path = self.project_data.get("path")
         if not path or not os.path.exists(path):
             self.terminal_display.log_error("IA-COMMIT", "No hay un proyecto activo seleccionado.")

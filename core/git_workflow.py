@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =====================================================================
-#  ❖ ABRAXAS CORE | GIT WORKFLOW & IA COMMIT ENGINE (PROTOCOLO ARTEMIS)
+#  ❖ ABRAXAS CORE | GIT WORKFLOW & IA COMMIT ENGINE
 # =====================================================================
 
 import os
@@ -131,7 +131,7 @@ def generate_ia_commit_proposal(
     target_ver: str, 
     config_path: str = None
 ) -> Dict[str, Any]:
-    """Genera la propuesta de commit estructurada usando Ollama y las directivas de Artemis."""
+    """Genera la propuesta de commit estructurada usando Ollama y las directivas de Abraxas."""
     diff = get_git_staged_diff(project_path)
     if not diff.strip():
         raise RuntimeError("El área de preparación (stage) está vacía. Ejecuta 'Add' primero.")
@@ -142,7 +142,7 @@ def generate_ia_commit_proposal(
     id_prefix = "HEX" if model_type == "light" else "HEN"
     next_id = get_next_commit_seq(project_path)
 
-    # Inyección de directiva de contexto de impacto (Protocolo Artemis)
+    # Inyección de directiva de contexto de impacto
     context_hint = ""
     if impact_type == "GAMMA":
         context_hint = f"\n[CLASIFICACIÓN DE IMPACTO: GAMMA (Patch / Corrección puntual / {target_ver})]. El operador ha clasificado este cambio como un parche o corrección menor. Tu título y descripción deben ser concisos y enfocarse directamente en el fix o ajuste técnico puntual sin sobredimensionar el cambio."
@@ -313,12 +313,12 @@ def execute_commit_and_tag(
 
 
 # =====================================================================
-# PROTOCOLO ARTEMIS: GESTIÓN Y MATRIZ TÁCTICA DE RAMAS
+# GESTIÓN Y MATRIZ TÁCTICA DE RAMAS
 # =====================================================================
 
 def get_git_branches_matrix(project_path: str) -> Dict[str, Any]:
     """
-    Obtiene y clasifica la matriz completa de ramas (locales y remotas) según el Protocolo Artemis.
+    Obtiene y clasifica la matriz completa de ramas (locales y remotas).
     Categorías:
       - Stale/Gone: Remota eliminada en origen (#f87171)
       - Local (Mía): Creada por el usuario actual (#fde047)
@@ -523,5 +523,500 @@ def execute_git_deploy_branch(project_path: str, branch_name: str, remote: str =
             return False, proc.stderr.strip() or proc.stdout.strip()
     except Exception as e:
         return False, str(e)
+
+
+# =====================================================================
+# PROTOCOLO DE FUSIÓN TÁCTICA DE RAMAS (GIT MERGE)
+# =====================================================================
+
+def get_git_merge_status(project_path: str) -> Dict[str, Any]:
+    """
+    Detecta el estado de fusión actual del repositorio:
+    - is_merge_active: Si hay un merge en proceso (.git/MERGE_HEAD)
+    - has_conflicts: Si hay conflictos no resueltos
+    - conflicts: Lista de rutas de archivos en conflicto
+    - incoming_branch: Nombre de la rama que se está fusionando
+    - current_branch: Rama activa (HEAD)
+    - current_author: Autor actual
+    """
+    if not project_path or not os.path.isdir(project_path):
+        return {
+            "is_merge_active": False,
+            "has_conflicts": False,
+            "conflicts": [],
+            "incoming_branch": "",
+            "current_branch": "",
+            "current_author": ""
+        }
+
+    current_user, _ = get_git_identity(project_path)
+    if not current_user:
+        current_user = "silvynth"
+
+    try:
+        current_branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=project_path, stderr=subprocess.DEVNULL, text=True
+        ).strip()
+    except Exception:
+        current_branch = ""
+
+    is_merge_active = False
+    incoming_branch = ""
+    try:
+        git_dir = subprocess.check_output(
+            ["git", "rev-parse", "--git-dir"],
+            cwd=project_path, stderr=subprocess.DEVNULL, text=True
+        ).strip()
+        if not os.path.isabs(git_dir):
+            git_dir = os.path.join(project_path, git_dir)
+
+        merge_head_path = os.path.join(git_dir, "MERGE_HEAD")
+        if os.path.isfile(merge_head_path):
+            is_merge_active = True
+            merge_msg_path = os.path.join(git_dir, "MERGE_MSG")
+            if os.path.isfile(merge_msg_path):
+                with open(merge_msg_path, "r", encoding="utf-8", errors="replace") as f:
+                    first_line = f.readline().strip()
+                    m = re.search(r"Merge branch ['\"]([^'\"]+)['\"]", first_line)
+                    if m:
+                        incoming_branch = m.group(1)
+                    else:
+                        incoming_branch = first_line
+    except Exception:
+        pass
+
+    conflicts = []
+    has_conflicts = False
+    if is_merge_active:
+        try:
+            out_u = subprocess.check_output(
+                ["git", "diff", "--name-only", "--diff-filter=U"],
+                cwd=project_path, stderr=subprocess.DEVNULL, text=True
+            ).strip()
+            if out_u:
+                conflicts = [line.strip() for line in out_u.splitlines() if line.strip()]
+                has_conflicts = len(conflicts) > 0
+        except Exception:
+            pass
+
+    return {
+        "is_merge_active": is_merge_active,
+        "has_conflicts": has_conflicts,
+        "conflicts": conflicts,
+        "incoming_branch": incoming_branch,
+        "current_branch": current_branch,
+        "current_author": current_user
+    }
+
+
+def get_mergeable_branches(project_path: str) -> List[Dict[str, Any]]:
+    """
+    Obtiene la lista de todas las ramas disponibles para fusionar en la rama activa HEAD,
+    calculando para cada una el desfase de commits (ahead/behind), autor, fecha y último commit.
+    """
+    if not project_path or not os.path.isdir(project_path):
+        return []
+
+    try:
+        current_branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=project_path, stderr=subprocess.DEVNULL, text=True
+        ).strip()
+    except Exception:
+        current_branch = ""
+
+    branches_raw = []
+    try:
+        out = subprocess.check_output(
+            ["git", "branch", "-a", "--format=%(refname:short)"],
+            cwd=project_path, stderr=subprocess.DEVNULL, text=True
+        )
+        seen = set()
+        for line in out.splitlines():
+            b = line.strip()
+            if b.startswith("remotes/"):
+                b = b[len("remotes/"):]
+            if not b or b == "origin/HEAD" or b == "HEAD" or b == current_branch:
+                continue
+            if b in seen:
+                continue
+            seen.add(b)
+            branches_raw.append(b)
+    except Exception:
+        return []
+
+    results = []
+    for b in branches_raw:
+        ahead, behind = 0, 0
+        try:
+            cnt_out = subprocess.check_output(
+                ["git", "rev-list", "--left-right", "--count", f"HEAD...{b}"],
+                cwd=project_path, stderr=subprocess.DEVNULL, text=True
+            ).strip()
+            if cnt_out:
+                parts = cnt_out.split()
+                if len(parts) >= 2:
+                    ahead = int(parts[0])
+                    behind = int(parts[1])
+        except Exception:
+            pass
+
+        subject = ""
+        author = ""
+        date = ""
+        hash_short = ""
+        try:
+            log_out = subprocess.check_output(
+                ["git", "log", "-1", "--format=%h|%an|%ar|%s", b],
+                cwd=project_path, stderr=subprocess.DEVNULL, text=True
+            ).strip()
+            if log_out:
+                lparts = log_out.split("|", 3)
+                hash_short = lparts[0] if len(lparts) > 0 else ""
+                author = lparts[1] if len(lparts) > 1 else ""
+                date = lparts[2] if len(lparts) > 2 else ""
+                subject = lparts[3] if len(lparts) > 3 else ""
+        except Exception:
+            pass
+
+        results.append({
+            "name": b,
+            "is_remote": b.startswith("origin/"),
+            "ahead": ahead,
+            "behind": behind,
+            "last_commit_hash": hash_short,
+            "last_commit_author": author,
+            "last_commit_date": date,
+            "last_commit_subject": subject
+        })
+
+    results.sort(key=lambda x: (0 if x["behind"] > 0 else 1, -x["behind"], x["name"]))
+    return results
+
+
+def get_merge_diff_and_commits(project_path: str, source_branch: str = None, target_branch: str = None) -> Dict[str, Any]:
+    """
+    Obtiene el diff y resumen de commits que serán o están siendo integrados.
+    - Si se especifican source_branch y target_branch: analiza target_branch..source_branch.
+    - Si solo se especifica source_branch: analiza HEAD..source_branch.
+    - Si no se especifica ninguno: analiza el merge activo (HEAD..MERGE_HEAD).
+    """
+    if not project_path or not os.path.isdir(project_path):
+        return {"commits": [], "diff_summary": "", "files_changed": []}
+
+    if target_branch and source_branch:
+        range_spec = f"{target_branch}..{source_branch}"
+    elif source_branch:
+        range_spec = f"HEAD..{source_branch}"
+    else:
+        range_spec = "HEAD..MERGE_HEAD"
+
+    commits = []
+    try:
+        c_out = subprocess.check_output(
+            ["git", "log", range_spec, "--oneline", "-n", "15"],
+            cwd=project_path, stderr=subprocess.DEVNULL, text=True
+        ).strip()
+        if c_out:
+            commits = [line.strip() for line in c_out.splitlines() if line.strip()]
+    except Exception:
+        pass
+
+    files_changed = []
+    try:
+        f_out = subprocess.check_output(
+            ["git", "diff", "--name-only", range_spec],
+            cwd=project_path, stderr=subprocess.DEVNULL, text=True
+        ).strip()
+        if f_out:
+            files_changed = [line.strip() for line in f_out.splitlines() if line.strip()]
+    except Exception:
+        pass
+
+    diff_summary = ""
+    try:
+        d_out = subprocess.check_output(
+            ["git", "diff", range_spec],
+            cwd=project_path, stderr=subprocess.DEVNULL, text=True
+        )
+        diff_summary = d_out[:6000]
+    except Exception:
+        pass
+
+    if not diff_summary:
+        try:
+            d_cached = subprocess.check_output(
+                ["git", "diff", "--cached"],
+                cwd=project_path, stderr=subprocess.DEVNULL, text=True
+            )
+            diff_summary = d_cached[:6000]
+        except Exception:
+            pass
+
+    return {
+        "commits": commits,
+        "files_changed": files_changed,
+        "diff_summary": diff_summary
+    }
+
+
+def generate_ia_merge_proposal(
+    project_path: str, 
+    source_branch: str, 
+    model_type: str = "light", 
+    config_path: str = None,
+    target_branch: str = None
+) -> Dict[str, Any]:
+    """
+    Analiza con IA los commits y diferencias de la fusión para proponer
+    un mensaje estructurado y descriptivo.
+    """
+    data = get_merge_diff_and_commits(project_path, source_branch, target_branch)
+    commits_text = "\n".join(data["commits"]) if data["commits"] else "Commits integrados en la rama."
+    diff_text = data["diff_summary"] if data["diff_summary"] else "Sin diferencias de texto disponibles."
+
+    model_name = get_configured_model(model_type, config_path)
+
+    id_prefix = "HEX" if model_type == "light" else "HEN"
+    next_id = get_next_commit_seq(project_path)
+
+    if model_type == "heavy":
+        system_prompt = (
+            "Eres un sensor de análisis de integración táctica de ABRAXAS (Motor Avanzado). "
+            "Tu tarea es analizar a fondo los datos de la fusión (commits y archivos modificados) "
+            "y generar un mensaje de commit de merge detallado y estructurado en español.\n"
+            "Formato de respuesta obligatorio:\n"
+            "Título: Fusión de [Rama Origen] en [Rama Destino]\n"
+            "Cuerpo: [Un párrafo descriptivo y exhaustivo en español que desglose los cambios clave "
+            "integrados por la fusión, los archivos principales modificados y el impacto técnico. "
+            "Máximo 4 líneas. No incluyas bloques de código.]"
+        )
+    else:
+        system_prompt = (
+            "Eres un sensor de análisis de integración táctica de ABRAXAS. "
+            "Tu tarea es analizar los datos de la fusión (commits y archivos modificados) "
+            "y generar un mensaje de commit de merge conciso y estructurado en español.\n"
+            "Formato de respuesta obligatorio:\n"
+            "Título: Fusión de [Rama Origen] en [Rama Destino]\n"
+            "Cuerpo: [Un párrafo corto y descriptivo en español que explique el propósito de la fusión "
+            "y qué principales características o correcciones aporta a la rama destino. "
+            "Máximo 3 líneas. No incluyas bloques de código.]"
+        )
+
+    branch_display = f"{source_branch} en {target_branch}" if target_branch else (source_branch if source_branch else "rama externa")
+    user_prompt = f"""Fusión de la rama '{source_branch}' en la rama destino '{target_branch or 'activa'}'.
+
+Commits integrados:
+{commits_text}
+
+Diferencias de código:
+{diff_text}
+"""
+
+    raw_response = generate_with_model(
+        prompt=user_prompt,
+        model_name=model_name,
+        system_prompt=system_prompt,
+        config_path=config_path
+    )
+
+    clean_msg = re.sub(r"[*#`_-]", "", raw_response)
+
+    title = ""
+    match_title = re.search(r"(?:t[ií]tulo|title):\s*(.+)", clean_msg, re.IGNORECASE)
+    if match_title:
+        title = match_title.group(1).strip()
+    else:
+        for line in clean_msg.splitlines():
+            line_str = line.strip()
+            if line_str and not re.search(r"(parece|realizado|aqu[ií]|cambios|commits|propuesta|saludos|hola)", line_str, re.IGNORECASE):
+                title = line_str
+                break
+        if not title:
+            title = f"Fusión de {branch_display}"
+
+    title = re.sub(r"^(?:HEX|SIL|HEN|AGY):\d{4}(?:\s*\[v?[0-9.]+\])?\s*\|\s*", "", title, flags=re.IGNORECASE).strip()
+    words = title.split()
+    if len(words) > 8:
+        title = " ".join(words[:8]) + "..."
+    if len(title) > 50:
+        title = title[:47] + "..."
+
+    body = ""
+    match_body = re.search(r"(?:cuerpo|body):\s*(.+)", clean_msg, re.IGNORECASE | re.DOTALL)
+    if match_body:
+        body = " ".join(match_body.group(1).split()).strip()
+    else:
+        lines = [l.strip() for l in clean_msg.splitlines() if l.strip()]
+        if len(lines) > 1:
+            body = " ".join(lines[1:]).strip()
+        else:
+            body = f"Integración y fusión táctica de la rama '{branch_display}' en la rama activa."
+
+    commit_header = f"{id_prefix}:{next_id}"
+    full_title = f"{commit_header} | {title}"
+
+    return {
+        "id_prefix": id_prefix,
+        "next_id": next_id,
+        "commit_header": commit_header,
+        "title": title,
+        "body": body,
+        "full_commit_title": full_title,
+        "model_name": model_name,
+        "model_type": model_type
+    }
+
+
+def execute_git_merge(
+    project_path: str,
+    source_branch: str,
+    no_ff: bool = False,
+    commit_title: str = None,
+    commit_body: str = None
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """
+    Ejecuta git merge <source_branch> con opciones (--no-ff, mensaje personalizado con identidad).
+    Detecta automáticamente si se suscitaron conflictos.
+    """
+    clean_branch = source_branch.strip()
+    if not clean_branch:
+        return False, "No se especificó la rama a fusionar.", {}
+
+    cmd = ["git"]
+    git_name, git_email = get_git_identity(project_path)
+    if git_name:
+        cmd.extend(["-c", f"user.name={git_name}"])
+    if git_email:
+        cmd.extend(["-c", f"user.email={git_email}"])
+
+    cmd.append("merge")
+    if no_ff:
+        cmd.append("--no-ff")
+
+    if commit_title:
+        cmd.extend(["-m", commit_title])
+        if commit_body:
+            cmd.extend(["-m", commit_body])
+
+    cmd.append(clean_branch)
+
+    try:
+        proc = subprocess.run(cmd, cwd=project_path, capture_output=True, text=True, timeout=30)
+        output = proc.stdout.strip() or proc.stderr.strip()
+        status = get_git_merge_status(project_path)
+        if proc.returncode == 0:
+            return True, output or f"Rama '{clean_branch}' fusionada exitosamente.", status
+        else:
+            return False, output or f"Conflicto o error al fusionar '{clean_branch}'.", status
+    except Exception as e:
+        return False, str(e), get_git_merge_status(project_path)
+
+
+def execute_git_merge_into(
+    project_path: str,
+    target_branch: str,
+    source_branch: str,
+    no_ff: bool = False,
+    commit_title: str = None,
+    commit_body: str = None
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """
+    Realiza checkout a la rama destino (target_branch) e integra la rama origen (source_branch) dentro de ella.
+    Permite el flujo inverso ('Integrar mi rama en destino') con resolución segura de conmutación.
+    """
+    clean_target = target_branch.strip()
+    clean_source = source_branch.strip()
+    if not clean_target or not clean_source:
+        return False, "Ramas de origen o destino no válidas.", {}
+
+    local_target = clean_target.replace("origin/", "").strip()
+
+    # 1. Conmutar a la rama destino
+    try:
+        chk = subprocess.run(["git", "checkout", local_target], cwd=project_path, capture_output=True, text=True, timeout=20)
+        if chk.returncode != 0 and clean_target != local_target:
+            chk = subprocess.run(["git", "checkout", clean_target], cwd=project_path, capture_output=True, text=True, timeout=20)
+
+        if chk.returncode != 0:
+            err = chk.stderr.strip() or chk.stdout.strip()
+            return False, f"Fallo al cambiar a la rama destino '{clean_target}': {err}", get_git_merge_status(project_path)
+    except Exception as e:
+        return False, f"Error al ejecutar checkout a rama destino: {str(e)}", get_git_merge_status(project_path)
+
+    # 2. Ejecutar la fusión de source_branch dentro de target_branch
+    return execute_git_merge(
+        project_path=project_path,
+        source_branch=clean_source,
+        no_ff=no_ff,
+        commit_title=commit_title,
+        commit_body=commit_body
+    )
+
+
+def execute_git_merge_abort(project_path: str) -> Tuple[bool, str]:
+    """Ejecuta git merge --abort para cancelar de forma segura la fusión activa."""
+    try:
+        proc = subprocess.run(
+            ["git", "merge", "--abort"],
+            cwd=project_path, capture_output=True, text=True, timeout=15
+        )
+        if proc.returncode == 0:
+            return True, proc.stdout.strip() or "Fusión abortada de forma segura. El árbol de trabajo fue restaurado."
+        else:
+            return False, proc.stderr.strip() or proc.stdout.strip()
+    except Exception as e:
+        return False, str(e)
+
+
+def execute_git_resolve_conflicts(project_path: str, strategy: str = "ours") -> Tuple[bool, str]:
+    """
+    Resuelve todos los archivos en conflicto usando la estrategia indicada ('ours' o 'theirs')
+    y los agrega automáticamente al staging (git add).
+    """
+    flag = "--ours" if strategy.lower() == "ours" else "--theirs"
+    try:
+        out_u = subprocess.check_output(
+            ["git", "diff", "--name-only", "--diff-filter=U"],
+            cwd=project_path, stderr=subprocess.DEVNULL, text=True
+        ).strip()
+        conflicts = [l.strip() for l in out_u.splitlines() if l.strip()]
+        if not conflicts:
+            return True, "No se detectaron archivos con conflictos pendientes."
+
+        details = []
+        for file in conflicts:
+            subprocess.run(["git", "checkout", flag, file], cwd=project_path, check=False)
+            subprocess.run(["git", "add", file], cwd=project_path, check=False)
+            details.append(f"✔ Resuelto ({strategy}): {file}")
+
+        return True, "\n".join(details)
+    except Exception as e:
+        return False, str(e)
+
+
+def execute_git_complete_merge(project_path: str, commit_title: str, commit_body: str = "") -> Tuple[bool, str]:
+    """Finaliza y confirma la fusión activa registrando el commit de merge."""
+    cmd = ["git"]
+    git_name, git_email = get_git_identity(project_path)
+    if git_name:
+        cmd.extend(["-c", f"user.name={git_name}"])
+    if git_email:
+        cmd.extend(["-c", f"user.email={git_email}"])
+
+    cmd.extend(["commit", "-m", commit_title])
+    if commit_body:
+        cmd.extend(["-m", commit_body])
+
+    try:
+        proc = subprocess.run(cmd, cwd=project_path, capture_output=True, text=True, timeout=20)
+        if proc.returncode == 0:
+            return True, proc.stdout.strip() or "Commit de fusión registrado exitosamente."
+        else:
+            return False, proc.stderr.strip() or proc.stdout.strip()
+    except Exception as e:
+        return False, str(e)
+
 
 

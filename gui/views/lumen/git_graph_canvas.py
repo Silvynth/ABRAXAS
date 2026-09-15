@@ -28,7 +28,7 @@ from PySide6.QtGui import (
 from PySide6.QtCore import Qt, QPointF, QRectF, Signal, Slot
 
 
-# Paleta cromática de carriles tácticos (Protocolo Artemis / Lumen Cyberpunk)
+# Paleta cromática de carriles tácticos (Lumen Cyberpunk)
 LUMEN_BRANCH_PALETTE = [
     QColor("#38bdf8"),  # 0: Sky Cyan (Lumen / Active HEAD)
     QColor("#818cf8"),  # 1: Indigo (NEOS / Core)
@@ -142,15 +142,20 @@ class GitGraphCommitNode(QGraphicsItem):
         painter.setRenderHint(QPainter.TextAntialiasing)
 
         # 1. Halo reactivo de carril
-        halo_r = self.dot_radius + (7.0 if self.is_hovered else (4.5 if self.is_head else 2.5))
+        is_sim = bool(self.data.get("is_simulation", False))
+        halo_r = self.dot_radius + (7.0 if self.is_hovered else (4.5 if (self.is_head or is_sim) else 2.5))
         halo_color = QColor(self.lane_color)
-        halo_color.setAlpha(160 if self.is_hovered else (90 if self.is_head else 45))
+        halo_color.setAlpha(160 if self.is_hovered else (90 if (self.is_head or is_sim) else 45))
         painter.setPen(Qt.NoPen)
         painter.setBrush(QBrush(halo_color))
         painter.drawEllipse(QPointF(0, 0), halo_r, halo_r)
 
-        # Anillo pulsante si es HEAD
-        if self.is_head:
+        # Anillo pulsante si es HEAD o SIMULACIÓN
+        if is_sim:
+            painter.setPen(QPen(QColor("#c084fc"), 1.8, Qt.DashDotLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(QPointF(0, 0), halo_r + 3.5, halo_r + 3.5)
+        elif self.is_head:
             painter.setPen(QPen(QColor("#38bdf8"), 1.6, Qt.DashLine))
             painter.setBrush(Qt.NoBrush)
             painter.drawEllipse(QPointF(0, 0), halo_r + 3.0, halo_r + 3.0)
@@ -169,11 +174,28 @@ class GitGraphCommitNode(QGraphicsItem):
         f_hash = QFont("JetBrains Mono, monospace", 8.2)
         f_hash.setBold(True)
         painter.setFont(f_hash)
-        painter.setPen(QColor("#fbbf24") if self.is_hovered else QColor("#bae6fd"))
+        if is_sim:
+            painter.setPen(QColor("#c084fc"))
+        else:
+            painter.setPen(QColor("#fbbf24") if self.is_hovered else QColor("#bae6fd"))
         painter.drawText(QRectF(-45, -22, 90, 14), Qt.AlignCenter, self.hash)
 
         # 5. Badges de Ramas o Tags si existen en este commit (Por encima del hash)
-        if self.refs:
+        if is_sim:
+            b_rect = QRectF(-55, -38, 110, 14)
+            badge_color = QColor("#c084fc")
+            painter.setPen(QPen(badge_color, 1))
+            bg_b = QColor(badge_color)
+            bg_b.setAlpha(55)
+            painter.setBrush(QBrush(bg_b))
+            painter.drawRoundedRect(b_rect, 3, 3)
+
+            f_b = QFont("Inter, sans-serif", 7.5)
+            f_b.setBold(True)
+            painter.setFont(f_b)
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawText(b_rect, Qt.AlignCenter, "🧪 SIMULACIÓN")
+        elif self.refs:
             top_ref = self.refs[0]
             badge_text = top_ref
             badge_color = self.lane_color
@@ -328,7 +350,7 @@ class LumenHorizontalGitGraphView(QGraphicsView):
                 y += grid_size
             x += grid_size
 
-    def load_project_graph(self, project_path: str, max_commits: int = 40):
+    def load_project_graph(self, project_path: str, max_commits: int = 40, simulated_merge: Optional[Dict[str, Any]] = None):
         """Carga y genera el grafo horizontal de ramas a partir del historial git del proyecto."""
         self.current_project_path = project_path
         self.scene.clear()
@@ -371,7 +393,7 @@ class LumenHorizontalGitGraphView(QGraphicsView):
             # Línea guía horizontal muy tenue
             guide_path = QPainterPath()
             guide_path.moveTo(base_x - 30, lane_y)
-            guide_path.lineTo(base_x + len(commits) * x_step + 60, lane_y)
+            guide_path.lineTo(base_x + (len(commits) + (2 if simulated_merge else 1)) * x_step + 60, lane_y)
             guide_item = QGraphicsPathItem(guide_path)
             guide_pen = QPen(QColor(color.red(), color.green(), color.blue(), 30), 1.0, Qt.DashLine)
             guide_item.setPen(guide_pen)
@@ -422,6 +444,68 @@ class LumenHorizontalGitGraphView(QGraphicsView):
                     edge = GitGraphConnectorEdge(parent_node, child_node, child_node.lane_color)
                     self.scene.addItem(edge)
                     self.edges.append(edge)
+
+        # 6.5. Simulación Estética de Fusión (Nodo Fantasma interactivo)
+        if simulated_merge and self.nodes:
+            src_b = simulated_merge.get("source_branch", "").strip()
+            tgt_b = simulated_merge.get("target_branch", "").strip()
+            m_title = simulated_merge.get("title", f"Fusión: {src_b} ➔ {tgt_b}").strip()
+
+            tgt_node = self.head_node
+            if tgt_b:
+                for n in reversed(self.nodes):
+                    if any(tgt_b in r for r in n.refs):
+                        tgt_node = n
+                        break
+
+            src_node = None
+            if src_b:
+                clean_src = src_b.replace("origin/", "").strip()
+                for n in reversed(self.nodes):
+                    if any(src_b in r or clean_src in r for r in n.refs):
+                        src_node = n
+                        break
+
+            if tgt_node:
+                max_x = max([n.x() for n in self.nodes])
+                sim_x = max_x + x_step
+                sim_y = tgt_node.y()
+                sim_lane = tgt_node.lane_idx
+                sim_color = QColor("#c084fc")
+
+                sim_commit_data = {
+                    "hash": "~merge",
+                    "subject": m_title,
+                    "author": "Simulación",
+                    "date": "proyección",
+                    "refs": ["🧪 SIMULACIÓN"],
+                    "parents": [tgt_node.hash] + ([src_node.hash] if src_node and src_node != tgt_node else []),
+                    "is_simulation": True
+                }
+
+                sim_node = GitGraphCommitNode(
+                    commit_data=sim_commit_data,
+                    lane_idx=sim_lane,
+                    lane_color=sim_color,
+                    is_head=False,
+                    on_click_cb=self._on_node_clicked
+                )
+                sim_node.setPos(sim_x, sim_y)
+                self.scene.addItem(sim_node)
+                self.nodes.append(sim_node)
+
+                # Arista horizontal desde la rama receptora
+                edge_tgt = GitGraphConnectorEdge(tgt_node, sim_node, tgt_node.lane_color)
+                self.scene.addItem(edge_tgt)
+                self.edges.append(edge_tgt)
+
+                # Arista diagonal desde la rama entrante
+                if src_node and src_node != tgt_node:
+                    edge_src = GitGraphConnectorEdge(src_node, sim_node, src_node.lane_color)
+                    self.scene.addItem(edge_src)
+                    self.edges.append(edge_src)
+
+                self.head_node = sim_node
 
         # 7. Ajustar el rectángulo de escena y posicionar la vista hacia HEAD (derecha)
         self.scene.setSceneRect(self.scene.itemsBoundingRect().adjusted(-60, -40, 80, 50))

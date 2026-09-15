@@ -42,7 +42,7 @@ def resolve_model_name(target_model: str, endpoint: str) -> str:
                 if m.lower() == target_model.lower() or m.lower().startswith(f"{target_model.lower()}:"):
                     return m
 
-            # Mapeos conocidos de Artemis
+            # Mapeos conocidos de modelos
             t_low = target_model.lower()
             if "hex" in t_low:
                 for m in available:
