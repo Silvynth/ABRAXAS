@@ -96,3 +96,7 @@ build/
 .version
 *.tar.gz
 *.zip
+
+# --- Preset aplicado: PYTHON ---
+env/
+ENV/

@@ -92,6 +92,7 @@ def inspect_gitignore_and_env(project_path: str) -> Dict:
         "env_vars_count": env_vars_count,
         "env_is_ignored": env_is_ignored,
         "has_example": has_example,
+        "has_env_example": has_example,
         "example_path": example_path
     }
 
@@ -256,8 +257,10 @@ def scan_project_documentation(project_path: str) -> List[Dict]:
                 docs.append({
                     "name": file,
                     "relative": rel_p,
+                    "rel_path": rel_p,
                     "path": abs_p,
                     "size": size,
+                    "size_kb": round(size / 1024, 1),
                     "is_readme": "readme" in file.lower()
                 })
 
@@ -265,15 +268,15 @@ def scan_project_documentation(project_path: str) -> List[Dict]:
     return docs
 
 
-def read_markdown_file(file_path: str) -> Tuple[bool, str]:
+def read_markdown_file(file_path: str) -> str:
     """Lee el contenido en texto plano de un archivo de documentación."""
     if not file_path or not os.path.exists(file_path):
-        return False, "Archivo no encontrado."
+        return ""
     try:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            return True, f.read()
+            return f.read()
     except Exception as e:
-        return False, f"Error al leer archivo: {e}"
+        return f"Error al leer archivo: {e}"
 
 
 def generate_ai_changelog(project_path: str, count: int = 15) -> Tuple[bool, str]:
@@ -325,6 +328,7 @@ def check_ollama_status(config_path: str = None) -> Dict:
             models = [m.get("name", "") for m in data.get("models", [])]
             return {
                 "running": True,
+                "online": True,
                 "endpoint": endpoint,
                 "models": models,
                 "models_count": len(models),
@@ -334,6 +338,7 @@ def check_ollama_status(config_path: str = None) -> Dict:
     except Exception as e:
         return {
             "running": False,
+            "online": False,
             "endpoint": endpoint,
             "models": [],
             "models_count": 0,

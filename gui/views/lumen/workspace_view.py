@@ -5223,18 +5223,18 @@ class LumenProjectWorkspaceView(QWidget):
         status = inspect_gitignore_and_env(p_path)
 
         # Telemetría .gitignore
-        if status["has_gitignore"]:
-            self.lbl_s3_gi_stat.setText(f"🛡️ .gitignore: {status['rules_count']} reglas activas")
+        if status.get("has_gitignore", False):
+            self.lbl_s3_gi_stat.setText(f"🛡️ .gitignore: {status.get('rules_count', 0)} reglas activas")
             self.lbl_s3_gi_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #a7f3d0;")
         else:
             self.lbl_s3_gi_stat.setText("🛡️ .gitignore: No existe")
             self.lbl_s3_gi_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #f87171;")
 
         # Telemetría .env
-        if not status["has_env"]:
+        if not status.get("has_env", False):
             self.lbl_s3_env_stat.setText("🔐 .env: No existe")
             self.lbl_s3_env_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #9ca3af;")
-        elif status["env_is_ignored"]:
+        elif status.get("env_is_ignored", False):
             self.lbl_s3_env_stat.setText("🔐 .env: Presente y Protegido ✅")
             self.lbl_s3_env_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #34d399;")
         else:
@@ -5242,7 +5242,7 @@ class LumenProjectWorkspaceView(QWidget):
             self.lbl_s3_env_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #f87171;")
 
         # Telemetría .env.example
-        if status["has_env_example"]:
+        if status.get("has_env_example", status.get("has_example", False)):
             self.lbl_s3_example_stat.setText("📋 .env.example: Presente")
             self.lbl_s3_example_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #6ee7b7;")
         else:
@@ -5344,7 +5344,10 @@ class LumenProjectWorkspaceView(QWidget):
             return
 
         for doc_item in docs:
-            card = QPushButton(f"📄  {doc_item['name']}\n    {doc_item['rel_path']} ({doc_item['size_kb']} KB)")
+            rel = doc_item.get("rel_path") or doc_item.get("relative", "")
+            sz = doc_item.get("size_kb", round(doc_item.get("size", 0) / 1024, 1))
+            name = doc_item.get("name", "Documento")
+            card = QPushButton(f"📄  {name}\n    {rel} ({sz} KB)")
             card.setCursor(Qt.PointingHandCursor)
             card.setStyleSheet("""
                 QPushButton {
@@ -5363,12 +5366,15 @@ class LumenProjectWorkspaceView(QWidget):
                     color: #ffffff;
                 }
             """)
-            card.clicked.connect(lambda _, p=doc_item['path']: self.on_doc_file_selected(p))
+            item_path = doc_item.get("path", "")
+            card.clicked.connect(lambda _, p=item_path: self.on_doc_file_selected(p))
             self.docs_list_layout.insertWidget(self.docs_list_layout.count() - 1, card)
 
         # Si hay documentos y ninguno está cargado, cargar el primero automáticamente
         if docs and not self._current_doc_path:
-            self.on_doc_file_selected(docs[0]['path'])
+            first_path = docs[0].get("path", "")
+            if first_path:
+                self.on_doc_file_selected(first_path)
 
     def on_doc_file_selected(self, file_path: str):
         """Carga y muestra el contenido del archivo de documentación seleccionado."""
@@ -5424,10 +5430,12 @@ class LumenProjectWorkspaceView(QWidget):
     def refresh_sector3_ai_view(self):
         """Comprueba el estado del demonio Ollama y los modelos instalados."""
         status = check_ollama_status()
-        if status["online"]:
+        is_online = status.get("online", status.get("running", False))
+        models = status.get("models", [])
+        if is_online:
             self.lbl_s3_ol_status.setText("Ollama: ● En línea (http://localhost:11434)")
             self.lbl_s3_ol_status.setStyleSheet("font-size: 11px; font-weight: 700; color: #34d399;")
-            models_str = ", ".join(status["models"]) if status["models"] else "Sin modelos detectados"
+            models_str = ", ".join(models) if models else "Sin modelos detectados"
             self.lbl_s3_ol_models.setText(f"Modelos disponibles: {models_str}")
             self.lbl_s3_ol_models.setStyleSheet("font-size: 10px; color: #e5e7eb;")
         else:

@@ -220,8 +220,9 @@ def get_repo_visibility(project_path: str, force_refresh: bool = False) -> Dict[
         }
 
     now = time.time()
-    if not force_refresh and project_path in _REPO_VISIBILITY_CACHE:
-        cached_time, cached_val = _REPO_VISIBILITY_CACHE[project_path]
+    norm_path = os.path.abspath(os.path.normpath(project_path))
+    if not force_refresh and norm_path in _REPO_VISIBILITY_CACHE:
+        cached_time, cached_val = _REPO_VISIBILITY_CACHE[norm_path]
         if (now - cached_time) < _REPO_VISIBILITY_TTL:
             return cached_val
 
@@ -247,7 +248,7 @@ def get_repo_visibility(project_path: str, force_refresh: bool = False) -> Dict[
             "text": "Solo Local",
             "badge": "🔒 Solo Local"
         }
-        _REPO_VISIBILITY_CACHE[project_path] = (now, res)
+        _REPO_VISIBILITY_CACHE[norm_path] = (now, res)
         return res
 
     is_github = "github.com" in url
@@ -260,7 +261,7 @@ def get_repo_visibility(project_path: str, force_refresh: bool = False) -> Dict[
             "text": "Remoto Externo",
             "badge": "🌐 Externo"
         }
-        _REPO_VISIBILITY_CACHE[project_path] = (now, res)
+        _REPO_VISIBILITY_CACHE[norm_path] = (now, res)
         return res
 
     # 2. Consultar visibilidad exacta en GitHub vía gh CLI (con timeout estricto de 3s)
@@ -286,7 +287,7 @@ def get_repo_visibility(project_path: str, force_refresh: bool = False) -> Dict[
                 "badge": badge,
                 "repo_name": data.get("nameWithOwner", "")
             }
-            _REPO_VISIBILITY_CACHE[project_path] = (now, res)
+            _REPO_VISIBILITY_CACHE[norm_path] = (now, res)
             return res
     except Exception:
         pass
@@ -299,7 +300,7 @@ def get_repo_visibility(project_path: str, force_refresh: bool = False) -> Dict[
         "text": "GitHub",
         "badge": "🌐 GitHub"
     }
-    _REPO_VISIBILITY_CACHE[project_path] = (now, res)
+    _REPO_VISIBILITY_CACHE[norm_path] = (now, res)
     return res
 
 

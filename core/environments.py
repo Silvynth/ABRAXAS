@@ -574,7 +574,7 @@ def deep_scan_docker_files(project_path: str) -> Dict[str, Any]:
     prune_dirs = {".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", ".mypy_cache", "dist", "build", ".eggs"}
     
     for root, dirs, files in os.walk(project_path):
-        dirs[:] = [d for d in dirs if d not in prune_dirs]
+        dirs[:] = [d for d in dirs if d not in prune_dirs and not d.startswith(".")]
         for file in files:
             is_dockerfile = file == "Dockerfile" or file.startswith("Dockerfile.")
             is_compose = re.match(r'^(docker-)?compose.*\.ya?ml$', file) is not None

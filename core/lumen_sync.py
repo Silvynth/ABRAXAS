@@ -8,7 +8,7 @@ import re
 import json
 import subprocess
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Union
 
 try:
     import tomllib
@@ -312,10 +312,17 @@ def get_project_recent_commits(project_path: str, limit: int = 4) -> List[Dict[s
         return []
 
 
-def get_full_project_sync(folder_data: dict) -> Dict[str, Any]:
+def get_full_project_sync(folder_data: Union[Dict[str, Any], str]) -> Dict[str, Any]:
     """Genera el diccionario de sincronización completo y en tiempo real para un proyecto."""
-    p_path = folder_data.get("path", "")
-    p_name = folder_data.get("name", "Proyecto")
+    if isinstance(folder_data, str):
+        p_path = folder_data
+        p_name = os.path.basename(folder_data) or "Proyecto"
+    elif isinstance(folder_data, dict):
+        p_path = folder_data.get("path", "")
+        p_name = folder_data.get("name", os.path.basename(p_path) if p_path else "Proyecto")
+    else:
+        p_path = ""
+        p_name = "Proyecto"
 
     version = get_project_version(p_path)
     git_info = get_project_git_info(p_path)
