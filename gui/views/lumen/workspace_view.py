@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QApplication, QStackedWidget, QSizePolicy,
     QProgressBar, QLineEdit, QComboBox, QStyledItemDelegate,
     QCheckBox, QMenu, QDialog, QRadioButton, QButtonGroup, QMessageBox,
-    QInputDialog
+    QInputDialog, QSplitter
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread, QPoint
 
@@ -875,6 +875,29 @@ class LumenProjectWorkspaceView(QWidget):
         """)
         tb_layout.addWidget(self.lbl_status_pill)
 
+        # Botón Toggle Panel Lateral Terminal
+        self.btn_top_toggle_term = QPushButton("📟 Terminal Lateral")
+        self.btn_top_toggle_term.setToolTip("Alternar panel lateral de terminal y salida")
+        self.btn_top_toggle_term.setCursor(Qt.PointingHandCursor)
+        self.btn_top_toggle_term.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.15);
+                color: #c7d2fe;
+                border: 1px solid rgba(99, 102, 241, 0.40);
+                border-radius: 8px;
+                padding: 4px 12px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: rgba(99, 102, 241, 0.30);
+                color: #ffffff;
+                border-color: #818cf8;
+            }
+        """)
+        self.btn_top_toggle_term.clicked.connect(self.toggle_terminal_collapsed)
+        tb_layout.addWidget(self.btn_top_toggle_term)
+
         root_layout.addWidget(top_bar)
 
         # Área de Scroll General
@@ -1283,6 +1306,29 @@ class LumenProjectWorkspaceView(QWidget):
         self.lbl_t_status.setStyleSheet("font-size: 10px; font-weight: 800; color: #38bdf8; background-color: rgba(6, 182, 212, 0.12); border: 1px solid rgba(6, 182, 212, 0.35); border-radius: 4px; padding: 2px 8px; letter-spacing: 0.5px;")
         t_bar_layout.addWidget(self.lbl_t_status)
 
+        # Botón Ocultar / Mostrar Panel Lateral Terminal
+        self.btn_collapse_terminal = QPushButton("▶")
+        self.btn_collapse_terminal.setToolTip("Ocultar panel lateral de terminal")
+        self.btn_collapse_terminal.setCursor(Qt.PointingHandCursor)
+        self.btn_collapse_terminal.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #bae6fd;
+                border: 1px solid rgba(56, 189, 248, 0.35);
+                border-radius: 4px;
+                padding: 2px 9px;
+                font-size: 11px;
+                font-weight: 800;
+            }
+            QPushButton:hover {
+                color: #ffffff;
+                border-color: #38bdf8;
+                background-color: rgba(56, 189, 248, 0.25);
+            }
+        """)
+        self.btn_collapse_terminal.clicked.connect(self.toggle_terminal_collapsed)
+        t_bar_layout.addWidget(self.btn_collapse_terminal)
+
         b_layout.addWidget(term_bar)
 
         # Stack para conmutar entre Terminal y Grafo de Ramas (GitHub Network)
@@ -1298,11 +1344,30 @@ class LumenProjectWorkspaceView(QWidget):
 
         b_layout.addWidget(self.terminal_stack)
 
-        self.terminal_frame.setMinimumHeight(240)
-        content_layout.addWidget(self.terminal_frame, 1)
+        self.terminal_frame.setMinimumWidth(320)
+        self.terminal_frame.setMaximumWidth(600)
+        self.terminal_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
         scroll_area.setWidget(scroll_content)
-        root_layout.addWidget(scroll_area, 1)
+
+        # Splitter Horizontal: Columna Izquierda (Área de Trabajo) | Columna Derecha (Terminal)
+        self.body_splitter = QSplitter(Qt.Horizontal)
+        self.body_splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: rgba(255, 255, 255, 0.07);
+                width: 4px;
+                border-radius: 2px;
+            }
+            QSplitter::handle:hover {
+                background-color: #6366f1;
+            }
+        """)
+        self.body_splitter.addWidget(scroll_area)
+        self.body_splitter.addWidget(self.terminal_frame)
+        self.body_splitter.setStretchFactor(0, 7)
+        self.body_splitter.setStretchFactor(1, 3)
+
+        root_layout.addWidget(self.body_splitter, 1)
 
     # -----------------------------------------------------------------
     # CREACIÓN DE VISTAS DE SECTORES (DISEÑO PRECISO & COMPACTO)
@@ -2508,7 +2573,8 @@ class LumenProjectWorkspaceView(QWidget):
                 border-radius: 10px;
             }
         """)
-        card.setMinimumHeight(350)
+        card.setMinimumHeight(440)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
@@ -3203,7 +3269,8 @@ class LumenProjectWorkspaceView(QWidget):
     def create_sector2_docker_view(self) -> QWidget:
         """Sub-página interactiva para gestionar Docker, contenedores y Compose con Deep Discovery."""
         page = QWidget()
-        page.setMinimumHeight(350)
+        page.setMinimumHeight(440)
+        page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
@@ -3337,6 +3404,29 @@ class LumenProjectWorkspaceView(QWidget):
         """)
         btn_refresh.clicked.connect(self.refresh_sector2_docker_view)
         nav.addWidget(btn_refresh)
+
+        btn_toggle_term = QPushButton("📟  Terminal")
+        btn_toggle_term.setToolTip("Ocultar o mostrar el panel inferior de la terminal")
+        btn_toggle_term.setCursor(Qt.PointingHandCursor)
+        btn_toggle_term.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.15);
+                color: #c7d2fe;
+                border: 1px solid rgba(99, 102, 241, 0.35);
+                border-radius: 6px;
+                padding: 5px 10px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(99, 102, 241, 0.30);
+                color: #ffffff;
+                border-color: #818cf8;
+            }
+        """)
+        btn_toggle_term.clicked.connect(self.toggle_terminal_collapsed)
+        nav.addWidget(btn_toggle_term)
+
         layout.addLayout(nav)
 
         # Panel de Telemetría Docker + Estado Compose Tool
@@ -3396,7 +3486,7 @@ class LumenProjectWorkspaceView(QWidget):
         # ScrollArea con Compose Stacks + Contenedores
         scroll_docker = QScrollArea()
         scroll_docker.setWidgetResizable(True)
-        scroll_docker.setMinimumHeight(160)
+        scroll_docker.setMinimumHeight(280)
         scroll_docker.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         scroll_docker.setStyleSheet("""
             QScrollArea {
@@ -6952,6 +7042,42 @@ class LumenProjectWorkspaceView(QWidget):
             """)
             self.lbl_t_title.setText("lumen-terminal@abraxas:~$")
             self.lbl_t_status.setText("⚡ VISOR DE SALIDA [READ-ONLY]")
+
+    def toggle_terminal_collapsed(self):
+        """Alterna la visibilidad del panel lateral de terminal para dar máximo espacio al área de trabajo."""
+        is_visible = self.terminal_frame.isVisible()
+        self.terminal_frame.setVisible(not is_visible)
+        if hasattr(self, "btn_collapse_terminal"):
+            self.btn_collapse_terminal.setText("◀" if is_visible else "▶")
+            self.btn_collapse_terminal.setToolTip("Expandir panel lateral de terminal" if is_visible else "Ocultar panel lateral de terminal")
+        if hasattr(self, "btn_top_toggle_term"):
+            self.btn_top_toggle_term.setText("📟 Abrir Terminal" if is_visible else "📟 Terminal Lateral")
+            self.btn_top_toggle_term.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(99, 102, 241, 0.25) if not is_visible else rgba(99, 102, 241, 0.15);
+                    color: #ffffff if not is_visible else #c7d2fe;
+                    border: 1px solid rgba(99, 102, 241, 0.50);
+                    border-radius: 8px;
+                    padding: 4px 12px;
+                    font-size: 11px;
+                    font-weight: 700;
+                }
+            """ if False else """
+                QPushButton {
+                    background-color: rgba(99, 102, 241, 0.15);
+                    color: #c7d2fe;
+                    border: 1px solid rgba(99, 102, 241, 0.40);
+                    border-radius: 8px;
+                    padding: 4px 12px;
+                    font-size: 11px;
+                    font-weight: 700;
+                }
+                QPushButton:hover {
+                    background-color: rgba(99, 102, 241, 0.30);
+                    color: #ffffff;
+                    border-color: #818cf8;
+                }
+            """)
 
     def create_git_graph_view(self) -> QWidget:
         """Crea la vista de Grafo Horizontal de Ramas estilo VS Code Git Graph / GitHub Network."""
