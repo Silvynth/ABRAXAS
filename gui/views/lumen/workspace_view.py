@@ -1260,37 +1260,15 @@ class LumenProjectWorkspaceView(QWidget):
         c_layout.setContentsMargins(14, 10, 14, 10)
         c_layout.setSpacing(6)
 
-        # Header del Sector con botón de abrir
+        # Header del Sector
         h_layout = QHBoxLayout()
         lbl_title = QLabel(title)
         lbl_title.setStyleSheet(f"font-size: 12.5px; font-weight: 900; color: {accent_color}; letter-spacing: 0.5px;")
         h_layout.addWidget(lbl_title)
         h_layout.addStretch()
-
-        btn_enter = QPushButton("Abrir Sector ›")
-        btn_enter.setCursor(Qt.PointingHandCursor)
-        btn_enter_css_normal = f"""
-            QPushButton {{
-                background-color: rgba(255, 255, 255, 0.04);
-                color: {accent_color};
-                border: 1px solid {accent_color};
-                border-radius: 5px;
-                padding: 3px 8px;
-                font-size: 11px;
-                font-weight: 700;
-            }}
-            QPushButton:hover {{
-                background-color: {accent_color};
-                color: #07090e;
-            }}
-        """
-        btn_enter.setStyleSheet(btn_enter_css_normal)
-        btn_enter.clicked.connect(lambda: self.open_sector_view(sector_idx, title))
-        h_layout.addWidget(btn_enter)
         c_layout.addLayout(h_layout)
 
         card.lbl_title = lbl_title
-        card.btn_enter = btn_enter
         card.action_buttons = []
         card.original_title = title
         card.accent_color = accent_color
@@ -1344,47 +1322,15 @@ class LumenProjectWorkspaceView(QWidget):
                 card.nogit_container.setVisible(not is_git)
                 if is_git:
                     lbl_title.setText(card.original_title)
-                    btn_enter.setEnabled(True)
-                    btn_enter.setText("Abrir Sector ›")
-                    btn_enter.setStyleSheet(btn_enter_css_normal)
                 else:
                     lbl_title.setText("🔄  SECTOR 1 : PROTOCOLO GIT  [NO INICIALIZADO]")
-                    btn_enter.setEnabled(False)
-                    btn_enter.setText("Sin Inicializar")
-                    btn_enter.setStyleSheet("""
-                        QPushButton {
-                            background-color: rgba(255, 255, 255, 0.02);
-                            color: #6b7280;
-                            border: 1px dashed #4b5563;
-                            border-radius: 5px;
-                            padding: 3px 8px;
-                            font-size: 11px;
-                            font-weight: 700;
-                        }
-                    """)
             elif sector_idx == 3:
                 if is_git:
                     lbl_title.setText(card.original_title)
-                    btn_enter.setEnabled(True)
-                    btn_enter.setText("Abrir Sector ›")
-                    btn_enter.setStyleSheet(btn_enter_css_normal)
                     for b in card.action_buttons:
                         b.set_locked(False)
                 else:
                     lbl_title.setText("🧠  SECTOR 3 : HERRAMIENTAS & IA  [BLOQUEADO]")
-                    btn_enter.setEnabled(False)
-                    btn_enter.setText("🔒 Bloqueado")
-                    btn_enter.setStyleSheet("""
-                        QPushButton {
-                            background-color: rgba(255, 255, 255, 0.02);
-                            color: #ef4444;
-                            border: 1px solid rgba(239, 68, 68, 0.35);
-                            border-radius: 5px;
-                            padding: 3px 8px;
-                            font-size: 11px;
-                            font-weight: 700;
-                        }
-                    """)
                     for b in card.action_buttons:
                         b.set_locked(True, "Bloqueado: Requiere repositorio Git")
 
@@ -5896,8 +5842,8 @@ class LumenProjectWorkspaceView(QWidget):
         self.btn_alpha.set_title(f"3. ALPHA (Major) ➔ {next_alpha}")
         self.btn_alpha.set_subtitle(f"Reestructuración masiva o cambio mayor • Siguiente versión: {next_alpha}")
 
-        self.btn_omit.set_title(f"4. Omitir bump ➔ {cur_ver}")
-        self.btn_omit.set_subtitle(f"Mantener versión actual {cur_ver} sin generar nuevo tag")
+        self.btn_omit.set_title(f"4. Continuar versión ➔ {cur_ver}")
+        self.btn_omit.set_subtitle(f"Continuar en la versión actual {cur_ver} (sin generar nuevo tag)")
 
         self.cur_semver_options = {
             "GAMMA": next_gamma,
@@ -6083,7 +6029,7 @@ class LumenProjectWorkspaceView(QWidget):
         next_alpha = bump_semver(cur_ver, "ALPHA")
 
         self.cmb_manual_semver.clear()
-        self.cmb_manual_semver.addItem(f"Omitir bump de versión (mantener {cur_ver}, sin tag)", ("OMIT", ""))
+        self.cmb_manual_semver.addItem(f"Continuar en versión actual ({cur_ver}, sin tag)", ("OMIT", cur_ver))
         self.cmb_manual_semver.addItem(f"GAMMA (Patch / Fix) ➔ {next_gamma}", ("GAMMA", next_gamma))
         self.cmb_manual_semver.addItem(f"BETA (Minor / Feat) ➔ {next_beta}", ("BETA", next_beta))
         self.cmb_manual_semver.addItem(f"ALPHA (Major / Breaking) ➔ {next_alpha}", ("ALPHA", next_alpha))
@@ -6116,7 +6062,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         next_id = get_next_commit_seq(path)
         header = f"MAN:{next_id}"
-        if target_ver and impact_type != "OMIT":
+        if target_ver:
             header = f"MAN:{next_id} [{target_ver}]"
 
         self.terminal_display.log("COMMIT", f"Registrando commit manual (<code>{header} | {raw_title}</code>)...", tag_color="#34d399", prefix="💾")

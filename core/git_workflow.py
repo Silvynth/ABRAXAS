@@ -20,19 +20,7 @@ def get_project_semver(project_path: str) -> str:
     if not project_path or not os.path.isdir(project_path):
         return "v0.1.0"
 
-    # 1. Archivo .version o VERSION en la raíz de git
-    for fname in [".version", "VERSION"]:
-        fpath = os.path.join(project_path, fname)
-        if os.path.isfile(fpath):
-            try:
-                with open(fpath, "r", encoding="utf-8") as f:
-                    ver = f.read().strip().split()[0]
-                    if ver:
-                        return f"v{ver.lstrip('vV')}"
-            except (OSError, ValueError, IndexError):
-                pass
-
-    # 2. Tag más reciente en Git
+    # 1. Tag más reciente en Git
     try:
         tag = subprocess.check_output(
             ["git", "describe", "--tags", "--abbrev=0"],
@@ -45,19 +33,32 @@ def get_project_semver(project_path: str) -> str:
     except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
 
-    # 3. Tag en el historial de commits [vX.Y.Z]
+    # 2. Tag en el historial de commits recientes [vX.Y.Z]
     try:
         log_out = subprocess.check_output(
-            ["git", "log", "--format=%s", "-n", "30"],
+            ["git", "log", "--format=%s", "-n", "50"],
             cwd=project_path,
             stderr=subprocess.DEVNULL,
             text=True
         )
-        match = re.search(r"\[v?(\d+\.\d+\.\d+)\]", log_out)
-        if match:
-            return f"v{match.group(1)}"
+        for line in log_out.splitlines():
+            match = re.search(r"\[v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?)\]", line)
+            if match:
+                return f"v{match.group(1)}"
     except (subprocess.SubprocessError, OSError):
         pass
+
+    # 3. Archivo .version o VERSION en la raíz de git
+    for fname in [".version", "VERSION"]:
+        fpath = os.path.join(project_path, fname)
+        if os.path.isfile(fpath):
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    ver = f.read().strip().split()[0]
+                    if ver:
+                        return f"v{ver.lstrip('vV')}"
+            except (OSError, ValueError, IndexError):
+                pass
 
     return "v0.1.0"
 
@@ -166,6 +167,8 @@ def generate_ia_commit_proposal(
         context_hint = f"\n[CLASIFICACIÓN DE IMPACTO: BETA (Minor / Nuevo Módulo o Funcionalidad / {target_ver})]. El operador ha clasificado este cambio como una nueva funcionalidad o módulo. Tu título y descripción deben destacar las nuevas capacidades y el componente funcional creado."
     elif impact_type == "ALPHA":
         context_hint = f"\n[CLASIFICACIÓN DE IMPACTO: ALPHA (Major / Gran Cambio Estructural / {target_ver})]. El operador ha clasificado este cambio como una evolución o reestructuración mayor de arquitectura. Tu título y descripción deben reflejar la escala global de los cambios."
+    elif impact_type == "OMIT":
+        context_hint = f"\n[CLASIFICACIÓN DE IMPACTO: CONTINUACIÓN DE VERSIÓN ({target_ver})]. El operador continúa el ciclo de desarrollo en la versión actual sin incrementar el número de versión. Tu título y descripción deben ser concisos y enfocarse en las modificaciones y ajustes técnicos puntuales realizados."
 
     user_prompt = f"""Analiza el siguiente git diff y genera la propuesta de commit estructurada:
 
@@ -216,7 +219,7 @@ Diff:
             body = "Se han realizado modificaciones y optimizaciones técnicas en el código del repositorio."
 
     commit_header = f"{id_prefix}:{next_id}"
-    if target_ver and impact_type != "OMIT":
+    if target_ver:
         commit_header = f"{id_prefix}:{next_id} [{target_ver}]"
 
     return {
@@ -286,12 +289,17 @@ def execute_commit_and_tag(
 ) -> Tuple[bool, str]:
     """Confirma el commit en Git y crea el tag correspondiente si aplica."""
     try:
-        # 1. Si hay cambio de versión, actualizar archivo .version
-        if impact_type != "OMIT" and target_ver:
-            v_file = os.path.join(project_path, ".version")
-            with open(v_file, "w", encoding="utf-8") as f:
-                f.write(f"{target_ver.lstrip('vV')}\n")
-            subprocess.run(["git", "add", ".version"], cwd=project_path, check=False)
+        # 1. Asegurar la persistencia de la versión en los archivos .version y VERSION
+        if target_ver:
+            clean_ver = target_ver.lstrip("vV")
+            for vf_name in [".version", "VERSION"]:
+                vf_path = os.path.join(project_path, vf_name)
+                try:
+                    with open(vf_path, "w", encoding="utf-8") as f:
+                        f.write(f"{clean_ver}\n")
+                    subprocess.run(["git", "add", vf_name], cwd=project_path, check=False)
+                except OSError:
+                    pass
 
         # 2. Ejecutar git commit con identidad garantizada
         full_title = f"{commit_header} | {title}"
@@ -306,7 +314,7 @@ def execute_commit_and_tag(
         if proc.returncode != 0:
             return False, f"Error al ejecutar git commit:\n{proc.stderr}"
 
-        # 3. Crear Git Tag
+        # 3. Crear Git Tag únicamente cuando hay incremento de versión explícito (no en OMIT/continuación)
         if impact_type != "OMIT" and target_ver:
             cmd_tag = ["git", "tag", "-a", target_ver, "-m", f"Release {target_ver}: {full_title}"]
             tag_proc = subprocess.run(cmd_tag, cwd=project_path, capture_output=True, text=True, timeout=10)

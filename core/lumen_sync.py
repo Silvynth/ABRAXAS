@@ -22,36 +22,14 @@ from core.github import get_repo_visibility
 
 
 def get_project_version(project_path: str) -> str:
-    """Detecta la versión del proyecto a través de VERSION, git commit, pyproject, package.json o config."""
+    """Detecta la versión del proyecto a través de git tags, commits, archivos VERSION o manifests."""
     if not project_path or not os.path.isdir(project_path):
         return "v0.1.0"
 
-    # 1. Archivo VERSION explícito
-    v_file = os.path.join(project_path, "VERSION")
-    if os.path.exists(v_file):
-        try:
-            with open(v_file, "r", encoding="utf-8") as f:
-                v = f.read().strip()
-                if v:
-                    return f"v{v.lstrip('v')}"
-        except OSError:
-            pass
-
-    # 2. Tag en mensaje del último commit de Git [vX.Y.Z]
-    if os.path.exists(os.path.join(project_path, ".git")):
-        try:
-            msg = subprocess.check_output(
-                ["git", "log", "-1", "--pretty=%B"],
-                cwd=project_path,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=2
-            ).strip()
-            match = re.search(r"\[v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?)\]", msg)
-            if match:
-                return f"v{match.group(1)}"
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-            pass
+    from core.git_workflow import get_project_semver
+    v = get_project_semver(project_path)
+    if v and v != "v0.1.0":
+        return v
 
     # 3. pyproject.toml
     pyproj = os.path.join(project_path, "pyproject.toml")

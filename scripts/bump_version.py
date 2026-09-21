@@ -73,6 +73,12 @@ def calculate_next_version(current_str, bump_type):
 def write_version(new_version):
     with open(VERSION_FILE, "w", encoding="utf-8") as f:
         f.write(f"{new_version}\n")
+    dot_v = os.path.join(ROOT_DIR, ".version")
+    try:
+        with open(dot_v, "w", encoding="utf-8") as f:
+            f.write(f"{new_version}\n")
+    except OSError:
+        pass
 
 def install_git_hook():
     hooks_dir = os.path.join(ROOT_DIR, ".git", "hooks")
