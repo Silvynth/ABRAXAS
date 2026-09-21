@@ -89,8 +89,8 @@ def bump_semver(current_ver: str, bump_type: str) -> str:
 
 
 def clean_commit_title(title: str, fallback: str = "Actualización de componentes del sistema") -> str:
-    """Limpia prefijos residuales (HEX, SIL, HEN, AGY, MAN) y normaliza la longitud del título."""
-    cleaned = re.sub(r"^(?:HEX|SIL|HEN|AGY|MAN):\d{4}(?:\s*\[v?[0-9.]+\])?\s*\|\s*", "", title, flags=re.IGNORECASE).strip()
+    """Limpia prefijos residuales (HEX, SIL, HEN, AGY, MAN, ANI) y normaliza la longitud del título."""
+    cleaned = re.sub(r"^(?:HEX|SIL|HEN|AGY|MAN|ANI):\d{4}(?:\s*\[v?[0-9.]+\])?\s*\|\s*", "", title, flags=re.IGNORECASE).strip()
     if not cleaned:
         cleaned = fallback
     words = cleaned.split()
@@ -111,7 +111,7 @@ def get_next_commit_seq(project_path: str) -> str:
             text=True
         )
         for line in log_out.splitlines():
-            match = re.search(r"(?:HEX|SIL|HEN|AGY|MAN):(\d{4})", line)
+            match = re.search(r"(?:HEX|SIL|HEN|AGY|MAN|ANI):(\d{4})", line)
             if match:
                 num = int(match.group(1))
                 return f"{num + 1:04d}"

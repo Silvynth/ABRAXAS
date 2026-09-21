@@ -40,7 +40,8 @@ from core.environments import (
     install_project_dependencies, install_custom_packages,
     freeze_dependencies_to_file, list_installed_packages, delete_python_venv,
     inspect_docker_status, list_docker_containers, execute_docker_container_action,
-    get_docker_container_logs, execute_docker_prune, inspect_network_ports, kill_process_by_pid
+    get_docker_container_logs, execute_docker_prune, inspect_network_ports, kill_process_by_pid,
+    deep_scan_docker_files, parse_compose_file_lightweight, detect_compose_tool, execute_compose_action
 )
 from gui.views.lumen.git_graph_canvas import LumenHorizontalGitGraphView
 
@@ -293,13 +294,15 @@ class PythonVenvWorkerThread(QThread):
 
 
 class DockerWorkerThread(QThread):
-    """Hilo no bloqueante para ejecutar operaciones de Docker (start, stop, prune, etc.)."""
+    """Hilo no bloqueante para ejecutar operaciones de Docker (contenedor, compose, prune)."""
     finished_task = Signal(bool, str, str)
 
-    def __init__(self, task_type: str, target: str = ""):
+    def __init__(self, task_type: str, target: str = "", compose_path: str = "", service: str = ""):
         super().__init__()
         self.task_type = task_type
         self.target = target
+        self.compose_path = compose_path
+        self.service = service
 
     def run(self):
         try:
@@ -309,6 +312,11 @@ class DockerWorkerThread(QThread):
             elif self.task_type in ["start", "stop", "restart", "rm"]:
                 ok, msg = execute_docker_container_action(self.task_type, self.target)
                 self.finished_task.emit(ok, f"DOCKER-{self.task_type.upper()}", msg)
+            elif self.task_type.startswith("compose-"):
+                action = self.task_type.replace("compose-", "")
+                ok, msg = execute_compose_action(self.compose_path, action, self.service or None)
+                label = f"COMPOSE-{action.upper()}"
+                self.finished_task.emit(ok, label, msg)
         except Exception as e:
             self.finished_task.emit(False, self.task_type.upper(), f"Excepción en hilo de Docker: {str(e)}")
 
@@ -3193,7 +3201,7 @@ class LumenProjectWorkspaceView(QWidget):
     # SUB-PÁGINA 2: CONTROL DE DOCKER Y COMPOSE
     # =================================================================
     def create_sector2_docker_view(self) -> QWidget:
-        """Sub-página interactiva para gestionar Docker, contenedores y Compose."""
+        """Sub-página interactiva para gestionar Docker, contenedores y Compose con Deep Discovery."""
         page = QWidget()
         page.setMinimumHeight(350)
         layout = QVBoxLayout(page)
@@ -3331,7 +3339,7 @@ class LumenProjectWorkspaceView(QWidget):
         nav.addWidget(btn_refresh)
         layout.addLayout(nav)
 
-        # Panel de Telemetría Docker
+        # Panel de Telemetría Docker + Estado Compose Tool
         self.frame_docker_telemetry = QFrame()
         self.frame_docker_telemetry.setStyleSheet("""
             QFrame {
@@ -3352,6 +3360,10 @@ class LumenProjectWorkspaceView(QWidget):
         self.lbl_s2_docker_details = QLabel("Demonio: Desconocido | Archivos Compose: Ninguno")
         self.lbl_s2_docker_details.setStyleSheet("font-size: 11px; color: #9ca3af;")
         d_lay.addWidget(self.lbl_s2_docker_details)
+
+        self.lbl_s2_compose_tool = QLabel("Compose Tool: Detectando...")
+        self.lbl_s2_compose_tool.setStyleSheet("font-size: 10.5px; color: #6b7280;")
+        d_lay.addWidget(self.lbl_s2_compose_tool)
 
         layout.addWidget(self.frame_docker_telemetry)
 
@@ -3381,11 +3393,10 @@ class LumenProjectWorkspaceView(QWidget):
         docker_acts.addStretch()
         layout.addLayout(docker_acts)
 
-        # ScrollArea con Contenedores
+        # ScrollArea con Compose Stacks + Contenedores
         scroll_docker = QScrollArea()
         scroll_docker.setWidgetResizable(True)
         scroll_docker.setMinimumHeight(160)
-        scroll_docker.setMaximumHeight(260)
         scroll_docker.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         scroll_docker.setStyleSheet("""
             QScrollArea {
@@ -3601,10 +3612,11 @@ class LumenProjectWorkspaceView(QWidget):
         self.terminal_display.log("PORTS", "Monitor de Puertos TCP y Procesos en Escucha abierto.", tag_color="#fbbf24", prefix="🔌")
 
     def refresh_sector2_docker_view(self):
-        """Inspecciona el demonio de Docker y lista contenedores."""
+        """Inspecciona Docker, descubre compose/Dockerfile recursivamente y lista contenedores."""
         path = self.project_data.get("path", "")
         status = inspect_docker_status(path)
 
+        # --- Telemetría del Demonio ---
         if not status["installed"]:
             self.lbl_s2_docker_status.setText("Docker: ❌ No instalado en el sistema")
             self.lbl_s2_docker_details.setText("Instala 'docker' o 'docker.io' para habilitar la orquestación de contenedores.")
@@ -3613,14 +3625,34 @@ class LumenProjectWorkspaceView(QWidget):
             self.lbl_s2_docker_details.setText("Ejecuta 'sudo systemctl start docker' o añade tu usuario al grupo docker.")
         else:
             self.lbl_s2_docker_status.setText("Docker: 🟢 Demonio Activo y Operativo")
-            comp_str = ", ".join(status["compose_files"]) if status["compose_files"] else "Ninguno detectado"
-            self.lbl_s2_docker_details.setText(f"Stack Compose: <b>{comp_str}</b>  |  Dockerfile: {'Sí' if status['has_dockerfile'] else 'No'}")
+            deep = status.get("deep_scan", {})
+            n_compose = len(deep.get("compose_files", []))
+            n_docker = len(deep.get("dockerfiles", []))
+            comp_str = ", ".join(status["compose_files"]) if status["compose_files"] else "Ninguno"
+            self.lbl_s2_docker_details.setText(
+                f"Compose: <b>{comp_str}</b>  |  "
+                f"Dockerfiles: {n_docker}  |  Compose Files: {n_compose}"
+            )
 
-        # Limpiar lista previa
+        # --- Estado Compose Tool ---
+        _, tool_name = detect_compose_tool()
+        tool_labels = {
+            "docker-compose-v2": "✅ docker compose (plugin v2)",
+            "docker-compose-v1": "✅ docker-compose (standalone v1)",
+            "podman-compose": "✅ podman-compose",
+            "none": "⚠️ No disponible (instala docker-compose o habilita el plugin compose)"
+        }
+        if hasattr(self, "lbl_s2_compose_tool"):
+            self.lbl_s2_compose_tool.setText(f"Herramienta Compose: {tool_labels.get(tool_name, '?')}")
+
+        # --- Limpiar contenido previo ---
         while self.docker_containers_layout.count():
             item = self.docker_containers_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+
+        if not status.get("installed"):
+            return
 
         if not status["daemon_running"]:
             lbl_warn = QLabel("⚠️ El servicio Docker no está respondiendo. Inicia el demonio para visualizar contenedores.")
@@ -3628,121 +3660,275 @@ class LumenProjectWorkspaceView(QWidget):
             self.docker_containers_layout.addWidget(lbl_warn)
             return
 
+        deep = status.get("deep_scan", {})
+
+        # ===== SECCIÓN: COMPOSE STACKS DESCUBIERTOS =====
+        compose_files = deep.get("compose_files", [])
+        if compose_files:
+            lbl_section_compose = QLabel(f"🐙  COMPOSE STACKS DESCUBIERTOS ({len(compose_files)})")
+            lbl_section_compose.setStyleSheet("font-size: 12px; font-weight: 900; color: #a78bfa; padding: 6px 0 2px 4px;")
+            self.docker_containers_layout.addWidget(lbl_section_compose)
+
+            for cf in compose_files:
+                compose_card = QFrame()
+                compose_card.setStyleSheet("""
+                    QFrame {
+                        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                            stop:0 rgba(167, 139, 250, 0.08), stop:1 rgba(56, 189, 248, 0.05));
+                        border: 1px solid rgba(167, 139, 250, 0.25);
+                        border-left: 3px solid #a78bfa;
+                        border-radius: 8px;
+                    }
+                """)
+                cc_lay = QVBoxLayout(compose_card)
+                cc_lay.setContentsMargins(12, 10, 12, 10)
+                cc_lay.setSpacing(6)
+
+                # Header del compose file
+                header_row = QHBoxLayout()
+                lbl_cf_icon = QLabel("📄")
+                lbl_cf_icon.setStyleSheet("font-size: 16px;")
+                header_row.addWidget(lbl_cf_icon)
+
+                lbl_cf_path = QLabel(f"<b>{cf['relative']}</b>")
+                lbl_cf_path.setStyleSheet("font-size: 12px; font-weight: 800; color: #e9d5ff;")
+                header_row.addWidget(lbl_cf_path)
+
+                lbl_cf_dir = QLabel(f"<span style='color: #6b7280;'>en {cf['dir']}</span>")
+                lbl_cf_dir.setStyleSheet("font-size: 10px;")
+                header_row.addWidget(lbl_cf_dir)
+                header_row.addStretch()
+                cc_lay.addLayout(header_row)
+
+                # Servicios detectados
+                services = cf.get("services", [])
+                if services:
+                    parsed = parse_compose_file_lightweight(cf["path"])
+                    svc_detail_parts = []
+                    for svc_name in services:
+                        svc_data = parsed.get("services", {}).get(svc_name, {})
+                        img = svc_data.get("image") or svc_data.get("build") or "?"
+                        ports = svc_data.get("ports", [])
+                        port_str = ", ".join(ports[:3]) if ports else "sin puertos"
+                        svc_detail_parts.append(f"<b>{svc_name}</b> ({img}) → {port_str}")
+
+                    svc_text = "  •  ".join(svc_detail_parts) if len(svc_detail_parts) <= 4 else "  •  ".join(svc_detail_parts[:4]) + f"  (+{len(svc_detail_parts)-4} más)"
+                    lbl_svcs = QLabel(f"Servicios: {svc_text}")
+                    lbl_svcs.setStyleSheet("font-size: 10.5px; color: #c4b5fd; padding-left: 4px;")
+                    lbl_svcs.setWordWrap(True)
+                    cc_lay.addWidget(lbl_svcs)
+                else:
+                    lbl_no_svc = QLabel("Servicios: <i>No se pudieron parsear</i>")
+                    lbl_no_svc.setStyleSheet("font-size: 10.5px; color: #6b7280; font-style: italic;")
+                    cc_lay.addWidget(lbl_no_svc)
+
+                # Botones de ciclo de vida compose
+                compose_btns_row = QHBoxLayout()
+                compose_btns_row.setSpacing(5)
+
+                compose_tool_available = (tool_name != "none")
+
+                compose_actions = [
+                    ("🚀 Up",      "compose-up",      "#10b981", "#6ee7b7"),
+                    ("🛑 Down",    "compose-down",    "#ef4444", "#fca5a5"),
+                    ("⏸ Stop",     "compose-stop",    "#f59e0b", "#fcd34d"),
+                    ("🔄 Restart", "compose-restart", "#3b82f6", "#93c5fd"),
+                    ("⏯ Pause",    "compose-pause",   "#8b5cf6", "#c4b5fd"),
+                    ("▶ Unpause",  "compose-unpause", "#14b8a6", "#5eead4"),
+                    ("🔨 Build",   "compose-build",   "#f97316", "#fdba74"),
+                    ("📋 Logs",    "compose-logs",    "#6b7280", "#d1d5db"),
+                ]
+                for btn_text, task_type, accent, text_color in compose_actions:
+                    btn = QPushButton(btn_text)
+                    btn.setCursor(Qt.PointingHandCursor)
+                    btn.setEnabled(compose_tool_available)
+                    btn.setStyleSheet(f"""
+                        QPushButton {{
+                            background-color: rgba({self._hex_to_rgba(accent, 0.12)});
+                            color: {text_color};
+                            border: 1px solid rgba({self._hex_to_rgba(accent, 0.35)});
+                            border-radius: 5px;
+                            padding: 4px 7px;
+                            font-weight: 700;
+                            font-size: 10px;
+                        }}
+                        QPushButton:hover {{
+                            background-color: rgba({self._hex_to_rgba(accent, 0.30)});
+                            color: #ffffff;
+                        }}
+                        QPushButton:disabled {{
+                            background-color: rgba(255, 255, 255, 0.03);
+                            color: #4b5563;
+                            border-color: rgba(255, 255, 255, 0.06);
+                        }}
+                    """)
+                    compose_path = cf["path"]
+                    if task_type == "compose-logs":
+                        btn.clicked.connect(lambda _, cp=compose_path: self.show_compose_logs(cp))
+                    else:
+                        btn.clicked.connect(lambda _, tt=task_type, cp=compose_path: self.execute_compose_lifecycle(tt, cp))
+                    compose_btns_row.addWidget(btn)
+
+                compose_btns_row.addStretch()
+                cc_lay.addLayout(compose_btns_row)
+
+                if not compose_tool_available:
+                    lbl_no_tool = QLabel("⚠️ Instala docker-compose o habilita el plugin 'compose' para usar estos controles.")
+                    lbl_no_tool.setStyleSheet("font-size: 10px; color: #f87171; padding-left: 4px;")
+                    cc_lay.addWidget(lbl_no_tool)
+
+                self.docker_containers_layout.addWidget(compose_card)
+
+        # ===== SECCIÓN: DOCKERFILES DESCUBIERTOS =====
+        dockerfiles = deep.get("dockerfiles", [])
+        if dockerfiles:
+            lbl_section_df = QLabel(f"📦  DOCKERFILES DESCUBIERTOS ({len(dockerfiles)})")
+            lbl_section_df.setStyleSheet("font-size: 12px; font-weight: 900; color: #60a5fa; padding: 10px 0 2px 4px;")
+            self.docker_containers_layout.addWidget(lbl_section_df)
+
+            for df in dockerfiles:
+                df_card = QFrame()
+                df_card.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(96, 165, 250, 0.06);
+                        border: 1px solid rgba(96, 165, 250, 0.20);
+                        border-radius: 6px;
+                    }
+                """)
+                df_lay = QHBoxLayout(df_card)
+                df_lay.setContentsMargins(10, 6, 10, 6)
+                df_lay.setSpacing(8)
+
+                lbl_df_ic = QLabel("🐳")
+                lbl_df_ic.setStyleSheet("font-size: 14px;")
+                df_lay.addWidget(lbl_df_ic)
+
+                lbl_df_path = QLabel(f"<b>{df['relative']}</b>  <span style='color: #6b7280;'>({df['dir']})</span>")
+                lbl_df_path.setStyleSheet("font-size: 11px; color: #93c5fd;")
+                df_lay.addWidget(lbl_df_path, 1)
+
+                self.docker_containers_layout.addWidget(df_card)
+
+        # ===== SECCIÓN: CONTENEDORES DEL SISTEMA =====
         containers = list_docker_containers()
+        lbl_section_ctr = QLabel(f"📦  CONTENEDORES DEL SISTEMA ({len(containers)})")
+        lbl_section_ctr.setStyleSheet("font-size: 12px; font-weight: 900; color: #38bdf8; padding: 10px 0 2px 4px;")
+        self.docker_containers_layout.addWidget(lbl_section_ctr)
+
         if not containers:
             lbl_empty = QLabel("ℹ️ No hay contenedores registrados en el sistema (activos o detenidos).")
-            lbl_empty.setStyleSheet("color: #9ca3af; font-style: italic; padding: 12px;")
+            lbl_empty.setStyleSheet("color: #9ca3af; font-style: italic; padding: 8px 12px;")
             self.docker_containers_layout.addWidget(lbl_empty)
-            return
+        else:
+            for c in containers:
+                card = QFrame()
+                card.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(255, 255, 255, 0.03);
+                        border: 1px solid rgba(255, 255, 255, 0.08);
+                        border-radius: 8px;
+                    }
+                    QFrame:hover {
+                        background-color: rgba(255, 255, 255, 0.06);
+                        border-color: rgba(56, 189, 248, 0.35);
+                    }
+                """)
+                c_lay = QHBoxLayout(card)
+                c_lay.setContentsMargins(12, 8, 12, 8)
+                c_lay.setSpacing(10)
 
-        for c in containers:
-            card = QFrame()
-            card.setStyleSheet("""
-                QFrame {
-                    background-color: rgba(255, 255, 255, 0.03);
-                    border: 1px solid rgba(255, 255, 255, 0.08);
-                    border-radius: 8px;
-                }
-                QFrame:hover {
-                    background-color: rgba(255, 255, 255, 0.06);
-                    border-color: rgba(56, 189, 248, 0.35);
-                }
-            """)
-            c_lay = QHBoxLayout(card)
-            c_lay.setContentsMargins(12, 8, 12, 8)
-            c_lay.setSpacing(10)
+                is_running = (c["state"] == "running")
+                icon = "🟢" if is_running else "🔴"
+                lbl_ic = QLabel(icon)
+                lbl_ic.setStyleSheet("font-size: 14px;")
+                c_lay.addWidget(lbl_ic)
 
-            is_running = (c["state"] == "running")
-            icon = "🟢" if is_running else "🔴"
-            lbl_ic = QLabel(icon)
-            lbl_ic.setStyleSheet("font-size: 14px;")
-            c_lay.addWidget(lbl_ic)
+                info_lay = QVBoxLayout()
+                info_lay.setSpacing(1)
+                lbl_cname = QLabel(f"{c['name']}  <span style='color: #9ca3af; font-size: 11px;'>({c['image']})</span>")
+                lbl_cname.setStyleSheet("font-size: 12px; font-weight: 800; color: #f3f4f6;")
+                info_lay.addWidget(lbl_cname)
 
-            info_lay = QVBoxLayout()
-            info_lay.setSpacing(1)
-            lbl_cname = QLabel(f"{c['name']}  <span style='color: #9ca3af; font-size: 11px;'>({c['image']})</span>")
-            lbl_cname.setStyleSheet("font-size: 12px; font-weight: 800; color: #f3f4f6;")
-            info_lay.addWidget(lbl_cname)
+                lbl_csub = QLabel(f"Estado: {c['status']}  •  Puertos: {c['ports']}")
+                lbl_csub.setStyleSheet("font-size: 10.5px; color: #38bdf8;" if is_running else "font-size: 10.5px; color: #9ca3af;")
+                info_lay.addWidget(lbl_csub)
+                c_lay.addLayout(info_lay, 1)
 
-            lbl_csub = QLabel(f"Estado: {c['status']}  •  Puertos: {c['ports']}")
-            lbl_csub.setStyleSheet("font-size: 10.5px; color: #38bdf8;" if is_running else "font-size: 10.5px; color: #9ca3af;")
-            info_lay.addWidget(lbl_csub)
-            c_lay.addLayout(info_lay, 1)
+                # Botones de Acción de Contenedor
+                if is_running:
+                    btn_stop = QPushButton("🛑 Detener")
+                    btn_stop.setCursor(Qt.PointingHandCursor)
+                    btn_stop.setStyleSheet("""
+                        QPushButton {
+                            background-color: rgba(239, 68, 68, 0.15);
+                            color: #fca5a5;
+                            border: 1px solid rgba(239, 68, 68, 0.35);
+                            border-radius: 5px;
+                            padding: 4px 8px;
+                            font-weight: 700;
+                            font-size: 10.5px;
+                        }
+                        QPushButton:hover { background-color: #ef4444; color: #ffffff; }
+                    """)
+                    btn_stop.clicked.connect(lambda _, cid=c["name"]: self.execute_docker_container_action("stop", cid))
+                    c_lay.addWidget(btn_stop)
 
-            # Botones de Acción de Contenedor
-            if is_running:
-                btn_stop = QPushButton("🛑 Detener")
-                btn_stop.setCursor(Qt.PointingHandCursor)
-                btn_stop.setStyleSheet("""
+                    btn_restart = QPushButton("🔄 Reiniciar")
+                    btn_restart.setCursor(Qt.PointingHandCursor)
+                    btn_restart.setStyleSheet("""
+                        QPushButton {
+                            background-color: rgba(56, 189, 248, 0.15);
+                            color: #7dd3fc;
+                            border: 1px solid rgba(56, 189, 248, 0.35);
+                            border-radius: 5px;
+                            padding: 4px 8px;
+                            font-weight: 700;
+                            font-size: 10.5px;
+                        }
+                        QPushButton:hover { background-color: #0284c7; color: #ffffff; }
+                    """)
+                    btn_restart.clicked.connect(lambda _, cid=c["name"]: self.execute_docker_container_action("restart", cid))
+                    c_lay.addWidget(btn_restart)
+                else:
+                    btn_start = QPushButton("⚡ Iniciar")
+                    btn_start.setCursor(Qt.PointingHandCursor)
+                    btn_start.setStyleSheet("""
+                        QPushButton {
+                            background-color: rgba(16, 185, 129, 0.15);
+                            color: #6ee7b7;
+                            border: 1px solid rgba(16, 185, 129, 0.35);
+                            border-radius: 5px;
+                            padding: 4px 8px;
+                            font-weight: 700;
+                            font-size: 10.5px;
+                        }
+                        QPushButton:hover { background-color: #10b981; color: #ffffff; }
+                    """)
+                    btn_start.clicked.connect(lambda _, cid=c["name"]: self.execute_docker_container_action("start", cid))
+                    c_lay.addWidget(btn_start)
+
+                # Ver Logs
+                btn_logs = QPushButton("📋 Logs")
+                btn_logs.setCursor(Qt.PointingHandCursor)
+                btn_logs.setStyleSheet("""
                     QPushButton {
-                        background-color: rgba(239, 68, 68, 0.15);
-                        color: #fca5a5;
-                        border: 1px solid rgba(239, 68, 68, 0.35);
+                        background-color: rgba(255, 255, 255, 0.05);
+                        color: #d1d5db;
+                        border: 1px solid rgba(255, 255, 255, 0.15);
                         border-radius: 5px;
                         padding: 4px 8px;
-                        font-weight: 700;
+                        font-weight: 600;
                         font-size: 10.5px;
                     }
-                    QPushButton:hover { background-color: #ef4444; color: #ffffff; }
+                    QPushButton:hover { background-color: rgba(255, 255, 255, 0.12); color: #ffffff; }
                 """)
-                btn_stop.clicked.connect(lambda _, cid=c["name"]: self.execute_docker_container_action("stop", cid))
-                c_lay.addWidget(btn_stop)
+                btn_logs.clicked.connect(lambda _, cid=c["name"]: self.show_docker_logs_dialog(cid))
+                c_lay.addWidget(btn_logs)
 
-                btn_restart = QPushButton("🔄 Reiniciar")
-                btn_restart.setCursor(Qt.PointingHandCursor)
-                btn_restart.setStyleSheet("""
-                    QPushButton {
-                        background-color: rgba(56, 189, 248, 0.15);
-                        color: #7dd3fc;
-                        border: 1px solid rgba(56, 189, 248, 0.35);
-                        border-radius: 5px;
-                        padding: 4px 8px;
-                        font-weight: 700;
-                        font-size: 10.5px;
-                    }
-                    QPushButton:hover { background-color: #0284c7; color: #ffffff; }
-                """)
-                btn_restart.clicked.connect(lambda _, cid=c["name"]: self.execute_docker_container_action("restart", cid))
-                c_lay.addWidget(btn_restart)
-            else:
-                btn_start = QPushButton("⚡ Iniciar")
-                btn_start.setCursor(Qt.PointingHandCursor)
-                btn_start.setStyleSheet("""
-                    QPushButton {
-                        background-color: rgba(16, 185, 129, 0.15);
-                        color: #6ee7b7;
-                        border: 1px solid rgba(16, 185, 129, 0.35);
-                        border-radius: 5px;
-                        padding: 4px 8px;
-                        font-weight: 700;
-                        font-size: 10.5px;
-                    }
-                    QPushButton:hover { background-color: #10b981; color: #ffffff; }
-                """)
-                btn_start.clicked.connect(lambda _, cid=c["name"]: self.execute_docker_container_action("start", cid))
-                c_lay.addWidget(btn_start)
-
-            # Ver Logs
-            btn_logs = QPushButton("📋 Logs")
-            btn_logs.setCursor(Qt.PointingHandCursor)
-            btn_logs.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(255, 255, 255, 0.05);
-                    color: #d1d5db;
-                    border: 1px solid rgba(255, 255, 255, 0.15);
-                    border-radius: 5px;
-                    padding: 4px 8px;
-                    font-weight: 600;
-                    font-size: 10.5px;
-                }
-                QPushButton:hover { background-color: rgba(255, 255, 255, 0.12); color: #ffffff; }
-            """)
-            btn_logs.clicked.connect(lambda _, cid=c["name"]: self.show_docker_logs_dialog(cid))
-            c_lay.addWidget(btn_logs)
-
-            self.docker_containers_layout.addWidget(card)
+                self.docker_containers_layout.addWidget(card)
 
         self.docker_containers_layout.addStretch()
+
 
     def refresh_sector2_ports_view(self):
         """Escanea los puertos TCP en escucha y actualiza la lista interactiva."""
@@ -3870,6 +4056,38 @@ class LumenProjectWorkspaceView(QWidget):
             self.terminal_display.log_error(task_name, message)
         self.refresh_sector2_docker_view()
 
+    def _hex_to_rgba(self, hex_code: str, alpha: float) -> str:
+        """Convierte código hexadecimal '#RRGGBB' a 'r, g, b, alpha'."""
+        h = hex_code.lstrip("#")
+        if len(h) == 6:
+            r = int(h[0:2], 16)
+            g = int(h[2:4], 16)
+            b = int(h[4:6], 16)
+            return f"{r}, {g}, {b}, {alpha}"
+        return f"255, 255, 255, {alpha}"
+
+    def execute_compose_lifecycle(self, task_type: str, compose_path: str, service: str = ""):
+        """Ejecuta una acción de ciclo de vida de Docker Compose en segundo plano."""
+        action = task_type.replace("compose-", "")
+        rel = os.path.basename(compose_path)
+        target = f"{rel} [{service}]" if service else rel
+        self.terminal_display.log("COMPOSE", f"Ejecutando <b>{action.upper()}</b> en stack <b>{target}</b>...", tag_color="#a78bfa", prefix="🚀")
+        self.docker_worker = DockerWorkerThread(task_type, compose_path=compose_path, service=service)
+        self.docker_worker.finished_task.connect(self.on_docker_worker_finished)
+        self.docker_worker.start()
+
+    def show_compose_logs(self, compose_path: str, service: str = ""):
+        """Muestra los logs del stack de Compose en la terminal inferior."""
+        rel = os.path.basename(compose_path)
+        target = f"{rel} ({service})" if service else rel
+        self.terminal_display.log("COMPOSE", f"Obteniendo logs recientes de <b>{target}</b>...", tag_color="#a78bfa", prefix="📋")
+        ok, logs = execute_compose_action(compose_path, "logs", service or None)
+        if ok:
+            for line in logs.splitlines():
+                self.terminal_display.log("LOG", line, tag_color="#9ca3af", prefix="•")
+        else:
+            self.terminal_display.log_error("COMPOSE", f"Error al obtener logs de Compose: {logs}")
+
     def create_simple_sector_view(self, title: str, accent_color: str, actions: list) -> QFrame:
         """Crea una ventana dedicada y limpia para un sector específico con diseño consistente."""
         card = QFrame()
@@ -3991,11 +4209,14 @@ class LumenProjectWorkspaceView(QWidget):
             else:
                 self.handle_action_click(action_title)
         elif sector_idx == 2:
-            if "editor" in action_title.lower():
+            act_lower = action_title.lower()
+            if "editor" in act_lower:
                 self.open_sector2_editor_view()
-            elif "python" in action_title.lower() or "venv" in action_title.lower():
+            elif "python" in act_lower or "venv" in act_lower:
                 self.open_sector2_venv_view()
-            elif "docker" in action_title.lower() or "puerto" in action_title.lower():
+            elif "puerto" in act_lower and "docker" not in act_lower:
+                self.open_sector2_ports_view()
+            elif "docker" in act_lower or "puerto" in act_lower:
                 self.open_sector2_docker_view()
             else:
                 self.open_sector_view(2, "Sector 2: Entornos & Run")

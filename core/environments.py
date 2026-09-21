@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import json
+import re
 from typing import Dict, List, Tuple, Any
 
 KNOWN_EDITORS = [
@@ -351,12 +352,13 @@ def inspect_docker_status(project_path: str = None) -> Dict[str, Any]:
     has_compose = False
     compose_files = []
     has_dockerfile = False
+    deep_scan_results = {}
     if project_path and os.path.exists(project_path):
-        for cf in ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]:
-            if os.path.isfile(os.path.join(project_path, cf)):
-                has_compose = True
-                compose_files.append(cf)
-        if os.path.isfile(os.path.join(project_path, "Dockerfile")):
+        deep_scan_results = deep_scan_docker_files(project_path)
+        if deep_scan_results.get("compose_files"):
+            has_compose = True
+            compose_files = [cf["relative"] for cf in deep_scan_results["compose_files"]]
+        if deep_scan_results.get("dockerfiles"):
             has_dockerfile = True
 
     return {
@@ -365,6 +367,7 @@ def inspect_docker_status(project_path: str = None) -> Dict[str, Any]:
         "has_compose": has_compose,
         "compose_files": compose_files,
         "has_dockerfile": has_dockerfile,
+        "deep_scan": deep_scan_results,
         "message": "Demonio activo y disponible" if daemon_running else "El servicio Docker (daemon) está inactivo o requiere permisos."
     }
 
@@ -556,4 +559,188 @@ def kill_process_by_pid(pid: str) -> Tuple[bool, str]:
         return False, f"Permiso denegado al intentar matar PID {pid}. Requiere privilegios elevados."
     except Exception as e:
         return False, f"Error al aniquilar PID {pid}: {str(e)}"
+
+def deep_scan_docker_files(project_path: str) -> Dict[str, Any]:
+    """Escanea recursivamente el proyecto para encontrar archivos Docker y Compose."""
+    results = {
+        "dockerfiles": [],
+        "compose_files": [],
+        "scan_root": project_path
+    }
+    
+    if not project_path or not os.path.isdir(project_path):
+        return results
+
+    prune_dirs = {".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", ".mypy_cache", "dist", "build", ".eggs"}
+    
+    for root, dirs, files in os.walk(project_path):
+        dirs[:] = [d for d in dirs if d not in prune_dirs]
+        for file in files:
+            is_dockerfile = file == "Dockerfile" or file.startswith("Dockerfile.")
+            is_compose = re.match(r'^(docker-)?compose.*\.ya?ml$', file) is not None
+            
+            if is_dockerfile or is_compose:
+                full_path = os.path.join(root, file)
+                rel_path = os.path.relpath(full_path, project_path)
+                
+                if is_dockerfile:
+                    results["dockerfiles"].append({
+                        "path": full_path,
+                        "relative": rel_path,
+                        "dir": root
+                    })
+                elif is_compose:
+                    parsed = parse_compose_file_lightweight(full_path)
+                    results["compose_files"].append({
+                        "path": full_path,
+                        "relative": rel_path,
+                        "dir": root,
+                        "services": list(parsed.get("services", {}).keys())
+                    })
+                    
+    return results
+
+def parse_compose_file_lightweight(compose_path: str) -> Dict[str, Any]:
+    """Parsea un archivo docker-compose YAML de forma ligera sin PyYAML usando expresiones regulares."""
+    result = {"services": {}, "parse_error": None}
+    
+    if not os.path.exists(compose_path):
+        result["parse_error"] = "Archivo no existe"
+        return result
+        
+    try:
+        with open(compose_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            
+        services_match = re.search(r'^services:\s*\n(.*)', content, re.MULTILINE | re.DOTALL)
+        if not services_match:
+            return result
+            
+        services_block = services_match.group(1)
+        
+        lines = services_block.split('\n')
+        current_service = None
+        current_prop = None
+        base_indent = None
+        
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
+                
+            if re.match(r'^[a-zA-Z_-]+:', line):
+                break
+                
+            indent = len(line) - len(line.lstrip())
+            
+            if base_indent is None:
+                base_indent = indent
+                
+            if indent == base_indent:
+                match = re.match(r'^([a-zA-Z0-9_-]+):', stripped)
+                if match:
+                    current_service = match.group(1)
+                    result["services"][current_service] = {
+                        "image": None,
+                        "build": None,
+                        "ports": [],
+                        "volumes": [],
+                        "depends_on": [],
+                        "environment": []
+                    }
+                    current_prop = None
+            elif current_service and indent > base_indent:
+                kv_match = re.match(r'^([a-zA-Z0-9_-]+):\s*(.*)', stripped)
+                if kv_match:
+                    key = kv_match.group(1)
+                    val = kv_match.group(2).strip()
+                    if val.startswith('"') and val.endswith('"'): val = val[1:-1]
+                    elif val.startswith("'") and val.endswith("'"): val = val[1:-1]
+                    
+                    if key in ["image", "build"]:
+                        result["services"][current_service][key] = val
+                        current_prop = None
+                    elif key in ["ports", "volumes", "depends_on", "environment"]:
+                        current_prop = key
+                        if val.startswith('[') and val.endswith(']'):
+                            items = [i.strip().strip('"\'') for i in val[1:-1].split(',')]
+                            result["services"][current_service][key].extend(items)
+                elif current_prop:
+                    if stripped.startswith('- '):
+                        val = stripped[2:].strip()
+                        if val.startswith('"') and val.endswith('"'): val = val[1:-1]
+                        elif val.startswith("'") and val.endswith("'"): val = val[1:-1]
+                        result["services"][current_service][current_prop].append(val)
+                        
+    except Exception as e:
+        result["parse_error"] = str(e)
+        
+    return result
+
+def detect_compose_tool() -> Tuple[List[str], str]:
+    """Detecta qué herramienta de compose está disponible."""
+    docker_bin = shutil.which("docker")
+    if docker_bin:
+        try:
+            res = subprocess.run([docker_bin, "compose", "version"], capture_output=True, text=True, timeout=3)
+            if res.returncode == 0:
+                return [docker_bin, "compose"], "docker-compose-v2"
+        except Exception:
+            pass
+            
+    dc_bin = shutil.which("docker-compose")
+    if dc_bin:
+        try:
+            res = subprocess.run([dc_bin, "--version"], capture_output=True, text=True, timeout=3)
+            if res.returncode == 0:
+                return [dc_bin], "docker-compose-v1"
+        except Exception:
+            pass
+            
+    pc_bin = shutil.which("podman-compose")
+    if pc_bin:
+        try:
+            res = subprocess.run([pc_bin, "--version"], capture_output=True, text=True, timeout=3)
+            if res.returncode == 0:
+                return [pc_bin], "podman-compose"
+        except Exception:
+            pass
+            
+    return [], "none"
+
+def execute_compose_action(compose_path: str, action: str, service: str = None) -> Tuple[bool, str]:
+    """Ejecuta acciones de ciclo de vida de compose usando la herramienta detectada."""
+    cmd_prefix, tool_name = detect_compose_tool()
+    
+    if tool_name == "none":
+        return False, "No se encontró herramienta de compose (docker compose, docker-compose o podman-compose)."
+        
+    if not os.path.exists(compose_path):
+        return False, f"El archivo compose no existe: {compose_path}"
+        
+    parent_dir = os.path.dirname(os.path.abspath(compose_path))
+    
+    base_cmd = cmd_prefix + ["--project-directory", parent_dir, "-f", compose_path]
+    
+    if action == "up":
+        base_cmd.extend(["up", "-d"])
+    elif action == "build":
+        base_cmd.extend(["up", "-d", "--build", "--force-recreate"])
+    elif action == "logs":
+        base_cmd.extend(["logs", "--tail", "100"])
+    elif action in ["down", "stop", "restart", "pause", "unpause"]:
+        base_cmd.append(action)
+    else:
+        return False, f"Acción '{action}' no soportada."
+        
+    if service:
+        base_cmd.append(service)
+        
+    try:
+        proc = subprocess.run(base_cmd, cwd=parent_dir, capture_output=True, text=True, timeout=300)
+        if proc.returncode == 0:
+            return True, proc.stdout.strip() or f"Acción '{action}' ejecutada con éxito."
+        return False, proc.stderr.strip() or proc.stdout.strip() or f"Error al ejecutar '{action}'"
+    except Exception as e:
+        return False, f"Error al ejecutar compose: {str(e)}"
 
