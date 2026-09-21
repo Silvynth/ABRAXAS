@@ -1344,17 +1344,18 @@ class LumenProjectWorkspaceView(QWidget):
 
         b_layout.addWidget(self.terminal_stack)
 
-        self.terminal_frame.setMinimumHeight(130)
-        self.terminal_frame.setMaximumHeight(220)
-        self.terminal_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.terminal_frame.setMinimumHeight(240)
+        self.terminal_frame.setMaximumHeight(16777215)
+        self.terminal_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         # Contenedor para terminal en posición inferior estándar (para toda la app)
         self.bottom_terminal_container = QWidget()
+        self.bottom_terminal_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.bottom_terminal_layout = QVBoxLayout(self.bottom_terminal_container)
         self.bottom_terminal_layout.setContentsMargins(0, 4, 0, 0)
         self.bottom_terminal_layout.setSpacing(0)
         self.bottom_terminal_layout.addWidget(self.terminal_frame)
-        content_layout.addWidget(self.bottom_terminal_container)
+        content_layout.addWidget(self.bottom_terminal_container, 1)
 
         scroll_area.setWidget(scroll_content)
         root_layout.addWidget(scroll_area, 1)
@@ -7072,40 +7073,40 @@ class LumenProjectWorkspaceView(QWidget):
             self.lbl_t_status.setText("⚡ VISOR DE SALIDA [READ-ONLY]")
 
     def toggle_terminal_collapsed(self):
-        """Alterna la visibilidad del panel lateral de terminal para dar máximo espacio al área de trabajo."""
-        is_visible = self.terminal_frame.isVisible()
-        self.terminal_frame.setVisible(not is_visible)
-        if hasattr(self, "btn_collapse_terminal"):
-            self.btn_collapse_terminal.setText("◀" if is_visible else "▶")
-            self.btn_collapse_terminal.setToolTip("Expandir panel lateral de terminal" if is_visible else "Ocultar panel lateral de terminal")
-        if hasattr(self, "btn_top_toggle_term"):
-            self.btn_top_toggle_term.setText("📟 Abrir Terminal" if is_visible else "📟 Terminal Lateral")
-            self.btn_top_toggle_term.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(99, 102, 241, 0.25) if not is_visible else rgba(99, 102, 241, 0.15);
-                    color: #ffffff if not is_visible else #c7d2fe;
-                    border: 1px solid rgba(99, 102, 241, 0.50);
-                    border-radius: 8px;
-                    padding: 4px 12px;
-                    font-size: 11px;
-                    font-weight: 700;
-                }
-            """ if False else """
-                QPushButton {
-                    background-color: rgba(99, 102, 241, 0.15);
-                    color: #c7d2fe;
-                    border: 1px solid rgba(99, 102, 241, 0.40);
-                    border-radius: 8px;
-                    padding: 4px 12px;
-                    font-size: 11px;
-                    font-weight: 700;
-                }
-                QPushButton:hover {
-                    background-color: rgba(99, 102, 241, 0.30);
-                    color: #ffffff;
-                    border-color: #818cf8;
-                }
-            """)
+        """Alterna la visibilidad o tamaño del panel de terminal según el modo actual."""
+        in_docker = hasattr(self, "docker_side_terminal_container") and self.docker_side_terminal_container.isVisible()
+        if in_docker:
+            # Modo columna vertical en Docker
+            is_visible = self.terminal_frame.isVisible()
+            self.terminal_frame.setVisible(not is_visible)
+            if hasattr(self, "btn_collapse_terminal"):
+                self.btn_collapse_terminal.setText("◀" if is_visible else "▶")
+                self.btn_collapse_terminal.setToolTip("Expandir panel lateral" if is_visible else "Ocultar panel lateral")
+            if hasattr(self, "btn_top_toggle_term"):
+                self.btn_top_toggle_term.setText("📟 Abrir Terminal" if is_visible else "📟 Terminal Lateral")
+        else:
+            # Modo inferior clásico en el resto de la aplicación
+            is_stack_vis = self.terminal_stack.isVisible()
+            if is_stack_vis:
+                self.terminal_stack.setVisible(False)
+                self.terminal_frame.setMinimumHeight(38)
+                self.terminal_frame.setMaximumHeight(42)
+                self.terminal_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                if hasattr(self, "btn_collapse_terminal"):
+                    self.btn_collapse_terminal.setText("▲")
+                    self.btn_collapse_terminal.setToolTip("Expandir panel de terminal")
+                if hasattr(self, "btn_top_toggle_term"):
+                    self.btn_top_toggle_term.setText("📟 Expandir Terminal")
+            else:
+                self.terminal_stack.setVisible(True)
+                self.terminal_frame.setMinimumHeight(240)
+                self.terminal_frame.setMaximumHeight(16777215)
+                self.terminal_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                if hasattr(self, "btn_collapse_terminal"):
+                    self.btn_collapse_terminal.setText("▼")
+                    self.btn_collapse_terminal.setToolTip("Minimizar panel de terminal")
+                if hasattr(self, "btn_top_toggle_term"):
+                    self.btn_top_toggle_term.setText("📟 Terminal")
 
     def dock_terminal_in_docker(self):
         """Acopla la terminal en vertical a la derecha exclusivamente en el módulo de Docker."""
@@ -7124,17 +7125,19 @@ class LumenProjectWorkspaceView(QWidget):
         self.docker_side_terminal_layout.addWidget(self.terminal_frame)
 
     def dock_terminal_at_bottom(self):
-        """Restaura la terminal en su posición estándar inferior horizontal para el resto de la aplicación."""
+        """Restaura la terminal en su posición estándar inferior horizontal aprovechando todo el espacio libre."""
         if not hasattr(self, "bottom_terminal_layout") or not hasattr(self, "bottom_terminal_container"):
             return
         if hasattr(self, "docker_side_terminal_container"):
             self.docker_side_terminal_container.setVisible(False)
         self.bottom_terminal_container.setVisible(True)
+        self.bottom_terminal_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.terminal_stack.setVisible(True)
         self.terminal_frame.setMinimumWidth(0)
         self.terminal_frame.setMaximumWidth(16777215)
-        self.terminal_frame.setMinimumHeight(130)
-        self.terminal_frame.setMaximumHeight(220)
-        self.terminal_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.terminal_frame.setMinimumHeight(240)
+        self.terminal_frame.setMaximumHeight(16777215)
+        self.terminal_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         if hasattr(self, "btn_collapse_terminal"):
             self.btn_collapse_terminal.setText("▼")
             self.btn_collapse_terminal.setToolTip("Minimizar o expandir terminal")
