@@ -11,12 +11,13 @@ from PySide6.QtWidgets import (
     QPushButton, QFrame, QScrollArea, QGridLayout,
     QTextEdit, QApplication, QStackedWidget, QSizePolicy,
     QProgressBar, QLineEdit, QComboBox, QStyledItemDelegate,
-    QCheckBox, QMenu
+    QCheckBox, QMenu, QDialog, QRadioButton, QButtonGroup, QMessageBox
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread, QPoint
 
 from core import get_version
 from core.lumen_sync import get_full_project_sync
+from core.github import get_repo_visibility, change_repo_visibility, publish_repo_to_github
 from core.ai import get_configured_model, audit_git_diff
 from core.git_workflow import (
     get_project_semver, bump_semver, get_next_commit_seq,
@@ -30,7 +31,7 @@ from core.git_workflow import (
     execute_git_resolve_conflicts, execute_git_complete_merge,
     get_git_sync_deep_status, execute_git_fetch, execute_git_pull,
     execute_git_stage_path, execute_git_unstage_path, execute_git_discard_path,
-    execute_git_stash_pop, execute_git_stash_save
+    execute_git_stash_pop, execute_git_stash_save, execute_git_init
 )
 from gui.views.lumen.git_graph_canvas import LumenHorizontalGitGraphView
 
@@ -247,6 +248,212 @@ class IAMergeThread(QThread):
             self.finished_merge.emit(False, str(e), {})
 
 
+class LumenRepoVisibilityDialog(QDialog):
+    """Diálogo modal ciber-ilustre para consultar y alternar la visibilidad (Público/Privado) o publicar en GitHub."""
+
+    def __init__(self, project_path: str, project_name: str, parent=None):
+        super().__init__(parent)
+        self.project_path = project_path
+        self.project_name = project_name
+        self.setWindowTitle("Gestión de Visibilidad GitHub • Abraxas")
+        self.setFixedSize(500, 420)
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #0f1117;
+                color: #e5e7eb;
+                border: 1px solid rgba(99, 102, 241, 0.45);
+                border-radius: 12px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        # Header
+        h_layout = QHBoxLayout()
+        lbl_icon = QLabel("🌐")
+        lbl_icon.setStyleSheet("font-size: 20px;")
+        h_layout.addWidget(lbl_icon)
+
+        lbl_head = QLabel("Gestión de Visibilidad en GitHub")
+        lbl_head.setStyleSheet("font-size: 15px; font-weight: 800; color: #a5b4fc;")
+        h_layout.addWidget(lbl_head)
+        h_layout.addStretch()
+
+        btn_close = QPushButton("✕")
+        btn_close.setFixedSize(26, 26)
+        btn_close.setCursor(Qt.PointingHandCursor)
+        btn_close.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: #9ca3af;
+                border: none;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            QPushButton:hover { color: #f87171; }
+        """)
+        btn_close.clicked.connect(self.reject)
+        h_layout.addWidget(btn_close)
+        layout.addLayout(h_layout)
+
+        # Separador
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px;")
+        layout.addWidget(sep)
+
+        # Consultar estado actual
+        self.vis_data = get_repo_visibility(self.project_path)
+        self.is_github = self.vis_data.get("is_github", False)
+        self.has_remote = self.vis_data.get("has_remote", False)
+        self.current_is_private = self.vis_data.get("is_private", True)
+
+        # Información del Repositorio
+        info_frame = QFrame()
+        info_frame.setStyleSheet("""
+            background-color: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 8px;
+            padding: 10px;
+        """)
+        info_lay = QVBoxLayout(info_frame)
+        info_lay.setContentsMargins(10, 8, 10, 8)
+        info_lay.setSpacing(6)
+
+        repo_name = self.vis_data.get("repo_name") or self.project_name
+        lbl_rname = QLabel(f"<b>Repositorio:</b> <span style='color:#38bdf8;'>{repo_name}</span>")
+        lbl_rname.setStyleSheet("font-size: 13px; color: #d1d5db;")
+        info_lay.addWidget(lbl_rname)
+
+        if self.has_remote and self.is_github:
+            status_color = "#f87171" if self.current_is_private else "#34d399"
+            status_text = "🔒 PRIVADO" if self.current_is_private else "🌐 PÚBLICO"
+            lbl_cur = QLabel(f"<b>Estado Actual en GitHub:</b> <span style='color:{status_color}; font-weight:800;'>{status_text}</span>")
+            lbl_cur.setStyleSheet("font-size: 13px; color: #d1d5db;")
+            info_lay.addWidget(lbl_cur)
+        else:
+            lbl_cur = QLabel("<b>Estado:</b> <span style='color:#fbbf24; font-weight:700;'>Solo Local (Sin vincular a GitHub)</span>")
+            lbl_cur.setStyleSheet("font-size: 13px; color: #d1d5db;")
+            info_lay.addWidget(lbl_cur)
+
+        layout.addWidget(info_frame)
+
+        # Opciones de configuración
+        lbl_opt_title = QLabel("Selecciona la visibilidad deseada:")
+        lbl_opt_title.setStyleSheet("font-size: 12.5px; font-weight: 700; color: #e5e7eb;")
+        layout.addWidget(lbl_opt_title)
+
+        self.btn_group = QButtonGroup(self)
+
+        self.rb_private = QRadioButton("🔒 Repositorio Privado (Solo tú y colaboradores)")
+        self.rb_private.setStyleSheet("font-size: 12.5px; color: #f3f4f6; padding: 4px;")
+        self.rb_private.setCursor(Qt.PointingHandCursor)
+
+        self.rb_public = QRadioButton("🌐 Repositorio Público (Acceso abierto en GitHub)")
+        self.rb_public.setStyleSheet("font-size: 12.5px; color: #f3f4f6; padding: 4px;")
+        self.rb_public.setCursor(Qt.PointingHandCursor)
+
+        self.btn_group.addButton(self.rb_private)
+        self.btn_group.addButton(self.rb_public)
+
+        if self.current_is_private:
+            self.rb_private.setChecked(True)
+        else:
+            self.rb_public.setChecked(True)
+
+        layout.addWidget(self.rb_private)
+        layout.addWidget(self.rb_public)
+
+        # Advertencia dinámica
+        self.lbl_warn = QLabel("⚠️ Atención: Al cambiar a Público, todo el código fuente, ramas e historial serán visibles por cualquier persona en internet.")
+        self.lbl_warn.setWordWrap(True)
+        self.lbl_warn.setStyleSheet("""
+            background-color: rgba(245, 158, 11, 0.12);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.35);
+            border-radius: 6px;
+            padding: 8px;
+            font-size: 11.5px;
+        """)
+        self.lbl_warn.setVisible(not self.current_is_private)
+        layout.addWidget(self.lbl_warn)
+
+        self.rb_public.toggled.connect(lambda checked: self.lbl_warn.setVisible(checked))
+
+        layout.addStretch()
+
+        # Botones de acción
+        btn_box = QHBoxLayout()
+        btn_box.setSpacing(10)
+
+        self.btn_apply = QPushButton("Aplicar Cambio en GitHub" if (self.has_remote and self.is_github) else "Publicar en GitHub")
+        self.btn_apply.setCursor(Qt.PointingHandCursor)
+        self.btn_apply.setStyleSheet("""
+            QPushButton {
+                background-color: #6366f1;
+                color: #ffffff;
+                border: 1px solid #818cf8;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 12.5px;
+                font-weight: 700;
+            }
+            QPushButton:hover { background-color: #4f46e5; }
+            QPushButton:disabled { background-color: #374151; color: #9ca3af; border: none; }
+        """)
+        self.btn_apply.clicked.connect(self._on_apply_clicked)
+        btn_box.addWidget(self.btn_apply)
+
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.setCursor(Qt.PointingHandCursor)
+        btn_cancel.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 12.5px;
+                font-weight: 600;
+            }
+            QPushButton:hover { color: #ffffff; }
+        """)
+        btn_cancel.clicked.connect(self.reject)
+        btn_box.addWidget(btn_cancel)
+
+        layout.addLayout(btn_box)
+
+    def _on_apply_clicked(self):
+        target_vis = "private" if self.rb_private.isChecked() else "public"
+        self.btn_apply.setEnabled(False)
+        self.btn_apply.setText("Procesando...")
+        QApplication.processEvents()
+
+        if self.has_remote and self.is_github:
+            ok, msg = change_repo_visibility(self.project_path, target_vis)
+        else:
+            ok, msg = publish_repo_to_github(self.project_path, repo_name=self.project_name, visibility=target_vis)
+
+        if ok:
+            self.result_message = msg
+            self.accept()
+        else:
+            self.btn_apply.setEnabled(True)
+            self.btn_apply.setText("Reintentar")
+            self.lbl_warn.setText(f"❌ Error: {msg}")
+            self.lbl_warn.setStyleSheet("""
+                background-color: rgba(239, 68, 68, 0.15);
+                color: #f87171;
+                border: 1px solid rgba(239, 68, 68, 0.35);
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 11.5px;
+            """)
+            self.lbl_warn.setVisible(True)
+
+
 class LumenCyberActionButton(QFrame):
     """Botón interactivo de diseño ciber-ilustre con icono, título, subtítulo y efectos de hover."""
     
@@ -255,6 +462,8 @@ class LumenCyberActionButton(QFrame):
     def __init__(self, icon: str, title: str, subtitle: str, accent_color="#6366f1", parent=None):
         super().__init__(parent)
         self.action_title = title
+        self._original_sub = subtitle
+        self.is_locked = False
         self.accent_color = accent_color
         self.setCursor(Qt.PointingHandCursor)
         self.setProperty("class", "cyber_action_card")
@@ -311,14 +520,55 @@ class LumenCyberActionButton(QFrame):
             }}
         """)
 
+    def set_locked(self, locked: bool, lock_reason: str = ""):
+        self.is_locked = locked
+        self.setEnabled(not locked)
+        self.setCursor(Qt.ForbiddenCursor if locked else Qt.PointingHandCursor)
+        if locked:
+            self.lbl_arrow.setText("🔒")
+            self.lbl_arrow.setStyleSheet("font-size: 13px; color: #ef4444;")
+            self.lbl_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #6b7280;")
+            self.lbl_sub.setStyleSheet("font-size: 11px; color: #ef4444; font-weight: 600;")
+            if lock_reason:
+                self.lbl_sub.setText(lock_reason)
+            self.setStyleSheet("""
+                QFrame.cyber_action_card {
+                    background-color: rgba(255, 255, 255, 0.01);
+                    border: 1px dashed rgba(239, 68, 68, 0.25);
+                    border-radius: 8px;
+                }
+            """)
+        else:
+            self.lbl_arrow.setText("›")
+            self.lbl_arrow.setStyleSheet("font-size: 18px; font-weight: 800; color: #4b5563;")
+            self.lbl_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #f3f4f6;")
+            self.lbl_sub.setStyleSheet("font-size: 11px; color: #9ca3af; font-weight: normal;")
+            if hasattr(self, "_original_sub"):
+                self.lbl_sub.setText(self._original_sub)
+            self.setStyleSheet(f"""
+                QFrame.cyber_action_card {{
+                    background-color: rgba(255, 255, 255, 0.02);
+                    border: 1px solid rgba(255, 255, 255, 0.07);
+                    border-radius: 8px;
+                }}
+                QFrame.cyber_action_card:hover {{
+                    background-color: rgba(99, 102, 241, 0.14);
+                    border: 1px solid {self.accent_color};
+                }}
+            """)
+
     def set_title(self, title: str):
         self.action_title = title
         self.lbl_title.setText(title)
 
     def set_subtitle(self, subtitle: str):
-        self.lbl_sub.setText(subtitle)
+        self._original_sub = subtitle
+        if not self.is_locked:
+            self.lbl_sub.setText(subtitle)
 
     def mousePressEvent(self, event):
+        if getattr(self, "is_locked", False) or not self.isEnabled():
+            return
         if event.button() == Qt.LeftButton:
             self.clicked.emit(self.action_title)
         super().mousePressEvent(event)
@@ -584,6 +834,7 @@ class LumenProjectWorkspaceView(QWidget):
         hud_layout.setSpacing(8)
 
         # Línea 1: Proyecto | Rama | Remoto
+        # Línea 1: Proyecto | Rama | Remoto
         row1 = QHBoxLayout()
         row1.setSpacing(8)
 
@@ -591,6 +842,15 @@ class LumenProjectWorkspaceView(QWidget):
         lbl_p_tag.setStyleSheet("font-weight: 700; color: #9ca3af; font-size: 13.5px;")
         self.lbl_proj_title = QLabel("Cargando...")
         self.lbl_proj_title.setStyleSheet("font-weight: 800; color: #fbbf24; font-size: 14px;")
+
+        row1.addWidget(lbl_p_tag)
+        row1.addWidget(self.lbl_proj_title)
+
+        # Contenedor para Rama y Remoto de la fila 1 (solo se muestra con Git)
+        self.row1_git_widget = QWidget()
+        row1_git_lay = QHBoxLayout(self.row1_git_widget)
+        row1_git_lay.setContentsMargins(0, 0, 0, 0)
+        row1_git_lay.setSpacing(8)
 
         sep1 = QLabel(" | ")
         sep1.setStyleSheet("color: #4b5563; font-weight: 700;")
@@ -608,18 +868,39 @@ class LumenProjectWorkspaceView(QWidget):
         self.lbl_proj_remote = QLabel("origin/main")
         self.lbl_proj_remote.setStyleSheet("font-weight: 700; color: #c7d2fe; font-size: 13.5px;")
 
-        row1.addWidget(lbl_p_tag)
-        row1.addWidget(self.lbl_proj_title)
-        row1.addWidget(sep1)
-        row1.addWidget(lbl_b_tag)
-        row1.addWidget(self.lbl_proj_branch)
-        row1.addWidget(sep2)
-        row1.addWidget(lbl_r_tag)
-        row1.addWidget(self.lbl_proj_remote)
+        self.btn_repo_vis = QPushButton("⚙️ Visibilidad")
+        self.btn_repo_vis.setCursor(Qt.PointingHandCursor)
+        self.btn_repo_vis.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.15);
+                color: #a5b4fc;
+                border: 1px solid rgba(99, 102, 241, 0.45);
+                border-radius: 5px;
+                padding: 2px 8px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: rgba(99, 102, 241, 0.35);
+                color: #ffffff;
+                border-color: #818cf8;
+            }
+        """)
+        self.btn_repo_vis.clicked.connect(self.open_visibility_dialog)
+
+        row1_git_lay.addWidget(sep1)
+        row1_git_lay.addWidget(lbl_b_tag)
+        row1_git_lay.addWidget(self.lbl_proj_branch)
+        row1_git_lay.addWidget(sep2)
+        row1_git_lay.addWidget(lbl_r_tag)
+        row1_git_lay.addWidget(self.lbl_proj_remote)
+        row1_git_lay.addWidget(self.btn_repo_vis)
+
+        row1.addWidget(self.row1_git_widget)
         row1.addStretch()
         hud_layout.addLayout(row1)
 
-        # Línea 2: Entorno | Docker | Hora
+        # Línea 2: Entorno | Docker | Hora (SIEMPRE VISIBLE)
         row2 = QHBoxLayout()
         row2.setSpacing(8)
 
@@ -655,8 +936,10 @@ class LumenProjectWorkspaceView(QWidget):
         row2.addStretch()
         hud_layout.addLayout(row2)
 
-        # Línea 3: Git HUD: | Git Mod | Untracked | Deleted
-        row3 = QHBoxLayout()
+        # Línea 3: Git HUD: | Git Mod | Untracked | Deleted (solo se muestra con Git)
+        self.hud_row3_widget = QWidget()
+        row3 = QHBoxLayout(self.hud_row3_widget)
+        row3.setContentsMargins(0, 0, 0, 0)
         row3.setSpacing(8)
 
         lbl_hud_title = QLabel("📊 Git HUD:")
@@ -697,25 +980,32 @@ class LumenProjectWorkspaceView(QWidget):
         row3.addWidget(lbl_del_tag)
         row3.addWidget(self.lbl_git_deleted)
         row3.addStretch()
-        hud_layout.addLayout(row3)
+        hud_layout.addWidget(self.hud_row3_widget)
+
+        # Línea 4: Historial reciente de Git (solo se muestra con Git)
+        self.hud_history_widget = QWidget()
+        hist_layout = QVBoxLayout(self.hud_history_widget)
+        hist_layout.setContentsMargins(0, 0, 0, 0)
+        hist_layout.setSpacing(6)
 
         # Separador sutil
         sep_hud = QFrame()
         sep_hud.setFrameShape(QFrame.HLine)
         sep_hud.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px;")
-        hud_layout.addWidget(sep_hud)
+        hist_layout.addWidget(sep_hud)
 
-        # Línea 4: Historial reciente
         lbl_hist_head = QLabel("📜 Historial reciente (Últimos 4 commits):")
         lbl_hist_head.setStyleSheet("font-size: 13px; font-weight: 800; color: #e5e7eb;")
-        hud_layout.addWidget(lbl_hist_head)
+        hist_layout.addWidget(lbl_hist_head)
 
         # Contenedor dinámico de commits
         self.history_items_container = QWidget()
         self.history_items_layout = QVBoxLayout(self.history_items_container)
         self.history_items_layout.setContentsMargins(0, 0, 0, 0)
         self.history_items_layout.setSpacing(6)
-        hud_layout.addWidget(self.history_items_container)
+        hist_layout.addWidget(self.history_items_container)
+
+        hud_layout.addWidget(self.hud_history_widget)
 
         content_layout.addWidget(self.hud_card)
 
@@ -735,7 +1025,7 @@ class LumenProjectWorkspaceView(QWidget):
         overview_layout.setAlignment(Qt.AlignTop)
 
         # Pilar 1: Sector 1 (Protocolo Git y Ciclos)
-        card_s1 = self.create_overview_sector_card(
+        self.card_s1 = self.create_overview_sector_card(
             title="🔄  SECTOR 1 : PROTOCOLO GIT",
             accent_color="#38bdf8",
             sector_idx=1,
@@ -743,13 +1033,14 @@ class LumenProjectWorkspaceView(QWidget):
                 ("🔄", "Ciclos de Trabajo", "ADD / IA Commit / IA Audit / Push"),
                 ("🌿", "Control de Ramas", "Checkout / Crear / Borrar"),
                 ("🔀", "Fusión de Ramas", "git merge"),
-                ("⚡", "Estado y Sincronización", "Status / Fetch / Pull")
+                ("⚡", "Estado y Sincronización", "Status / Fetch / Pull"),
+                ("🌐", "Visibilidad GitHub", "Alternar entre Público y Privado")
             ]
         )
-        overview_layout.addWidget(card_s1, 1)
+        overview_layout.addWidget(self.card_s1, 1)
 
         # Pilar 2: Sector 2 (Entornos y Ejecución)
-        card_s2 = self.create_overview_sector_card(
+        self.card_s2 = self.create_overview_sector_card(
             title="🚀  SECTOR 2 : ENTORNOS & RUN",
             accent_color="#10b981",
             sector_idx=2,
@@ -759,10 +1050,10 @@ class LumenProjectWorkspaceView(QWidget):
                 ("🐳", "Docker y puertos", "Control de contenedores, compose y mapeos")
             ]
         )
-        overview_layout.addWidget(card_s2, 1)
+        overview_layout.addWidget(self.card_s2, 1)
 
         # Pilar 3: Sector 3 (Herramientas & IA)
-        card_s3 = self.create_overview_sector_card(
+        self.card_s3 = self.create_overview_sector_card(
             title="🧠  SECTOR 3 : HERRAMIENTAS & IA",
             accent_color="#c084fc",
             sector_idx=3,
@@ -772,7 +1063,7 @@ class LumenProjectWorkspaceView(QWidget):
                 ("🤖", "Utilidades IA", "Asistente Ollama local, refactor y ayuda dev")
             ]
         )
-        overview_layout.addWidget(card_s3, 1)
+        overview_layout.addWidget(self.card_s3, 1)
 
         self.sectors_stack.addWidget(self.page_overview)
 
@@ -978,7 +1269,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         btn_enter = QPushButton("Abrir Sector ›")
         btn_enter.setCursor(Qt.PointingHandCursor)
-        btn_enter.setStyleSheet(f"""
+        btn_enter_css_normal = f"""
             QPushButton {{
                 background-color: rgba(255, 255, 255, 0.04);
                 color: {accent_color};
@@ -992,17 +1283,112 @@ class LumenProjectWorkspaceView(QWidget):
                 background-color: {accent_color};
                 color: #07090e;
             }}
-        """)
+        """
+        btn_enter.setStyleSheet(btn_enter_css_normal)
         btn_enter.clicked.connect(lambda: self.open_sector_view(sector_idx, title))
         h_layout.addWidget(btn_enter)
         c_layout.addLayout(h_layout)
 
-        for icon, act_title, act_sub in actions:
-            btn = LumenCyberActionButton(icon, act_title, act_sub, accent_color=accent_color)
-            btn.clicked.connect(lambda t=act_title, s=sector_idx, st=title: self.open_sector_and_handle(s, st, t))
-            c_layout.addWidget(btn)
+        card.lbl_title = lbl_title
+        card.btn_enter = btn_enter
+        card.action_buttons = []
+        card.original_title = title
+        card.accent_color = accent_color
+
+        if sector_idx == 1:
+            # Contenedor de acciones normales con Git inicializado
+            card.git_container = QWidget()
+            g_layout = QVBoxLayout(card.git_container)
+            g_layout.setContentsMargins(0, 0, 0, 0)
+            g_layout.setSpacing(6)
+            for icon, act_title, act_sub in actions:
+                btn = LumenCyberActionButton(icon, act_title, act_sub, accent_color=accent_color)
+                btn.clicked.connect(lambda t=act_title, s=sector_idx, st=title: self.open_sector_and_handle(s, st, t))
+                g_layout.addWidget(btn)
+                card.action_buttons.append(btn)
+            c_layout.addWidget(card.git_container)
+
+            # Contenedor de acciones cuando NO está inicializado en Git
+            card.nogit_container = QWidget()
+            ng_layout = QVBoxLayout(card.nogit_container)
+            ng_layout.setContentsMargins(0, 0, 0, 0)
+            ng_layout.setSpacing(6)
+
+            btn_init_git = LumenCyberActionButton(
+                "🌱", "Iniciar Proyecto Git", "Ejecutar git init con rama principal 'main'", accent_color="#10b981"
+            )
+            btn_init_git.clicked.connect(lambda: self.handle_git_init(create_gitignore=False))
+            ng_layout.addWidget(btn_init_git)
+
+            btn_init_git_ign = LumenCyberActionButton(
+                "🛡️", "Iniciar Git con .gitignore", "Inicializar git init y generar plantilla de exclusión", accent_color="#38bdf8"
+            )
+            btn_init_git_ign.clicked.connect(lambda: self.handle_git_init(create_gitignore=True))
+            ng_layout.addWidget(btn_init_git_ign)
+
+            card.nogit_actions = [btn_init_git, btn_init_git_ign]
+            card.nogit_container.setVisible(False)
+            c_layout.addWidget(card.nogit_container)
+        else:
+            for icon, act_title, act_sub in actions:
+                btn = LumenCyberActionButton(icon, act_title, act_sub, accent_color=accent_color)
+                btn.clicked.connect(lambda t=act_title, s=sector_idx, st=title: self.open_sector_and_handle(s, st, t))
+                c_layout.addWidget(btn)
+                card.action_buttons.append(btn)
 
         c_layout.addStretch()
+
+        def set_git_state(is_git: bool):
+            if sector_idx == 1:
+                card.git_container.setVisible(is_git)
+                card.nogit_container.setVisible(not is_git)
+                if is_git:
+                    lbl_title.setText(card.original_title)
+                    btn_enter.setEnabled(True)
+                    btn_enter.setText("Abrir Sector ›")
+                    btn_enter.setStyleSheet(btn_enter_css_normal)
+                else:
+                    lbl_title.setText("🔄  SECTOR 1 : PROTOCOLO GIT  [NO INICIALIZADO]")
+                    btn_enter.setEnabled(False)
+                    btn_enter.setText("Sin Inicializar")
+                    btn_enter.setStyleSheet("""
+                        QPushButton {
+                            background-color: rgba(255, 255, 255, 0.02);
+                            color: #6b7280;
+                            border: 1px dashed #4b5563;
+                            border-radius: 5px;
+                            padding: 3px 8px;
+                            font-size: 11px;
+                            font-weight: 700;
+                        }
+                    """)
+            elif sector_idx == 3:
+                if is_git:
+                    lbl_title.setText(card.original_title)
+                    btn_enter.setEnabled(True)
+                    btn_enter.setText("Abrir Sector ›")
+                    btn_enter.setStyleSheet(btn_enter_css_normal)
+                    for b in card.action_buttons:
+                        b.set_locked(False)
+                else:
+                    lbl_title.setText("🧠  SECTOR 3 : HERRAMIENTAS & IA  [BLOQUEADO]")
+                    btn_enter.setEnabled(False)
+                    btn_enter.setText("🔒 Bloqueado")
+                    btn_enter.setStyleSheet("""
+                        QPushButton {
+                            background-color: rgba(255, 255, 255, 0.02);
+                            color: #ef4444;
+                            border: 1px solid rgba(239, 68, 68, 0.35);
+                            border-radius: 5px;
+                            padding: 3px 8px;
+                            font-size: 11px;
+                            font-weight: 700;
+                        }
+                    """)
+                    for b in card.action_buttons:
+                        b.set_locked(True, "Bloqueado: Requiere repositorio Git")
+
+        card.set_git_state = set_git_state
         return card
 
     def create_sector1_dedicated_view(self) -> QFrame:
@@ -2159,8 +2545,36 @@ class LumenProjectWorkspaceView(QWidget):
     # -----------------------------------------------------------------
     # NAVEGACIÓN DENTRO DE SECTORES Y CICLOS DE TRABAJO
     # -----------------------------------------------------------------
+    def handle_git_init(self, create_gitignore: bool = True):
+        """Inicializa el repositorio Git en el proyecto actual y refresca el workspace."""
+        if not self.project_data:
+            self.terminal_display.log_error("GIT-INIT", "No hay ningún proyecto activo cargado.")
+            return
+
+        p_path = self.project_data.get("path", "")
+        p_name = self.project_data.get("name", "Proyecto")
+
+        self.terminal_display.log("GIT-INIT", f"Inicializando repositorio Git para <b>{p_name}</b> (rama <code>main</code>)...", tag_color="#38bdf8", prefix="🌱")
+
+        success, msg = execute_git_init(p_path, initial_branch="main", create_gitignore=create_gitignore)
+        if success:
+            self.terminal_display.log_success("GIT-INIT", msg)
+            if create_gitignore:
+                self.terminal_display.log_info("GITIGNORE", "Archivo <code>.gitignore</code> creado con reglas de exclusión base.")
+            self.refresh_current_project(reset_terminal=True)
+        else:
+            self.terminal_display.log_error("GIT-INIT", msg)
+
     def open_sector_view(self, sector_idx: int, sector_title: str):
         """Abre la ventana limpia dedicada del sector seleccionado."""
+        if not getattr(self, "is_project_git", True):
+            if sector_idx == 1:
+                self.terminal_display.log_warn("SECTOR-1", "El <b>Sector 1 (Protocolo Git)</b> no está disponible. Inicia el repositorio Git primero.")
+                return
+            elif sector_idx == 3:
+                self.terminal_display.log_warn("SECTOR-3", "El <b>Sector 3 (Herramientas & IA)</b> está bloqueado. Requiere un repositorio Git inicializado.")
+                return
+
         self.sectors_stack.setCurrentIndex(sector_idx)
         if sector_idx == 1 and hasattr(self, "sector1_sub_stack"):
             self.sector1_sub_stack.setCurrentIndex(0)
@@ -2172,6 +2586,11 @@ class LumenProjectWorkspaceView(QWidget):
 
     def open_sector_and_handle(self, sector_idx: int, sector_title: str, action_title: str):
         """Abre la ventana del sector o ejecuta la acción seleccionada."""
+        if not getattr(self, "is_project_git", True):
+            if sector_idx in (1, 3):
+                self.open_sector_view(sector_idx, sector_title)
+                return
+
         if sector_idx == 1:
             if action_title == "Ciclos de Trabajo":
                 self.open_sector_view(1, "Ciclos de Trabajo")
@@ -2181,11 +2600,27 @@ class LumenProjectWorkspaceView(QWidget):
                 self.open_merge_view()
             elif action_title == "Estado y Sincronización":
                 self.open_sync_view()
+            elif action_title == "Visibilidad GitHub":
+                self.open_visibility_dialog()
             else:
                 self.handle_action_click(action_title)
         else:
             self.open_sector_view(sector_idx, sector_title)
             self.handle_action_click(action_title)
+
+    def open_visibility_dialog(self):
+        """Abre el diálogo modal para gestionar la visibilidad (Público/Privado) o publicar en GitHub."""
+        path = self.project_data.get("path")
+        name = self.project_data.get("name")
+        if not path or not os.path.exists(path):
+            self.terminal_display.log_warn("GITHUB", "Ruta de proyecto no válida para gestionar visibilidad.")
+            return
+
+        dlg = LumenRepoVisibilityDialog(path, name, parent=self)
+        if dlg.exec():
+            res_msg = getattr(dlg, "result_message", "Operación de visibilidad completada.")
+            self.terminal_display.log("GITHUB", f"<b>Visibilidad en GitHub:</b> {res_msg}", tag_color="#34d399", prefix="🌐")
+            self.refresh_current_project(reset_terminal=False)
 
     def open_sync_view(self):
         """Abre la vista dedicada de Estado y Sincronización (Status / Fetch / Pull) en el Sector 1."""
@@ -5763,11 +6198,112 @@ class LumenProjectWorkspaceView(QWidget):
         """Sincroniza y carga en tiempo real la información del proyecto seleccionado en el HUD y terminal coloreada."""
         self.project_data = folder_data
         sync = get_full_project_sync(folder_data)
+        is_git = sync.get("git_info", {}).get("is_git", False)
+        self.is_project_git = is_git
+
+        # 0. El panel superior SIEMPRE se muestra (contiene Proyecto, Entorno Python, Docker y Hora)
+        self.hud_card.setVisible(True)
+
+        # Ocultar exclusivamente los elementos dependientes de Git en el panel superior
+        if hasattr(self, "row1_git_widget"):
+            self.row1_git_widget.setVisible(is_git)
+        if hasattr(self, "hud_row3_widget"):
+            self.hud_row3_widget.setVisible(is_git)
+        if hasattr(self, "hud_history_widget"):
+            self.hud_history_widget.setVisible(is_git)
+
+        if hasattr(self, "lbl_status_pill"):
+            if is_git:
+                self.lbl_status_pill.setText("🟢 SISTEMA CONECTADO")
+                self.lbl_status_pill.setStyleSheet("""
+                    background-color: rgba(16, 185, 129, 0.12);
+                    color: #34d399;
+                    border: 1px solid rgba(16, 185, 129, 0.35);
+                    border-radius: 12px;
+                    padding: 4px 12px;
+                    font-size: 11px;
+                    font-weight: 800;
+                """)
+            else:
+                self.lbl_status_pill.setText("⚡ ENTORNOS ACTIVOS (SIN GIT)")
+                self.lbl_status_pill.setStyleSheet("""
+                    background-color: rgba(99, 102, 241, 0.15);
+                    color: #a5b4fc;
+                    border: 1px solid rgba(99, 102, 241, 0.35);
+                    border-radius: 12px;
+                    padding: 4px 12px;
+                    font-size: 11px;
+                    font-weight: 800;
+                """)
+
+        # Actualizar estado reactivo de los sectores 1 y 3
+        if hasattr(self, "card_s1") and hasattr(self.card_s1, "set_git_state"):
+            self.card_s1.set_git_state(is_git)
+        if hasattr(self, "card_s3") and hasattr(self.card_s3, "set_git_state"):
+            self.card_s3.set_git_state(is_git)
 
         # 1. Proyecto, Versión, Rama, Remoto
         self.lbl_proj_title.setText(f"{sync['name']} ({sync['version']})")
         self.lbl_proj_branch.setText(sync['git_info']['branch'])
         self.lbl_proj_remote.setText(sync['git_info']['remote'])
+
+        if hasattr(self, "btn_repo_vis"):
+            vis = sync.get('git_info', {}).get('visibility_info', {})
+            if vis.get('has_remote') and vis.get('is_github'):
+                is_priv = vis.get('is_private', True)
+                btn_txt = "🔒 Privado (Cambiar)" if is_priv else "🌐 Público (Cambiar)"
+                btn_color = "#f87171" if is_priv else "#34d399"
+                self.btn_repo_vis.setText(btn_txt)
+                self.btn_repo_vis.setToolTip("Click para cambiar la visibilidad entre Público y Privado en GitHub")
+                self.btn_repo_vis.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: rgba(255, 255, 255, 0.04);
+                        color: {btn_color};
+                        border: 1px solid {btn_color}66;
+                        border-radius: 5px;
+                        padding: 2px 8px;
+                        font-size: 11px;
+                        font-weight: 700;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {btn_color}22;
+                        border-color: {btn_color};
+                    }}
+                """)
+                self.btn_repo_vis.setVisible(True)
+            elif vis.get('has_remote'):
+                self.btn_repo_vis.setText("🌐 Remoto")
+                self.btn_repo_vis.setStyleSheet("""
+                    QPushButton {{
+                        background-color: rgba(255, 255, 255, 0.04);
+                        color: #c7d2fe;
+                        border: 1px solid rgba(199, 210, 254, 0.4);
+                        border-radius: 5px;
+                        padding: 2px 8px;
+                        font-size: 11px;
+                        font-weight: 700;
+                    }}
+                """)
+                self.btn_repo_vis.setVisible(True)
+            else:
+                self.btn_repo_vis.setText("☁️ Publicar en GitHub")
+                self.btn_repo_vis.setToolTip("Publicar este repositorio local en GitHub")
+                self.btn_repo_vis.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(56, 189, 248, 0.15);
+                        color: #38bdf8;
+                        border: 1px solid rgba(56, 189, 248, 0.4);
+                        border-radius: 5px;
+                        padding: 2px 8px;
+                        font-size: 11px;
+                        font-weight: 700;
+                    }
+                    QPushButton:hover {
+                        background-color: rgba(56, 189, 248, 0.3);
+                        color: #ffffff;
+                    }
+                """)
+                self.btn_repo_vis.setVisible(True)
 
         # 2. Entorno, Docker, Hora
         env_text = sync['env_info']['text']
@@ -5835,25 +6371,37 @@ class LumenProjectWorkspaceView(QWidget):
         self.lbl_t_title.setText(f"lumen-terminal@{p_name_clean}:~$")
 
         if reset_terminal:
-            # SIEMPRE resetear al panel general de los 4 sectores al abrir un proyecto desde cero
+            # SIEMPRE resetear al panel general de los sectores al abrir un proyecto desde cero
             if hasattr(self, "sectors_stack"):
                 self.sectors_stack.setCurrentIndex(0)
             if hasattr(self, "sector1_sub_stack"):
                 self.sector1_sub_stack.setCurrentIndex(0)
 
             self.terminal_display.clear()
-            self.terminal_display.log(
-                "KERNEL", 
-                f"Conectado a <b style='color:#fbbf24;'>{sync['name']}</b> <span style='color:#a5b4fc;'>[{sync['version']}]</span> en rama <b style='color:#38bdf8;'>{sync['git_info']['branch']}</b>",
-                tag_color="#818cf8",
-                prefix="❖"
-            )
-            self.terminal_display.log(
-                "READY",
-                "Esperando acciones...",
-                tag_color="#34d399",
-                prefix="❯"
-            )
+            if is_git:
+                self.terminal_display.log(
+                    "KERNEL", 
+                    f"Conectado a <b style='color:#fbbf24;'>{sync['name']}</b> <span style='color:#a5b4fc;'>[{sync['version']}]</span> en rama <b style='color:#38bdf8;'>{sync['git_info']['branch']}</b>",
+                    tag_color="#818cf8",
+                    prefix="❖"
+                )
+                self.terminal_display.log(
+                    "READY",
+                    "Esperando acciones...",
+                    tag_color="#34d399",
+                    prefix="❯"
+                )
+            else:
+                self.terminal_display.log(
+                    "KERNEL", 
+                    f"Conectado a <b style='color:#fbbf24;'>{sync['name']}</b> <span style='color:#a5b4fc;'>[{sync['version']}]</span> • <span style='color:#f87171;'>Sin Repositorio Git</span>",
+                    tag_color="#f87171",
+                    prefix="⚠"
+                )
+                self.terminal_display.log_warn(
+                    "GIT",
+                    "Este proyecto no posee un repositorio Git inicializado. Los sectores 1 y 3 están restringidos. Pulsa <b>'Iniciar Proyecto Git'</b> en el Sector 1 para activarlo."
+                )
 
     def refresh_current_project(self, reset_terminal: bool = False):
         """Re-sincroniza el proyecto actual con el disco."""

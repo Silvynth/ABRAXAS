@@ -191,3 +191,127 @@ def pull_repository(repo_path: str) -> str:
     if proc.returncode != 0:
         raise RuntimeError(f"Error al actualizar repositorio:\n{proc.stderr.strip() or proc.stdout.strip()}")
     return proc.stdout.strip()
+
+
+def get_repo_visibility(project_path: str) -> Dict[str, Any]:
+    """Determina si el proyecto tiene remoto en GitHub y consulta si es Público o Privado."""
+    if not project_path or not os.path.exists(os.path.join(project_path, ".git")):
+        return {
+            "has_remote": False,
+            "is_github": False,
+            "visibility": "LOCAL",
+            "is_private": True,
+            "text": "Sin Git",
+            "badge": "⚪ Sin Git"
+        }
+
+    # 1. Obtener URL remota
+    try:
+        proc = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        url = proc.stdout.strip() if proc.returncode == 0 else ""
+    except Exception:
+        url = ""
+
+    if not url:
+        return {
+            "has_remote": False,
+            "is_github": False,
+            "visibility": "LOCAL",
+            "is_private": True,
+            "text": "Solo Local",
+            "badge": "🔒 Solo Local"
+        }
+
+    is_github = "github.com" in url
+    if not is_github:
+        return {
+            "has_remote": True,
+            "is_github": False,
+            "visibility": "REMOTE",
+            "is_private": None,
+            "text": "Remoto Externo",
+            "badge": "🌐 Externo"
+        }
+
+    # 2. Consultar visibilidad exacta en GitHub vía gh CLI
+    try:
+        gh_proc = subprocess.run(
+            ["gh", "repo", "view", "--json", "isPrivate,visibility,nameWithOwner"],
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if gh_proc.returncode == 0 and gh_proc.stdout.strip():
+            data = json.loads(gh_proc.stdout)
+            is_priv = data.get("isPrivate", False)
+            vis = "private" if is_priv else "public"
+            badge = "🔒 Privado" if is_priv else "🌐 Público"
+            return {
+                "has_remote": True,
+                "is_github": True,
+                "is_private": is_priv,
+                "visibility": vis,
+                "text": "Privado" if is_priv else "Público",
+                "badge": badge,
+                "repo_name": data.get("nameWithOwner", "")
+            }
+    except Exception:
+        pass
+
+    return {
+        "has_remote": True,
+        "is_github": True,
+        "is_private": None,
+        "visibility": "UNKNOWN",
+        "text": "GitHub",
+        "badge": "🌐 GitHub"
+    }
+
+
+def change_repo_visibility(project_path: str, target_visibility: str) -> Tuple[bool, str]:
+    """Cambia la visibilidad de un repositorio en GitHub ('public' o 'private')."""
+    target = target_visibility.lower().strip()
+    if target not in ("public", "private"):
+        return False, f"Visibilidad inválida: {target}. Debe ser 'public' o 'private'."
+
+    if not project_path or not os.path.exists(os.path.join(project_path, ".git")):
+        return False, "El directorio no contiene un repositorio Git válido."
+
+    try:
+        cmd = ["gh", "repo", "edit", "--visibility", target, "--accept-visibility-change-consequences"]
+        proc = subprocess.run(cmd, cwd=project_path, capture_output=True, text=True, timeout=20)
+        if proc.returncode == 0:
+            label = "PÚBLICO" if target == "public" else "PRIVADO"
+            return True, f"Visibilidad del repositorio cambiada a {label} exitosamente en GitHub."
+        err = proc.stderr.strip() or proc.stdout.strip()
+        return False, f"Error de GitHub CLI: {err}"
+    except Exception as e:
+        return False, f"Excepción al cambiar visibilidad: {str(e)}"
+
+
+def publish_repo_to_github(project_path: str, repo_name: str = "", visibility: str = "private") -> Tuple[bool, str]:
+    """Crea un repositorio remoto en GitHub para un proyecto local y lo vincula como origin."""
+    if not project_path or not os.path.exists(os.path.join(project_path, ".git")):
+        return False, "El directorio no contiene un repositorio Git."
+
+    vis_flag = "--private" if visibility.lower() == "private" else "--public"
+    cmd = ["gh", "repo", "create"]
+    if repo_name.strip():
+        cmd.append(repo_name.strip())
+    cmd.extend(["--source=.", vis_flag, "--push"])
+
+    try:
+        proc = subprocess.run(cmd, cwd=project_path, capture_output=True, text=True, timeout=30)
+        if proc.returncode == 0:
+            return True, f"Repositorio publicado exitosamente en GitHub como {visibility.upper()}."
+        return False, proc.stderr.strip() or proc.stdout.strip()
+    except Exception as e:
+        return False, str(e)
+

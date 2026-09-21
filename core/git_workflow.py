@@ -1552,5 +1552,45 @@ def execute_git_stash_save(project_path: str, message: str = "") -> Tuple[bool, 
         return False, str(e)
 
 
+def execute_git_init(project_path: str, initial_branch: str = "main", create_gitignore: bool = True) -> Tuple[bool, str]:
+    """Inicializa un nuevo repositorio Git en la ruta especificada."""
+    if not project_path or not os.path.isdir(project_path):
+        return False, "La ruta del proyecto no existe o no es un directorio válido."
 
+    git_dir = os.path.join(project_path, ".git")
+    if os.path.exists(git_dir):
+        return False, "El proyecto ya contiene un repositorio Git inicializado (.git)."
 
+    try:
+        # Intentar git init -b <initial_branch>
+        res = subprocess.run(["git", "init", "-b", initial_branch], cwd=project_path, capture_output=True, text=True, timeout=10)
+        if res.returncode != 0:
+            # Fallback en caso de git anterior a 2.28
+            res = subprocess.run(["git", "init"], cwd=project_path, capture_output=True, text=True, timeout=10)
+            if res.returncode == 0:
+                subprocess.run(["git", "checkout", "-b", initial_branch], cwd=project_path, capture_output=True, text=True, timeout=5)
+
+        if res.returncode != 0:
+            return False, f"Error al ejecutar git init: {res.stderr.strip()}"
+
+        # Crear plantilla de .gitignore si se solicita y no existe
+        gitignore_path = os.path.join(project_path, ".gitignore")
+        if create_gitignore and not os.path.exists(gitignore_path):
+            with open(gitignore_path, "w", encoding="utf-8") as f:
+                f.write(
+                    "# Entornos y dependencias\n"
+                    "__pycache__/\n"
+                    "*.py[cod]\n"
+                    ".venv/\n"
+                    "venv/\n"
+                    "node_modules/\n"
+                    ".env\n"
+                    "*.log\n"
+                    ".DS_Store\n"
+                    ".idea/\n"
+                    ".vscode/\n"
+                )
+
+        return True, f"Repositorio Git inicializado con éxito en rama '{initial_branch}'."
+    except Exception as e:
+        return False, f"Excepción durante git init: {str(e)}"

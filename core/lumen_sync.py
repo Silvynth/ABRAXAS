@@ -18,6 +18,8 @@ except ImportError:
     except ImportError:
         tomllib = None
 
+from core.github import get_repo_visibility
+
 
 def get_project_version(project_path: str) -> str:
     """Detecta la versión del proyecto a través de VERSION, git commit, pyproject, package.json o config."""
@@ -140,38 +142,25 @@ def get_project_git_info(project_path: str) -> Dict[str, Any]:
     except (subprocess.TimeoutExpired, OSError):
         pass
 
-    # Remoto
-    try:
-        res = subprocess.run(
-            ["git", "config", "--get", "remote.origin.url"],
-            cwd=project_path,
-            capture_output=True,
-            text=True,
-            timeout=3
-        )
-        if res.returncode == 0 and res.stdout.strip():
-            url = res.stdout.strip()
-            if "github.com" in url:
-                parts = url.split("github.com")[-1].strip(":/. ")
-                if parts.endswith(".git"):
-                    parts = parts[:-4]
-                remote = f"origin ({parts})"
-            elif "gitlab.com" in url:
-                parts = url.split("gitlab.com")[-1].strip(":/. ")
-                if parts.endswith(".git"):
-                    parts = parts[:-4]
-                remote = f"gitlab ({parts})"
-            else:
-                remote = url.split("/")[-1].replace(".git", "")
-        else:
-            remote = "origin/main"
-    except (subprocess.TimeoutExpired, OSError):
-        pass
+    # Remoto y Visibilidad en GitHub (Público / Privado)
+    vis_data = get_repo_visibility(project_path)
+    if vis_data.get("has_remote"):
+        repo_display = vis_data.get("repo_name")
+        if not repo_display:
+            try:
+                res = subprocess.run(["git", "config", "--get", "remote.origin.url"], cwd=project_path, capture_output=True, text=True, timeout=2)
+                repo_display = res.stdout.strip().split("/")[-1].replace(".git", "") if res.returncode == 0 else "origin"
+            except Exception:
+                repo_display = "origin"
+        remote = f"{repo_display}  [{vis_data.get('badge', 'Remoto')}]"
+    else:
+        remote = "Solo Local  [🔒 Privado en máquina]"
 
     return {
         "is_git": True,
         "branch": branch,
-        "remote": remote
+        "remote": remote,
+        "visibility_info": vis_data
     }
 
 
