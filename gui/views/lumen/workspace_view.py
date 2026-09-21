@@ -19,7 +19,13 @@ from PySide6.QtCore import Qt, Signal, QTimer, QThread, QPoint
 from core import get_version
 from core.lumen_sync import get_full_project_sync
 from core.github import get_repo_visibility, change_repo_visibility, publish_repo_to_github
-from core.ai import get_configured_model, audit_git_diff
+from core.ai import get_configured_model, audit_git_diff, generate_with_model
+from core.utilities import (
+    inspect_gitignore_and_env, apply_gitignore_preset, add_custom_gitignore_rule,
+    create_base_env_file, generate_env_example_file,
+    scan_project_documentation, read_markdown_file, generate_ai_changelog,
+    check_ollama_status, execute_history_ai_audit
+)
 from core.git_workflow import (
     get_project_semver, bump_semver, get_next_commit_seq,
     generate_ia_commit_proposal, execute_commit_and_tag,
@@ -319,6 +325,54 @@ class DockerWorkerThread(QThread):
                 self.finished_task.emit(ok, label, msg)
         except Exception as e:
             self.finished_task.emit(False, self.task_type.upper(), f"Excepción en hilo de Docker: {str(e)}")
+
+
+class Sector3WorkerThread(QThread):
+    """Hilo no bloqueante para operaciones pesadas de Herramientas & IA (Sector 3)."""
+    finished_task = Signal(bool, str, str, object)
+
+    def __init__(self, task_type: str, project_path: str = "", extra_data=None):
+        super().__init__()
+        self.task_type = task_type
+        self.project_path = project_path
+        self.extra_data = extra_data
+
+    def run(self):
+        try:
+            if self.task_type == "apply_preset":
+                preset_type = self.extra_data or "all"
+                ok, msg = apply_gitignore_preset(self.project_path, preset_type)
+                self.finished_task.emit(ok, "GITIGNORE-PRESET", msg, None)
+            elif self.task_type == "add_rule":
+                rule = self.extra_data or ""
+                ok, msg = add_custom_gitignore_rule(self.project_path, rule)
+                self.finished_task.emit(ok, "GITIGNORE-RULE", msg, None)
+            elif self.task_type == "create_env":
+                ok, msg = create_base_env_file(self.project_path)
+                self.finished_task.emit(ok, "ENV-CREATE", msg, None)
+            elif self.task_type == "generate_env_example":
+                ok, msg = generate_env_example_file(self.project_path)
+                self.finished_task.emit(ok, "ENV-EXAMPLE", msg, None)
+            elif self.task_type == "generate_changelog":
+                count = int(self.extra_data or 15)
+                ok, res = generate_ai_changelog(self.project_path, count=count)
+                self.finished_task.emit(ok, "AI-CHANGELOG", "Changelog generado exitosamente." if ok else res, res if ok else None)
+            elif self.task_type == "history_audit":
+                model_choice = (self.extra_data or {}).get("model_choice", "light")
+                count = int((self.extra_data or {}).get("count", 5))
+                ok, audit_text = execute_history_ai_audit(self.project_path, commit_count=count, model_choice=model_choice)
+                self.finished_task.emit(ok, "AI-AUDIT", "Auditoría de historial completada." if ok else audit_text, audit_text if ok else None)
+            elif self.task_type == "ai_consult":
+                prompt = (self.extra_data or {}).get("prompt", "")
+                system = (self.extra_data or {}).get("system", "")
+                model_choice = (self.extra_data or {}).get("model_choice", "light")
+                res = generate_with_model(prompt, model_choice=model_choice, system_instruction=system)
+                if res:
+                    self.finished_task.emit(True, "AI-CONSULT", "Consulta resuelta por IA.", res)
+                else:
+                    self.finished_task.emit(False, "AI-CONSULT", "Ollama no devolvió respuesta. Verifica el servicio local.", None)
+        except Exception as e:
+            self.finished_task.emit(False, self.task_type.upper(), f"Excepción en Sector 3: {str(e)}", None)
 
 
 class LumenRepoVisibilityDialog(QDialog):
@@ -1155,15 +1209,7 @@ class LumenProjectWorkspaceView(QWidget):
         # =============================================================
         # PÁGINA 3: VENTANA DEDICADA DEL SECTOR 3 (HERRAMIENTAS & IA)
         # =============================================================
-        self.page_sector3_view = self.create_simple_sector_view(
-            title="🧠  TERCER SECTOR : HERRAMIENTAS & IA",
-            accent_color="#c084fc",
-            actions=[
-                ("🛡️", "Gestor de gitignore", "Plantillas inteligentes y reglas de exclusión"),
-                ("📖", "Lector de documentación", "Visor interactivo de Markdown, README y APIs"),
-                ("🤖", "Utilidades IA", "Asistente Ollama local, refactor y ayuda dev")
-            ]
-        )
+        self.page_sector3_view = self.create_sector3_dedicated_view()
         self.sectors_stack.addWidget(self.page_sector3_view)
 
         content_layout.addWidget(self.sectors_stack)
@@ -4137,6 +4183,1372 @@ class LumenProjectWorkspaceView(QWidget):
         else:
             self.terminal_display.log_error("COMPOSE", f"Error al obtener logs de Compose: {logs}")
 
+    # =================================================================
+    # 🧠 TERCER SECTOR : HERRAMIENTAS & IA (DEDICATED VIEW & SUB-PAGES)
+    # =================================================================
+    def create_sector3_dedicated_view(self) -> QFrame:
+        """Crea la ventana interactiva dedicada del Sector 3 (Herramientas & IA)."""
+        card = QFrame()
+        card.setProperty("class", "surface")
+        card.setStyleSheet("""
+            QFrame.surface {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(22, 24, 34, 0.95), stop:1 rgba(16, 18, 25, 0.95));
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-top: 3px solid #c084fc;
+                border-radius: 10px;
+            }
+        """)
+        card.setMinimumHeight(440)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        self.sector3_sub_stack = LumenDynamicStackedWidget()
+
+        # Sub-página 0: Gestor de .gitignore & .env
+        self.page_s3_gitignore = self.create_sector3_gitignore_view()
+        self.sector3_sub_stack.addWidget(self.page_s3_gitignore)
+
+        # Sub-página 1: Lector de Documentación
+        self.page_s3_docs = self.create_sector3_docs_view()
+        self.sector3_sub_stack.addWidget(self.page_s3_docs)
+
+        # Sub-página 2: Utilidades IA & Ollama
+        self.page_s3_ai = self.create_sector3_ai_view()
+        self.sector3_sub_stack.addWidget(self.page_s3_ai)
+
+        layout.addWidget(self.sector3_sub_stack)
+        return card
+
+    def _create_sector3_nav_bar(self, active_tab_index: int) -> QHBoxLayout:
+        """Crea la barra superior de navegación interactiva para las sub-páginas del Sector 3."""
+        nav = QHBoxLayout()
+        nav.setSpacing(10)
+
+        btn_back = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(192, 132, 252, 0.15);
+                color: #e9d5ff;
+                border: 1px solid rgba(192, 132, 252, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(192, 132, 252, 0.30);
+                border-color: #c084fc;
+                color: #ffffff;
+            }
+        """)
+        btn_back.clicked.connect(self.go_back_to_sectors_overview)
+        nav.addWidget(btn_back)
+
+        lbl_title = QLabel("🧠  SECTOR 3 : HERRAMIENTAS & IA")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #c084fc; letter-spacing: 0.5px;")
+        nav.addWidget(lbl_title)
+
+        tab_items = [
+            ("🛡️  Gestor .gitignore & .env", self.open_sector3_gitignore_view),
+            ("📖  Lector de Documentación", self.open_sector3_docs_view),
+            ("🤖  Utilidades IA & Ollama", self.open_sector3_ai_view),
+        ]
+
+        for i, (tab_title, slot) in enumerate(tab_items):
+            btn = QPushButton(tab_title)
+            btn.setCursor(Qt.PointingHandCursor)
+            if i == active_tab_index:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(192, 132, 252, 0.25);
+                        color: #ffffff;
+                        border: 1px solid #c084fc;
+                        border-radius: 6px;
+                        padding: 4px 10px;
+                        font-weight: 800;
+                        font-size: 11px;
+                    }
+                """)
+            else:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(255, 255, 255, 0.05);
+                        color: #9ca3af;
+                        border: 1px solid rgba(255, 255, 255, 0.12);
+                        border-radius: 6px;
+                        padding: 4px 10px;
+                        font-weight: 600;
+                        font-size: 11px;
+                    }
+                    QPushButton:hover {
+                        background-color: rgba(192, 132, 252, 0.15);
+                        color: #e9d5ff;
+                        border-color: #c084fc;
+                    }
+                """)
+                btn.clicked.connect(slot)
+            nav.addWidget(btn)
+
+        nav.addStretch()
+        return nav
+
+    # -----------------------------------------------------------------
+    # SUB-PÁGINA 0: GESTOR DE .GITIGNORE & .ENV
+    # -----------------------------------------------------------------
+    def create_sector3_gitignore_view(self) -> QWidget:
+        """Sub-página para inspeccionar y aplicar presets a .gitignore y gestionar .env."""
+        page = QWidget()
+        page.setMinimumHeight(350)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        nav = self._create_sector3_nav_bar(0)
+        layout.addLayout(nav)
+
+        # Barra de Telemetría (.gitignore, .env, .env.example)
+        telemetry_frame = QFrame()
+        telemetry_frame.setStyleSheet("""
+            QFrame {
+                background: rgba(14, 16, 23, 0.85);
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 8px;
+                padding: 4px;
+            }
+        """)
+        telem_layout = QHBoxLayout(telemetry_frame)
+        telem_layout.setContentsMargins(12, 6, 12, 6)
+        telem_layout.setSpacing(16)
+
+        # Badge Gitignore
+        self.lbl_s3_gi_stat = QLabel("🛡️ .gitignore: Escaneando...")
+        self.lbl_s3_gi_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #c084fc;")
+        telem_layout.addWidget(self.lbl_s3_gi_stat)
+
+        # Separador vertical
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.VLine)
+        sep1.setStyleSheet("color: rgba(255, 255, 255, 0.15);")
+        telem_layout.addWidget(sep1)
+
+        # Badge .env
+        self.lbl_s3_env_stat = QLabel("🔐 .env: Escaneando...")
+        self.lbl_s3_env_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #34d399;")
+        telem_layout.addWidget(self.lbl_s3_env_stat)
+
+        # Separador vertical
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.VLine)
+        sep2.setStyleSheet("color: rgba(255, 255, 255, 0.15);")
+        telem_layout.addWidget(sep2)
+
+        # Badge .env.example
+        self.lbl_s3_example_stat = QLabel("📋 .env.example: Escaneando...")
+        self.lbl_s3_example_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #9ca3af;")
+        telem_layout.addWidget(self.lbl_s3_example_stat)
+
+        telem_layout.addStretch()
+
+        btn_refresh = QPushButton("🔄  Refrescar Estado")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
+        btn_refresh.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.05);
+                color: #d8b4fe;
+                border: 1px solid rgba(192, 132, 252, 0.25);
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 10.5px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(192, 132, 252, 0.20);
+                color: #ffffff;
+            }
+        """)
+        btn_refresh.clicked.connect(self.refresh_sector3_gitignore_view)
+        telem_layout.addWidget(btn_refresh)
+
+        layout.addWidget(telemetry_frame)
+
+        # Splitter principal: Izquierda Presets & Acciones, Derecha Visor en Vivo de .gitignore
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: rgba(255, 255, 255, 0.08);
+                width: 3px;
+            }
+        """)
+
+        # Panel Izquierdo: Acciones y Plantillas
+        left_panel = QFrame()
+        left_panel.setStyleSheet("""
+            QFrame {
+                background: rgba(14, 16, 23, 0.70);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+            }
+        """)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(12, 10, 12, 10)
+        left_layout.setSpacing(8)
+
+        lbl_presets = QLabel("⚡ PLANTILLAS INTELIGENTES (PRESETS)")
+        lbl_presets.setStyleSheet("font-size: 11px; font-weight: 800; color: #e9d5ff; letter-spacing: 0.5px;")
+        left_layout.addWidget(lbl_presets)
+
+        lbl_presets_sub = QLabel("Inyecta exclusiones estándar sin sobreescribir tus reglas existentes.")
+        lbl_presets_sub.setStyleSheet("font-size: 10px; color: #9ca3af;")
+        left_layout.addWidget(lbl_presets_sub)
+
+        # Botones de presets
+        presets_grid = QGridLayout()
+        presets_grid.setSpacing(6)
+
+        presets = [
+            ("🐍 Python Stack", "pycache, .venv, *.pyc...", "python"),
+            ("🌐 Node / Web", "node_modules, dist, .npm...", "node"),
+            ("💻 IDEs & Sistema", ".vscode, .idea, .DS_Store...", "ide"),
+            ("🔐 Seguridad", ".env, *.pem, *.key, secrets...", "security"),
+        ]
+
+        for idx, (p_title, p_desc, p_key) in enumerate(presets):
+            btn_p = QPushButton(f"{p_title}\n({p_desc})")
+            btn_p.setCursor(Qt.PointingHandCursor)
+            btn_p.setStyleSheet("""
+                QPushButton {
+                    background: rgba(255, 255, 255, 0.04);
+                    color: #e5e7eb;
+                    border: 1px solid rgba(255, 255, 255, 0.09);
+                    border-radius: 6px;
+                    padding: 6px 8px;
+                    text-align: left;
+                    font-size: 10.5px;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background: rgba(192, 132, 252, 0.15);
+                    border-color: #c084fc;
+                    color: #ffffff;
+                }
+            """)
+            btn_p.clicked.connect(lambda _, k=p_key: self.execute_apply_gitignore_preset(k))
+            presets_grid.addWidget(btn_p, idx // 2, idx % 2)
+
+        left_layout.addLayout(presets_grid)
+
+        # Botón Pack Completo
+        btn_all = QPushButton("⚡  Inyectar Pack Completo Recomendado (Python + Node + IDE + Seguridad)")
+        btn_all.setCursor(Qt.PointingHandCursor)
+        btn_all.setStyleSheet("""
+            QPushButton {
+                background: rgba(192, 132, 252, 0.18);
+                color: #f3e8ff;
+                border: 1px solid rgba(192, 132, 252, 0.50);
+                border-radius: 6px;
+                padding: 7px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: rgba(192, 132, 252, 0.32);
+                border-color: #c084fc;
+                color: #ffffff;
+            }
+        """)
+        btn_all.clicked.connect(lambda: self.execute_apply_gitignore_preset("all"))
+        left_layout.addWidget(btn_all)
+
+        # Sección Variables de Entorno
+        sep_mid = QFrame()
+        sep_mid.setFrameShape(QFrame.HLine)
+        sep_mid.setStyleSheet("color: rgba(255, 255, 255, 0.10); margin-top: 4px; margin-bottom: 4px;")
+        left_layout.addWidget(sep_mid)
+
+        lbl_env = QLabel("🔐 GESTIÓN DE VARIABLES DE ENTORNO (.ENV)")
+        lbl_env.setStyleSheet("font-size: 11px; font-weight: 800; color: #6ee7b7; letter-spacing: 0.5px;")
+        left_layout.addWidget(lbl_env)
+
+        env_btn_box = QHBoxLayout()
+        env_btn_box.setSpacing(6)
+
+        btn_create_env = QPushButton("➕  Crear .env Base")
+        btn_create_env.setCursor(Qt.PointingHandCursor)
+        btn_create_env.setStyleSheet("""
+            QPushButton {
+                background: rgba(16, 185, 129, 0.12);
+                color: #6ee7b7;
+                border: 1px solid rgba(16, 185, 129, 0.35);
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-size: 10.5px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(16, 185, 129, 0.25);
+                border-color: #10b981;
+                color: #ffffff;
+            }
+        """)
+        btn_create_env.clicked.connect(self.execute_create_env_file)
+        env_btn_box.addWidget(btn_create_env)
+
+        btn_gen_example = QPushButton("📋  Generar .env.example")
+        btn_gen_example.setCursor(Qt.PointingHandCursor)
+        btn_gen_example.setStyleSheet("""
+            QPushButton {
+                background: rgba(56, 189, 248, 0.12);
+                color: #7dd3fc;
+                border: 1px solid rgba(56, 189, 248, 0.35);
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-size: 10.5px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(56, 189, 248, 0.25);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_gen_example.clicked.connect(self.execute_generate_env_example)
+        env_btn_box.addWidget(btn_gen_example)
+
+        left_layout.addLayout(env_btn_box)
+
+        # Regla personalizada
+        lbl_custom = QLabel("➕ AGREGAR REGLA PERSONALIZADA")
+        lbl_custom.setStyleSheet("font-size: 10.5px; font-weight: 800; color: #9ca3af; margin-top: 4px;")
+        left_layout.addWidget(lbl_custom)
+
+        custom_row = QHBoxLayout()
+        custom_row.setSpacing(6)
+
+        self.input_s3_custom_rule = QLineEdit()
+        self.input_s3_custom_rule.setPlaceholderText("ej. build/ o *.log o tmp/")
+        self.input_s3_custom_rule.setStyleSheet("""
+            QLineEdit {
+                background: #090a0f;
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 5px;
+                padding: 5px 8px;
+                font-size: 11px;
+            }
+            QLineEdit:focus {
+                border-color: #c084fc;
+            }
+        """)
+        self.input_s3_custom_rule.returnPressed.connect(self.execute_add_custom_rule)
+        custom_row.addWidget(self.input_s3_custom_rule, 1)
+
+        btn_add_rule = QPushButton("Añadir")
+        btn_add_rule.setCursor(Qt.PointingHandCursor)
+        btn_add_rule.setStyleSheet("""
+            QPushButton {
+                background: rgba(192, 132, 252, 0.20);
+                color: #e9d5ff;
+                border: 1px solid #c084fc;
+                border-radius: 5px;
+                padding: 5px 12px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #c084fc;
+                color: #0c0e14;
+            }
+        """)
+        btn_add_rule.clicked.connect(self.execute_add_custom_rule)
+        custom_row.addWidget(btn_add_rule)
+
+        left_layout.addLayout(custom_row)
+        left_layout.addStretch()
+
+        splitter.addWidget(left_panel)
+
+        # Panel Derecho: Visor en vivo de .gitignore
+        right_panel = QFrame()
+        right_panel.setStyleSheet("""
+            QFrame {
+                background: rgba(14, 16, 23, 0.70);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+            }
+        """)
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(12, 10, 12, 10)
+        right_layout.setSpacing(6)
+
+        header_right = QHBoxLayout()
+        lbl_gi_title = QLabel("📄 CONTENIDO ACTIVO DE .GITIGNORE")
+        lbl_gi_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #e9d5ff; letter-spacing: 0.5px;")
+        header_right.addWidget(lbl_gi_title)
+
+        header_right.addStretch()
+
+        btn_open_gi = QPushButton("💻  Abrir en Editor")
+        btn_open_gi.setCursor(Qt.PointingHandCursor)
+        btn_open_gi.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.04);
+                color: #93c5fd;
+                border: 1px solid rgba(147, 197, 253, 0.30);
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(147, 197, 253, 0.20);
+                color: #ffffff;
+            }
+        """)
+        btn_open_gi.clicked.connect(self.open_gitignore_in_editor)
+        header_right.addWidget(btn_open_gi)
+
+        right_layout.addLayout(header_right)
+
+        self.txt_s3_gitignore_content = QTextEdit()
+        self.txt_s3_gitignore_content.setReadOnly(True)
+        self.txt_s3_gitignore_content.setStyleSheet("""
+            QTextEdit {
+                background-color: #08090d;
+                color: #cbd5e1;
+                font-family: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', monospace;
+                font-size: 11px;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 6px;
+                padding: 8px;
+                line-height: 1.4;
+            }
+        """)
+        right_layout.addWidget(self.txt_s3_gitignore_content, 1)
+
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 4)
+
+        layout.addWidget(splitter, 1)
+        return page
+
+    # -----------------------------------------------------------------
+    # SUB-PÁGINA 1: LECTOR DE DOCUMENTACIÓN
+    # -----------------------------------------------------------------
+    def create_sector3_docs_view(self) -> QWidget:
+        """Sub-página interactiva para leer Markdown/Docs del proyecto y generar Changelogs con IA."""
+        page = QWidget()
+        page.setMinimumHeight(350)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        nav = self._create_sector3_nav_bar(1)
+        layout.addLayout(nav)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: rgba(255, 255, 255, 0.08);
+                width: 3px;
+            }
+        """)
+
+        # Panel Izquierdo: Lista de Archivos Markdown & Acciones
+        left_panel = QFrame()
+        left_panel.setStyleSheet("""
+            QFrame {
+                background: rgba(14, 16, 23, 0.70);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+            }
+        """)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(10, 10, 10, 10)
+        left_layout.setSpacing(8)
+
+        left_hdr = QHBoxLayout()
+        lbl_docs_title = QLabel("📑 DOCUMENTOS DETECTADOS")
+        lbl_docs_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #e9d5ff; letter-spacing: 0.5px;")
+        left_hdr.addWidget(lbl_docs_title)
+
+        left_hdr.addStretch()
+
+        btn_ref_docs = QPushButton("🔄")
+        btn_ref_docs.setToolTip("Volver a escanear documentos del proyecto")
+        btn_ref_docs.setCursor(Qt.PointingHandCursor)
+        btn_ref_docs.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.04);
+                color: #d8b4fe;
+                border: 1px solid rgba(192, 132, 252, 0.25);
+                border-radius: 4px;
+                padding: 2px 7px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background: rgba(192, 132, 252, 0.20);
+                color: #ffffff;
+            }
+        """)
+        btn_ref_docs.clicked.connect(self.refresh_sector3_docs_view)
+        left_hdr.addWidget(btn_ref_docs)
+
+        left_layout.addLayout(left_hdr)
+
+        # Scroll área con lista de documentos
+        self.docs_scroll = QScrollArea()
+        self.docs_scroll.setWidgetResizable(True)
+        self.docs_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        self.docs_list_container = QWidget()
+        self.docs_list_layout = QVBoxLayout(self.docs_list_container)
+        self.docs_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.docs_list_layout.setSpacing(4)
+        self.docs_list_layout.addStretch()
+
+        self.docs_scroll.setWidget(self.docs_list_container)
+        left_layout.addWidget(self.docs_scroll, 1)
+
+        # Tarjeta inferior: Generador de Changelog IA
+        ai_box = QFrame()
+        ai_box.setStyleSheet("""
+            QFrame {
+                background: rgba(192, 132, 252, 0.08);
+                border: 1px solid rgba(192, 132, 252, 0.30);
+                border-radius: 6px;
+                padding: 6px;
+            }
+        """)
+        ai_box_layout = QVBoxLayout(ai_box)
+        ai_box_layout.setContentsMargins(8, 6, 8, 6)
+        ai_box_layout.setSpacing(4)
+
+        lbl_ai_cg = QLabel("✨ GENERADOR DE CHANGELOG IA")
+        lbl_ai_cg.setStyleSheet("font-size: 10px; font-weight: 800; color: #e9d5ff;")
+        ai_box_layout.addWidget(lbl_ai_cg)
+
+        lbl_ai_cg_sub = QLabel("Sintetiza los últimos 15 commits en un changelog estructurado.")
+        lbl_ai_cg_sub.setWordWrap(True)
+        lbl_ai_cg_sub.setStyleSheet("font-size: 9.5px; color: #9ca3af;")
+        ai_box_layout.addWidget(lbl_ai_cg_sub)
+
+        self.btn_gen_changelog = QPushButton("✨  Generar Changelog con IA")
+        self.btn_gen_changelog.setCursor(Qt.PointingHandCursor)
+        self.btn_gen_changelog.setStyleSheet("""
+            QPushButton {
+                background: rgba(192, 132, 252, 0.22);
+                color: #f3e8ff;
+                border: 1px solid #c084fc;
+                border-radius: 5px;
+                padding: 5px 10px;
+                font-size: 10.5px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #c084fc;
+                color: #0f1117;
+            }
+        """)
+        self.btn_gen_changelog.clicked.connect(self.execute_generate_ai_changelog)
+        ai_box_layout.addWidget(self.btn_gen_changelog)
+
+        left_layout.addWidget(ai_box)
+        splitter.addWidget(left_panel)
+
+        # Panel Derecho: Visor de Documentación
+        right_panel = QFrame()
+        right_panel.setStyleSheet("""
+            QFrame {
+                background: rgba(14, 16, 23, 0.70);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+            }
+        """)
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(12, 10, 12, 10)
+        right_layout.setSpacing(6)
+
+        hdr_doc = QHBoxLayout()
+        self.lbl_s3_selected_doc = QLabel("📖  Ningún documento seleccionado")
+        self.lbl_s3_selected_doc.setStyleSheet("font-size: 11.5px; font-weight: 800; color: #e9d5ff;")
+        hdr_doc.addWidget(self.lbl_s3_selected_doc, 1)
+
+        self.btn_s3_toggle_doc_mode = QPushButton("📝  Ver Código Fuente")
+        self.btn_s3_toggle_doc_mode.setCursor(Qt.PointingHandCursor)
+        self.btn_s3_toggle_doc_mode.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.05);
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
+            }
+        """)
+        self.btn_s3_toggle_doc_mode.clicked.connect(self.toggle_doc_view_mode)
+        hdr_doc.addWidget(self.btn_s3_toggle_doc_mode)
+
+        self.btn_s3_doc_editor = QPushButton("💻  Abrir en Editor")
+        self.btn_s3_doc_editor.setCursor(Qt.PointingHandCursor)
+        self.btn_s3_doc_editor.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.05);
+                color: #93c5fd;
+                border: 1px solid rgba(147, 197, 253, 0.30);
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(147, 197, 253, 0.20);
+                color: #ffffff;
+            }
+        """)
+        self.btn_s3_doc_editor.clicked.connect(self.open_current_doc_in_editor)
+        hdr_doc.addWidget(self.btn_s3_doc_editor)
+
+        right_layout.addLayout(hdr_doc)
+
+        self.txt_s3_doc_viewer = QTextEdit()
+        self.txt_s3_doc_viewer.setReadOnly(True)
+        self.txt_s3_doc_viewer.setStyleSheet("""
+            QTextEdit {
+                background-color: #08090d;
+                color: #e2e8f0;
+                font-size: 12px;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 6px;
+                padding: 12px;
+                line-height: 1.5;
+            }
+        """)
+        right_layout.addWidget(self.txt_s3_doc_viewer, 1)
+
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 5)
+
+        layout.addWidget(splitter, 1)
+
+        # Variables internas de estado
+        self._current_doc_path = ""
+        self._current_doc_raw_content = ""
+        self._doc_is_rendered = True
+
+        return page
+
+    # -----------------------------------------------------------------
+    # SUB-PÁGINA 2: UTILIDADES IA & OLLAMA LOCAL
+    # -----------------------------------------------------------------
+    def create_sector3_ai_view(self) -> QWidget:
+        """Sub-página interactiva para auditoría de historial reciente y consultas directas a Ollama."""
+        page = QWidget()
+        page.setMinimumHeight(350)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        nav = self._create_sector3_nav_bar(2)
+        layout.addLayout(nav)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: rgba(255, 255, 255, 0.08);
+                width: 3px;
+            }
+        """)
+
+        # Panel Izquierdo: Telemetría Ollama & Auditoría de Historial
+        left_panel = QFrame()
+        left_panel.setStyleSheet("""
+            QFrame {
+                background: rgba(14, 16, 23, 0.70);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+            }
+        """)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(12, 10, 12, 10)
+        left_layout.setSpacing(10)
+
+        # Bloque Estado Ollama
+        hdr_ol = QHBoxLayout()
+        lbl_ol_title = QLabel("⚡ DEMONIO OLLAMA LOCAL")
+        lbl_ol_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #e9d5ff; letter-spacing: 0.5px;")
+        hdr_ol.addWidget(lbl_ol_title)
+        hdr_ol.addStretch()
+
+        btn_chk_ol = QPushButton("🔄 Comprobar")
+        btn_chk_ol.setCursor(Qt.PointingHandCursor)
+        btn_chk_ol.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.04);
+                color: #d8b4fe;
+                border: 1px solid rgba(192, 132, 252, 0.25);
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(192, 132, 252, 0.20);
+                color: #ffffff;
+            }
+        """)
+        btn_chk_ol.clicked.connect(self.refresh_sector3_ai_view)
+        hdr_ol.addWidget(btn_chk_ol)
+
+        left_layout.addLayout(hdr_ol)
+
+        self.lbl_s3_ol_status = QLabel("Ollama: Comprobando...")
+        self.lbl_s3_ol_status.setStyleSheet("font-size: 11px; font-weight: 700; color: #fbbf24;")
+        left_layout.addWidget(self.lbl_s3_ol_status)
+
+        self.lbl_s3_ol_models = QLabel("Modelos: Escaneando...")
+        self.lbl_s3_ol_models.setWordWrap(True)
+        self.lbl_s3_ol_models.setStyleSheet("font-size: 10px; color: #9ca3af;")
+        left_layout.addWidget(self.lbl_s3_ol_models)
+
+        # Separador
+        sep_ai = QFrame()
+        sep_ai.setFrameShape(QFrame.HLine)
+        sep_ai.setStyleSheet("color: rgba(255, 255, 255, 0.10);")
+        left_layout.addWidget(sep_ai)
+
+        # Bloque Auditoría de Historial Reciente
+        lbl_audit_title = QLabel("🔍 AUDITORÍA DE HISTORIAL RECIENTE")
+        lbl_audit_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #38bdf8; letter-spacing: 0.5px;")
+        left_layout.addWidget(lbl_audit_title)
+
+        lbl_audit_sub = QLabel("Audita el diff acumulado de los últimos commits buscando regresiones o bugs.")
+        lbl_audit_sub.setWordWrap(True)
+        lbl_audit_sub.setStyleSheet("font-size: 10px; color: #9ca3af;")
+        left_layout.addWidget(lbl_audit_sub)
+
+        # Selector de número de commits
+        row_c = QHBoxLayout()
+        lbl_c = QLabel("Commits:")
+        lbl_c.setStyleSheet("font-size: 10.5px; color: #d1d5db;")
+        row_c.addWidget(lbl_c)
+
+        self.combo_s3_audit_count = QComboBox()
+        self.combo_s3_audit_count.addItems(["3 commits recientes (Rápido)", "5 commits recientes (Estándar)", "10 commits recientes (Profundo)"])
+        self.combo_s3_audit_count.setStyleSheet("""
+            QComboBox {
+                background: #090a0f;
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 10.5px;
+            }
+        """)
+        row_c.addWidget(self.combo_s3_audit_count, 1)
+        left_layout.addLayout(row_c)
+
+        # Selector de modelo
+        row_m = QHBoxLayout()
+        lbl_m = QLabel("Modelo:")
+        lbl_m.setStyleSheet("font-size: 10.5px; color: #d1d5db;")
+        row_m.addWidget(lbl_m)
+
+        self.combo_s3_audit_model = QComboBox()
+        self.combo_s3_audit_model.addItems(["Ligero (qwen2.5-coder:7b)", "Pesado (deepseek-r1:8b)"])
+        self.combo_s3_audit_model.setStyleSheet("""
+            QComboBox {
+                background: #090a0f;
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 10.5px;
+            }
+        """)
+        row_m.addWidget(self.combo_s3_audit_model, 1)
+        left_layout.addLayout(row_m)
+
+        self.btn_run_history_audit = QPushButton("🔍  Auditar Historial Reciente")
+        self.btn_run_history_audit.setCursor(Qt.PointingHandCursor)
+        self.btn_run_history_audit.setStyleSheet("""
+            QPushButton {
+                background: rgba(56, 189, 248, 0.18);
+                color: #bae6fd;
+                border: 1px solid #38bdf8;
+                border-radius: 6px;
+                padding: 7px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #38bdf8;
+                color: #07090e;
+            }
+        """)
+        self.btn_run_history_audit.clicked.connect(self.execute_history_ai_audit)
+        left_layout.addWidget(self.btn_run_history_audit)
+
+        left_layout.addStretch()
+        splitter.addWidget(left_panel)
+
+        # Panel Derecho: Consultor Dev Directo & Respuestas
+        right_panel = QFrame()
+        right_panel.setStyleSheet("""
+            QFrame {
+                background: rgba(14, 16, 23, 0.70);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+            }
+        """)
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(12, 10, 12, 10)
+        right_layout.setSpacing(6)
+
+        hdr_cons = QHBoxLayout()
+        lbl_cons_title = QLabel("💬 CONSULTOR TÉCNICO DEV (OLLAMA DIRECT)")
+        lbl_cons_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #e9d5ff; letter-spacing: 0.5px;")
+        hdr_cons.addWidget(lbl_cons_title)
+
+        hdr_cons.addStretch()
+
+        btn_copy_ai = QPushButton("📋  Copiar Respuesta")
+        btn_copy_ai.setCursor(Qt.PointingHandCursor)
+        btn_copy_ai.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.04);
+                color: #d1d5db;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
+            }
+        """)
+        btn_copy_ai.clicked.connect(self.copy_ai_response_to_clipboard)
+        hdr_cons.addWidget(btn_copy_ai)
+
+        right_layout.addLayout(hdr_cons)
+
+        # Chips de prompts rápidos
+        chips_layout = QHBoxLayout()
+        chips_layout.setSpacing(6)
+
+        chips = [
+            ("⚡ Optimizar Snippet", "optimize"),
+            ("🔍 Auditar Sintaxis / Tipado", "syntax"),
+            ("🛡️ Revisar Seguridad", "security"),
+            ("📝 Explicar Código", "explain")
+        ]
+
+        for chip_label, chip_type in chips:
+            btn_chip = QPushButton(chip_label)
+            btn_chip.setCursor(Qt.PointingHandCursor)
+            btn_chip.setStyleSheet("""
+                QPushButton {
+                    background: rgba(192, 132, 252, 0.10);
+                    color: #d8b4fe;
+                    border: 1px solid rgba(192, 132, 252, 0.25);
+                    border-radius: 12px;
+                    padding: 3px 8px;
+                    font-size: 10px;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background: rgba(192, 132, 252, 0.25);
+                    color: #ffffff;
+                }
+            """)
+            btn_chip.clicked.connect(lambda _, t=chip_type: self.set_ai_prompt_template(t))
+            chips_layout.addWidget(btn_chip)
+
+        chips_layout.addStretch()
+        right_layout.addLayout(chips_layout)
+
+        # Input de consulta
+        self.txt_s3_ai_prompt = QTextEdit()
+        self.txt_s3_ai_prompt.setPlaceholderText("Escribe tu consulta de código, error o arquitectura...")
+        self.txt_s3_ai_prompt.setMaximumHeight(70)
+        self.txt_s3_ai_prompt.setStyleSheet("""
+            QTextEdit {
+                background-color: #090a0f;
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                padding: 6px;
+                font-size: 11px;
+            }
+            QTextEdit:focus {
+                border-color: #c084fc;
+            }
+        """)
+        right_layout.addWidget(self.txt_s3_ai_prompt)
+
+        # Fila de control de envío
+        prompt_ctrl_row = QHBoxLayout()
+        prompt_ctrl_row.setSpacing(6)
+
+        lbl_pm = QLabel("Modelo:")
+        lbl_pm.setStyleSheet("font-size: 10.5px; color: #9ca3af;")
+        prompt_ctrl_row.addWidget(lbl_pm)
+
+        self.combo_s3_prompt_model = QComboBox()
+        self.combo_s3_prompt_model.addItems(["Ligero (qwen2.5-coder:7b)", "Pesado (deepseek-r1:8b)"])
+        self.combo_s3_prompt_model.setStyleSheet("""
+            QComboBox {
+                background: #090a0f;
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-size: 10.5px;
+            }
+        """)
+        prompt_ctrl_row.addWidget(self.combo_s3_prompt_model)
+
+        prompt_ctrl_row.addStretch()
+
+        self.btn_s3_consult = QPushButton("🚀  Consultar a Ollama")
+        self.btn_s3_consult.setCursor(Qt.PointingHandCursor)
+        self.btn_s3_consult.setStyleSheet("""
+            QPushButton {
+                background: rgba(192, 132, 252, 0.25);
+                color: #ffffff;
+                border: 1px solid #c084fc;
+                border-radius: 5px;
+                padding: 5px 14px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #c084fc;
+                color: #0f1117;
+            }
+        """)
+        self.btn_s3_consult.clicked.connect(self.execute_quick_ai_consult)
+        prompt_ctrl_row.addWidget(self.btn_s3_consult)
+
+        right_layout.addLayout(prompt_ctrl_row)
+
+        # Cuadro de resultados de IA
+        self.txt_s3_ai_output = QTextEdit()
+        self.txt_s3_ai_output.setReadOnly(True)
+        self.txt_s3_ai_output.setStyleSheet("""
+            QTextEdit {
+                background-color: #08090d;
+                color: #e2e8f0;
+                font-family: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', monospace;
+                font-size: 11px;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 6px;
+                padding: 8px;
+                line-height: 1.45;
+            }
+        """)
+        self.txt_s3_ai_output.setPlaceholderText("Las respuestas de Ollama o los resultados de auditorías aparecerán aquí...")
+        right_layout.addWidget(self.txt_s3_ai_output, 1)
+
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 5)
+
+        layout.addWidget(splitter, 1)
+        return page
+
+    # -----------------------------------------------------------------
+    # CONTROLADORES DE NAVEGACIÓN SECTOR 3
+    # -----------------------------------------------------------------
+    def open_sector3_gitignore_view(self):
+        """Navega a la sub-página de Gitignore y .env."""
+        self.dock_terminal_at_bottom()
+        self.sectors_stack.setCurrentIndex(3)
+        if hasattr(self, "sector3_sub_stack"):
+            self.sector3_sub_stack.setCurrentIndex(0)
+            self.sector3_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.refresh_sector3_gitignore_view()
+        p_name = self.project_data.get("name", "Proyecto")
+        self.terminal_display.log("GITIGNORE", f"Gestor de .gitignore & .env abierto para <b>{p_name}</b>.", tag_color="#c084fc", prefix="🛡️")
+
+    def open_sector3_docs_view(self):
+        """Navega a la sub-página de Lector de Documentación."""
+        self.dock_terminal_at_bottom()
+        self.sectors_stack.setCurrentIndex(3)
+        if hasattr(self, "sector3_sub_stack"):
+            self.sector3_sub_stack.setCurrentIndex(1)
+            self.sector3_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.refresh_sector3_docs_view()
+        p_name = self.project_data.get("name", "Proyecto")
+        self.terminal_display.log("DOCS", f"Lector de Documentación Markdown abierto para <b>{p_name}</b>.", tag_color="#c084fc", prefix="📖")
+
+    def open_sector3_ai_view(self):
+        """Navega a la sub-página de Utilidades IA y Ollama."""
+        self.dock_terminal_at_bottom()
+        self.sectors_stack.setCurrentIndex(3)
+        if hasattr(self, "sector3_sub_stack"):
+            self.sector3_sub_stack.setCurrentIndex(2)
+            self.sector3_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.refresh_sector3_ai_view()
+        p_name = self.project_data.get("name", "Proyecto")
+        self.terminal_display.log("IA", f"Utilidades IA & Ollama abiertas para <b>{p_name}</b>.", tag_color="#c084fc", prefix="🤖")
+
+    # -----------------------------------------------------------------
+    # MÉTODOS DE REFRESH Y ACCIÓN SECTOR 3
+    # -----------------------------------------------------------------
+    def refresh_sector3_gitignore_view(self):
+        """Actualiza la telemetría de .gitignore y .env y lee el contenido actual."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        status = inspect_gitignore_and_env(p_path)
+
+        # Telemetría .gitignore
+        if status["has_gitignore"]:
+            self.lbl_s3_gi_stat.setText(f"🛡️ .gitignore: {status['rules_count']} reglas activas")
+            self.lbl_s3_gi_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #a7f3d0;")
+        else:
+            self.lbl_s3_gi_stat.setText("🛡️ .gitignore: No existe")
+            self.lbl_s3_gi_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #f87171;")
+
+        # Telemetría .env
+        if not status["has_env"]:
+            self.lbl_s3_env_stat.setText("🔐 .env: No existe")
+            self.lbl_s3_env_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #9ca3af;")
+        elif status["env_is_ignored"]:
+            self.lbl_s3_env_stat.setText("🔐 .env: Presente y Protegido ✅")
+            self.lbl_s3_env_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #34d399;")
+        else:
+            self.lbl_s3_env_stat.setText("🔐 .env: Presente (¡SIN PROTEGER! ⚠️)")
+            self.lbl_s3_env_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #f87171;")
+
+        # Telemetría .env.example
+        if status["has_env_example"]:
+            self.lbl_s3_example_stat.setText("📋 .env.example: Presente")
+            self.lbl_s3_example_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #6ee7b7;")
+        else:
+            self.lbl_s3_example_stat.setText("📋 .env.example: Ausente")
+            self.lbl_s3_example_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #9ca3af;")
+
+        # Cargar contenido de .gitignore
+        gi_file = os.path.join(p_path, ".gitignore")
+        if os.path.isfile(gi_file):
+            try:
+                with open(gi_file, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                self.txt_s3_gitignore_content.setPlainText(content)
+            except Exception as e:
+                self.txt_s3_gitignore_content.setPlainText(f"Error al leer .gitignore: {str(e)}")
+        else:
+            self.txt_s3_gitignore_content.setPlainText("# No existe archivo .gitignore en este proyecto.\n# Usa las plantillas inteligentes de la izquierda para crear uno al instante.")
+
+    def execute_apply_gitignore_preset(self, preset_type: str):
+        """Aplica un preset al archivo .gitignore en segundo plano."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        self.terminal_display.log("GITIGNORE", f"Aplicando preset de exclusión: <b>{preset_type.upper()}</b>...", tag_color="#c084fc", prefix="⚡")
+        self.s3_worker = Sector3WorkerThread("apply_preset", project_path=p_path, extra_data=preset_type)
+        self.s3_worker.finished_task.connect(self.on_sector3_task_finished)
+        self.s3_worker.start()
+
+    def execute_add_custom_rule(self):
+        """Añade una regla individual escrita por el usuario al .gitignore."""
+        rule = self.input_s3_custom_rule.text().strip()
+        if not rule:
+            return
+
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        self.input_s3_custom_rule.clear()
+        self.terminal_display.log("GITIGNORE", f"Agregando regla: <code>{rule}</code>...", tag_color="#c084fc", prefix="➕")
+        self.s3_worker = Sector3WorkerThread("add_rule", project_path=p_path, extra_data=rule)
+        self.s3_worker.finished_task.connect(self.on_sector3_task_finished)
+        self.s3_worker.start()
+
+    def execute_create_env_file(self):
+        """Crea el archivo .env base y asegura su protección en .gitignore."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        self.terminal_display.log("ENV", "Creando plantilla de variables de entorno <code>.env</code>...", tag_color="#34d399", prefix="🔐")
+        self.s3_worker = Sector3WorkerThread("create_env", project_path=p_path)
+        self.s3_worker.finished_task.connect(self.on_sector3_task_finished)
+        self.s3_worker.start()
+
+    def execute_generate_env_example(self):
+        """Genera el archivo .env.example anonimizado a partir de .env."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        self.terminal_display.log("ENV", "Generando plantilla segura <code>.env.example</code> anonimizada...", tag_color="#38bdf8", prefix="📋")
+        self.s3_worker = Sector3WorkerThread("generate_env_example", project_path=p_path)
+        self.s3_worker.finished_task.connect(self.on_sector3_task_finished)
+        self.s3_worker.start()
+
+    def open_gitignore_in_editor(self):
+        """Abre el archivo .gitignore en el editor de código preferido."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        gi_file = os.path.join(p_path, ".gitignore")
+        if not os.path.isfile(gi_file):
+            self.terminal_display.log_warn("GITIGNORE", "El archivo .gitignore no existe aún.")
+            return
+
+        launch_project_in_editor(gi_file)
+        self.terminal_display.log("IDE", "Abriendo <code>.gitignore</code> en tu editor...", tag_color="#10b981", prefix="💻")
+
+    def refresh_sector3_docs_view(self):
+        """Escanea los archivos Markdown y de documentación del proyecto y los lista."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        # Limpiar lista anterior
+        while self.docs_list_layout.count() > 1:
+            item = self.docs_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        docs = scan_project_documentation(p_path)
+        if not docs:
+            empty_lbl = QLabel("No se encontraron archivos de documentación (*.md, README, etc.).")
+            empty_lbl.setStyleSheet("font-size: 10.5px; color: #9ca3af; padding: 8px;")
+            self.docs_list_layout.insertWidget(0, empty_lbl)
+            return
+
+        for doc_item in docs:
+            card = QPushButton(f"📄  {doc_item['name']}\n    {doc_item['rel_path']} ({doc_item['size_kb']} KB)")
+            card.setCursor(Qt.PointingHandCursor)
+            card.setStyleSheet("""
+                QPushButton {
+                    background: rgba(255, 255, 255, 0.03);
+                    color: #e5e7eb;
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 5px;
+                    padding: 6px 8px;
+                    text-align: left;
+                    font-size: 10.5px;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background: rgba(192, 132, 252, 0.15);
+                    border-color: #c084fc;
+                    color: #ffffff;
+                }
+            """)
+            card.clicked.connect(lambda _, p=doc_item['path']: self.on_doc_file_selected(p))
+            self.docs_list_layout.insertWidget(self.docs_list_layout.count() - 1, card)
+
+        # Si hay documentos y ninguno está cargado, cargar el primero automáticamente
+        if docs and not self._current_doc_path:
+            self.on_doc_file_selected(docs[0]['path'])
+
+    def on_doc_file_selected(self, file_path: str):
+        """Carga y muestra el contenido del archivo de documentación seleccionado."""
+        self._current_doc_path = file_path
+        self._current_doc_raw_content = read_markdown_file(file_path)
+        filename = os.path.basename(file_path)
+        self.lbl_s3_selected_doc.setText(f"📖  {filename}")
+
+        if self._doc_is_rendered:
+            self.txt_s3_doc_viewer.setMarkdown(self._current_doc_raw_content)
+            self.btn_s3_toggle_doc_mode.setText("📝  Ver Código Fuente")
+        else:
+            self.txt_s3_doc_viewer.setPlainText(self._current_doc_raw_content)
+            self.btn_s3_toggle_doc_mode.setText("👁️  Ver Renderizado")
+
+    def toggle_doc_view_mode(self):
+        """Alterna entre vista renderizada con markdown y texto plano del documento."""
+        if not self._current_doc_path:
+            return
+
+        self._doc_is_rendered = not self._doc_is_rendered
+        if self._doc_is_rendered:
+            self.txt_s3_doc_viewer.setMarkdown(self._current_doc_raw_content)
+            self.btn_s3_toggle_doc_mode.setText("📝  Ver Código Fuente")
+        else:
+            self.txt_s3_doc_viewer.setPlainText(self._current_doc_raw_content)
+            self.btn_s3_toggle_doc_mode.setText("👁️  Ver Renderizado")
+
+    def open_current_doc_in_editor(self):
+        """Abre el archivo de documentación activo en el editor configurado."""
+        if not self._current_doc_path or not os.path.isfile(self._current_doc_path):
+            self.terminal_display.log_warn("DOCS", "No hay ningún documento abierto para editar.")
+            return
+
+        launch_project_in_editor(self._current_doc_path)
+        filename = os.path.basename(self._current_doc_path)
+        self.terminal_display.log("IDE", f"Abriendo <code>{filename}</code> en tu editor...", tag_color="#10b981", prefix="💻")
+
+    def execute_generate_ai_changelog(self):
+        """Lanza la generación de un changelog estructurado con IA."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        self.btn_gen_changelog.setEnabled(False)
+        self.btn_gen_changelog.setText("⏳ Generando...")
+        self.terminal_display.log("IA", "Analizando los últimos 15 commits para generar el Changelog con Ollama...", tag_color="#c084fc", prefix="✨")
+
+        self.s3_worker = Sector3WorkerThread("generate_changelog", project_path=p_path, extra_data=15)
+        self.s3_worker.finished_task.connect(self.on_sector3_task_finished)
+        self.s3_worker.start()
+
+    def refresh_sector3_ai_view(self):
+        """Comprueba el estado del demonio Ollama y los modelos instalados."""
+        status = check_ollama_status()
+        if status["online"]:
+            self.lbl_s3_ol_status.setText("Ollama: ● En línea (http://localhost:11434)")
+            self.lbl_s3_ol_status.setStyleSheet("font-size: 11px; font-weight: 700; color: #34d399;")
+            models_str = ", ".join(status["models"]) if status["models"] else "Sin modelos detectados"
+            self.lbl_s3_ol_models.setText(f"Modelos disponibles: {models_str}")
+            self.lbl_s3_ol_models.setStyleSheet("font-size: 10px; color: #e5e7eb;")
+        else:
+            self.lbl_s3_ol_status.setText("Ollama: ○ Desconectado / Sin respuesta")
+            self.lbl_s3_ol_status.setStyleSheet("font-size: 11px; font-weight: 700; color: #f87171;")
+            self.lbl_s3_ol_models.setText("Asegúrate de que 'ollama serve' esté en ejecución en localhost:11434.")
+            self.lbl_s3_ol_models.setStyleSheet("font-size: 10px; color: #fca5a5;")
+
+    def execute_history_ai_audit(self):
+        """Ejecuta una auditoría con IA sobre el diff acumulado de commits recientes."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        idx_c = self.combo_s3_audit_count.currentIndex()
+        count = 3 if idx_c == 0 else (5 if idx_c == 1 else 10)
+
+        idx_m = self.combo_s3_audit_model.currentIndex()
+        model_choice = "light" if idx_m == 0 else "heavy"
+
+        self.btn_run_history_audit.setEnabled(False)
+        self.btn_run_history_audit.setText("⏳ Auditando con IA...")
+        self.txt_s3_ai_output.setPlainText(f"Auditoría iniciada sobre los últimos {count} commits usando modelo {model_choice}...\nAnalizando diff acumulado con Ollama...")
+
+        self.terminal_display.log("IA", f"Lanzando auditoría de {count} commits recientes con modelo <b>{model_choice}</b>...", tag_color="#38bdf8", prefix="🔍")
+        self.s3_worker = Sector3WorkerThread("history_audit", project_path=p_path, extra_data={"count": count, "model_choice": model_choice})
+        self.s3_worker.finished_task.connect(self.on_sector3_task_finished)
+        self.s3_worker.start()
+
+    def execute_quick_ai_consult(self):
+        """Envía la consulta técnica escrita a Ollama."""
+        prompt = self.txt_s3_ai_prompt.toPlainText().strip()
+        if not prompt:
+            self.terminal_display.log_warn("IA", "Escribe una consulta antes de enviar.")
+            return
+
+        idx_m = self.combo_s3_prompt_model.currentIndex()
+        model_choice = "light" if idx_m == 0 else "heavy"
+
+        self.btn_s3_consult.setEnabled(False)
+        self.btn_s3_consult.setText("⏳ Pensando...")
+        self.txt_s3_ai_output.setPlainText(f"Consultando a Ollama ({model_choice})...\nGenerando respuesta...")
+
+        self.terminal_display.log("IA", f"Consultando a Ollama (modelo: {model_choice})...", tag_color="#c084fc", prefix="🚀")
+        system_instruction = "Eres un asistente de desarrollo experto integrado en el entorno de desarrollo Abraxas (Lumen). Proporciona respuestas técnicas concisas, precisas y snippets listos para producción."
+
+        self.s3_worker = Sector3WorkerThread("ai_consult", extra_data={"prompt": prompt, "model_choice": model_choice, "system": system_instruction})
+        self.s3_worker.finished_task.connect(self.on_sector3_task_finished)
+        self.s3_worker.start()
+
+    def set_ai_prompt_template(self, template_type: str):
+        """Inserta una plantilla de prompt rápida en el cuadro de texto."""
+        templates = {
+            "optimize": "Por favor revisa el siguiente snippet y sugiere optimizaciones de rendimiento y legibilidad:\n\n```python\n# Pega tu código aquí\n```",
+            "syntax": "Por favor revisa el siguiente código y detecta posibles errores de sintaxis, typing o lógica:\n\n```python\n# Pega tu código aquí\n```",
+            "security": "Realiza un análisis de seguridad sobre las siguientes funciones, identificando posibles inyecciones, fugas de memoria o vulnerabilidades:\n\n```python\n# Pega tu código aquí\n```",
+            "explain": "Explica de forma didáctica y concisa qué hace exactamente el siguiente bloque de código y sus casos borde:\n\n```python\n# Pega tu código aquí\n```"
+        }
+        text = templates.get(template_type, "")
+        if text:
+            self.txt_s3_ai_prompt.setPlainText(text)
+            self.txt_s3_ai_prompt.setFocus()
+
+    def copy_ai_response_to_clipboard(self):
+        """Copia el texto del visor de respuestas de IA al portapapeles."""
+        text = self.txt_s3_ai_output.toPlainText().strip()
+        if not text:
+            return
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text)
+        self.terminal_display.log_success("CLIPBOARD", "Respuesta de IA copiada al portapapeles.")
+
+    def on_sector3_task_finished(self, success: bool, action_type: str, message: str, data: object):
+        """Callback invocado cuando una tarea de Sector 3 finaliza en su hilo de trabajo."""
+        # Restaurar botones
+        if hasattr(self, "btn_gen_changelog"):
+            self.btn_gen_changelog.setEnabled(True)
+            self.btn_gen_changelog.setText("✨  Generar Changelog con IA")
+        if hasattr(self, "btn_run_history_audit"):
+            self.btn_run_history_audit.setEnabled(True)
+            self.btn_run_history_audit.setText("🔍  Auditar Historial Reciente")
+        if hasattr(self, "btn_s3_consult"):
+            self.btn_s3_consult.setEnabled(True)
+            self.btn_s3_consult.setText("🚀  Consultar a Ollama")
+
+        # Registro en terminal y actualización de vista
+        if action_type in ["GITIGNORE-PRESET", "GITIGNORE-RULE", "ENV-CREATE", "ENV-EXAMPLE"]:
+            if success:
+                self.terminal_display.log_success(action_type, message)
+            else:
+                self.terminal_display.log_error(action_type, message)
+            self.refresh_sector3_gitignore_view()
+
+        elif action_type == "AI-CHANGELOG":
+            if success:
+                self.terminal_display.log_success(action_type, "Changelog generado e integrado exitosamente.")
+                self.refresh_sector3_docs_view()
+                # Abrir CHANGELOG.md si existe
+                p_path = self.project_data.get("path", "")
+                cg_path = os.path.join(p_path, "CHANGELOG.md")
+                if os.path.isfile(cg_path):
+                    self.on_doc_file_selected(cg_path)
+            else:
+                self.terminal_display.log_error(action_type, f"Fallo al generar changelog: {message}")
+
+        elif action_type == "AI-AUDIT":
+            if success and data:
+                self.terminal_display.log_success(action_type, "Auditoría de historial completada exitosamente.")
+                self.txt_s3_ai_output.setPlainText(str(data))
+            else:
+                self.terminal_display.log_error(action_type, f"Error en auditoría: {message}")
+                self.txt_s3_ai_output.setPlainText(f"Error durante la auditoría:\n{message}")
+
+        elif action_type == "AI-CONSULT":
+            if success and data:
+                self.terminal_display.log_success(action_type, "Respuesta recibida de Ollama.")
+                self.txt_s3_ai_output.setPlainText(str(data))
+            else:
+                self.terminal_display.log_error(action_type, f"Error en consulta: {message}")
+                self.txt_s3_ai_output.setPlainText(f"Error al consultar Ollama:\n{message}")
+
     def create_simple_sector_view(self, title: str, accent_color: str, actions: list) -> QFrame:
         """Crea una ventana dedicada y limpia para un sector específico con diseño consistente."""
         card = QFrame()
@@ -4232,6 +5644,9 @@ class LumenProjectWorkspaceView(QWidget):
             self.sector1_sub_stack.setCurrentIndex(0)
         if sector_idx == 2 and hasattr(self, "sector2_sub_stack"):
             self.sector2_sub_stack.setCurrentIndex(0)
+        if sector_idx == 3 and hasattr(self, "sector3_sub_stack"):
+            self.sector3_sub_stack.setCurrentIndex(0)
+            self.refresh_sector3_gitignore_view()
         if hasattr(self, "btn_toggle_graph_terminal"):
             self.btn_toggle_graph_terminal.setVisible(False)
         if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 1:
@@ -4241,7 +5656,7 @@ class LumenProjectWorkspaceView(QWidget):
     def open_sector_and_handle(self, sector_idx: int, sector_title: str, action_title: str):
         """Abre la ventana del sector o ejecuta la acción seleccionada."""
         if not getattr(self, "is_project_git", True):
-            if sector_idx in (1, 3):
+            if sector_idx == 1:
                 self.open_sector_view(sector_idx, sector_title)
                 return
 
@@ -4270,6 +5685,16 @@ class LumenProjectWorkspaceView(QWidget):
                 self.open_sector2_docker_view()
             else:
                 self.open_sector_view(2, "Sector 2: Entornos & Run")
+        elif sector_idx == 3:
+            act_lower = action_title.lower()
+            if "gitignore" in act_lower or "env" in act_lower:
+                self.open_sector3_gitignore_view()
+            elif "documentaci" in act_lower or "lector" in act_lower or "readme" in act_lower:
+                self.open_sector3_docs_view()
+            elif "ia" in act_lower or "utilidad" in act_lower or "ollama" in act_lower:
+                self.open_sector3_ai_view()
+            else:
+                self.open_sector3_gitignore_view()
         else:
             self.open_sector_view(sector_idx, sector_title)
             self.handle_action_click(action_title)
@@ -7426,6 +8851,8 @@ class LumenProjectWorkspaceView(QWidget):
             self.sector1_sub_stack.setCurrentIndex(0)
         if hasattr(self, "sector2_sub_stack"):
             self.sector2_sub_stack.setCurrentIndex(0)
+        if hasattr(self, "sector3_sub_stack"):
+            self.sector3_sub_stack.setCurrentIndex(0)
         if hasattr(self, "btn_toggle_graph_terminal"):
             self.btn_toggle_graph_terminal.setVisible(False)
         if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 1:
