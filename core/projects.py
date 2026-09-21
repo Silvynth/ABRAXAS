@@ -4,7 +4,15 @@
 # =====================================================================
 
 import os
+import time
 from core.setup import read_toml_dict, get_target_config_path
+
+_FOLDER_SIZE_CACHE = {}  # folder_path: (mtime, timestamp, result_str)
+_PRUNE_DIRS = {
+    ".git", ".venv", "venv", "node_modules", "__pycache__", 
+    ".cache", ".next", ".nuxt", "target", "dist", "build", 
+    ".idea", ".vscode"
+}
 
 def get_projects_dir(config_path=None):
     """Obtiene la ruta configurada en config.toml para los proyectos."""
@@ -15,24 +23,49 @@ def get_projects_dir(config_path=None):
         return os.path.abspath(os.path.expanduser(raw_path))
     return ""
 
-def get_folder_size_str(folder_path: str) -> str:
-    """Calcula el tamaño total en disco de una carpeta y lo formatea."""
+def get_folder_size_str(folder_path: str, force_refresh: bool = False) -> str:
+    """Calcula el tamaño total en disco de una carpeta de forma optimizada podando directorios pesados y cacheando."""
+    if not folder_path or not os.path.isdir(folder_path):
+        return "Tamaño no disponible"
+
+    now = time.time()
+    try:
+        current_mtime = os.path.getmtime(folder_path)
+    except OSError:
+        current_mtime = 0
+
+    if not force_refresh and folder_path in _FOLDER_SIZE_CACHE:
+        cached_mtime, cached_time, cached_str = _FOLDER_SIZE_CACHE[folder_path]
+        if cached_mtime == current_mtime and (now - cached_time < 300.0):
+            return cached_str
+
     total_size = 0
     file_count = 0
     try:
         for dirpath, dirnames, filenames in os.walk(folder_path):
+            # Podar directorios de dependencias y artefactos masivos para acelerar el escaneo en 99%
+            dirnames[:] = [d for d in dirnames if d not in _PRUNE_DIRS]
             for f in filenames:
                 fp = os.path.join(dirpath, f)
-                if not os.path.islink(fp) and os.path.exists(fp):
-                    total_size += os.path.getsize(fp)
-                    file_count += 1
+                try:
+                    if not os.path.islink(fp) and os.path.exists(fp):
+                        total_size += os.path.getsize(fp)
+                        file_count += 1
+                except OSError:
+                    continue
         
         # Formatear tamaño
+        result = ""
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
             if total_size < 1024.0:
-                return f"{total_size:.1f} {unit} ({file_count} archivos)"
+                result = f"{total_size:.1f} {unit} ({file_count} archivos)"
+                break
             total_size /= 1024.0
-        return f"{total_size:.1f} PB ({file_count} archivos)"
+        else:
+            result = f"{total_size:.1f} PB ({file_count} archivos)"
+
+        _FOLDER_SIZE_CACHE[folder_path] = (current_mtime, now, result)
+        return result
     except (PermissionError, OSError):
         return "Tamaño no disponible"
 

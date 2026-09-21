@@ -5,10 +5,23 @@
 
 import os
 import json
+import time
 import subprocess
 import urllib.request
 import urllib.error
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Any
+
+_REPO_VISIBILITY_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_REPO_VISIBILITY_TTL: float = 300.0  # 5 minutos
+
+def invalidate_repo_visibility_cache(project_path: str = None):
+    """Invalida la caché de visibilidad para un proyecto o para todos."""
+    global _REPO_VISIBILITY_CACHE
+    if project_path:
+        _REPO_VISIBILITY_CACHE.pop(project_path, None)
+    else:
+        _REPO_VISIBILITY_CACHE.clear()
+
 
 def check_gh_cli_authenticated() -> Tuple[bool, str]:
     """Verifica si la herramienta oficial de GitHub ('gh') está instalada y autenticada."""
@@ -193,8 +206,9 @@ def pull_repository(repo_path: str) -> str:
     return proc.stdout.strip()
 
 
-def get_repo_visibility(project_path: str) -> Dict[str, Any]:
-    """Determina si el proyecto tiene remoto en GitHub y consulta si es Público o Privado."""
+def get_repo_visibility(project_path: str, force_refresh: bool = False) -> Dict[str, Any]:
+    """Determina si el proyecto tiene remoto en GitHub y consulta si es Público o Privado.
+    Utiliza caché en memoria para evitar latencias de red en cada consulta repetida."""
     if not project_path or not os.path.exists(os.path.join(project_path, ".git")):
         return {
             "has_remote": False,
@@ -205,6 +219,12 @@ def get_repo_visibility(project_path: str) -> Dict[str, Any]:
             "badge": "⚪ Sin Git"
         }
 
+    now = time.time()
+    if not force_refresh and project_path in _REPO_VISIBILITY_CACHE:
+        cached_time, cached_val = _REPO_VISIBILITY_CACHE[project_path]
+        if (now - cached_time) < _REPO_VISIBILITY_TTL:
+            return cached_val
+
     # 1. Obtener URL remota
     try:
         proc = subprocess.run(
@@ -212,14 +232,14 @@ def get_repo_visibility(project_path: str) -> Dict[str, Any]:
             cwd=project_path,
             capture_output=True,
             text=True,
-            timeout=3
+            timeout=2
         )
         url = proc.stdout.strip() if proc.returncode == 0 else ""
     except Exception:
         url = ""
 
     if not url:
-        return {
+        res = {
             "has_remote": False,
             "is_github": False,
             "visibility": "LOCAL",
@@ -227,10 +247,12 @@ def get_repo_visibility(project_path: str) -> Dict[str, Any]:
             "text": "Solo Local",
             "badge": "🔒 Solo Local"
         }
+        _REPO_VISIBILITY_CACHE[project_path] = (now, res)
+        return res
 
     is_github = "github.com" in url
     if not is_github:
-        return {
+        res = {
             "has_remote": True,
             "is_github": False,
             "visibility": "REMOTE",
@@ -238,22 +260,24 @@ def get_repo_visibility(project_path: str) -> Dict[str, Any]:
             "text": "Remoto Externo",
             "badge": "🌐 Externo"
         }
+        _REPO_VISIBILITY_CACHE[project_path] = (now, res)
+        return res
 
-    # 2. Consultar visibilidad exacta en GitHub vía gh CLI
+    # 2. Consultar visibilidad exacta en GitHub vía gh CLI (con timeout estricto de 3s)
     try:
         gh_proc = subprocess.run(
             ["gh", "repo", "view", "--json", "isPrivate,visibility,nameWithOwner"],
             cwd=project_path,
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=3
         )
         if gh_proc.returncode == 0 and gh_proc.stdout.strip():
             data = json.loads(gh_proc.stdout)
             is_priv = data.get("isPrivate", False)
             vis = "private" if is_priv else "public"
             badge = "🔒 Privado" if is_priv else "🌐 Público"
-            return {
+            res = {
                 "has_remote": True,
                 "is_github": True,
                 "is_private": is_priv,
@@ -262,10 +286,12 @@ def get_repo_visibility(project_path: str) -> Dict[str, Any]:
                 "badge": badge,
                 "repo_name": data.get("nameWithOwner", "")
             }
+            _REPO_VISIBILITY_CACHE[project_path] = (now, res)
+            return res
     except Exception:
         pass
 
-    return {
+    res = {
         "has_remote": True,
         "is_github": True,
         "is_private": None,
@@ -273,6 +299,8 @@ def get_repo_visibility(project_path: str) -> Dict[str, Any]:
         "text": "GitHub",
         "badge": "🌐 GitHub"
     }
+    _REPO_VISIBILITY_CACHE[project_path] = (now, res)
+    return res
 
 
 def change_repo_visibility(project_path: str, target_visibility: str) -> Tuple[bool, str]:
@@ -288,6 +316,7 @@ def change_repo_visibility(project_path: str, target_visibility: str) -> Tuple[b
         cmd = ["gh", "repo", "edit", "--visibility", target, "--accept-visibility-change-consequences"]
         proc = subprocess.run(cmd, cwd=project_path, capture_output=True, text=True, timeout=20)
         if proc.returncode == 0:
+            invalidate_repo_visibility_cache(project_path)
             label = "PÚBLICO" if target == "public" else "PRIVADO"
             return True, f"Visibilidad del repositorio cambiada a {label} exitosamente en GitHub."
         err = proc.stderr.strip() or proc.stdout.strip()

@@ -6349,6 +6349,13 @@ class LumenProjectWorkspaceView(QWidget):
                     "Este proyecto no posee un repositorio Git inicializado. Los sectores 1 y 3 están restringidos. Pulsa <b>'Iniciar Proyecto Git'</b> en el Sector 1 para activarlo."
                 )
 
+        # 6. Sincronización y refresco automático del visor de grafo y terminal
+        self.refresh_git_graph()
+
+        if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 1:
+            self.lbl_t_title.setText(f"lumen-git-network@{p_name_clean}:~$")
+            self.lbl_t_status.setText("🌐 GRAFO DE RAMAS [GITHUB NETWORK]")
+
     def refresh_current_project(self, reset_terminal: bool = False):
         """Re-sincroniza el proyecto actual con el disco."""
         if self.project_data:

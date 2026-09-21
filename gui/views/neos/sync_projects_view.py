@@ -18,6 +18,26 @@ from core.github import (
     clone_repository, pull_repository
 )
 
+class GithubDetectWorker(QThread):
+    """Hilo para verificar autenticación y obtener repositorios vía gh CLI en segundo plano sin congelar la GUI."""
+    finished = Signal(bool, str, list, str) # is_auth, auth_msg, repos_data, error_msg
+
+    def run(self):
+        try:
+            is_auth, msg = check_gh_cli_authenticated()
+            if is_auth:
+                try:
+                    repos = fetch_repos_gh_cli()
+                    self.finished.emit(True, msg, repos, "")
+                    return
+                except Exception as e:
+                    self.finished.emit(True, msg, [], str(e))
+                    return
+            self.finished.emit(False, msg, [], "")
+        except Exception as e:
+            self.finished.emit(False, "", [], str(e))
+
+
 class GitActionWorker(QThread):
     """Hilo para clonar o hacer pull de repositorios en segundo plano sin congelar la GUI."""
     finished = Signal(bool, str, str) # success, message, target_dir
@@ -143,6 +163,7 @@ class SyncProjectsView(QWidget):
         self.repos_data = []
         self.card_widgets = []
         self.worker = None
+        self.detect_worker = None
 
         self.init_ui()
         self.detect_and_load_github()
@@ -245,23 +266,30 @@ class SyncProjectsView(QWidget):
         root_layout.addWidget(self.scroll_area, 1)
 
     def detect_and_load_github(self):
-        """Intenta cargar primero vía GitHub CLI 'gh' si está autenticado; de lo contrario pide usuario/token."""
+        """Carga en segundo plano vía GitHub CLI 'gh' sin congelar la interfaz."""
         self.lbl_status.setVisible(False)
-        is_auth, msg = check_gh_cli_authenticated()
-        
-        if is_auth:
-            self.lbl_auth_status.setText(f"✅ Conectado a GitHub CLI ({msg})")
-            self.lbl_auth_status.setStyleSheet("font-weight: 600; font-size: 12px; color: #10b981;")
-            try:
-                self.repos_data = fetch_repos_gh_cli()
-                self.render_repos_list()
-                return
-            except Exception as e:
-                self.lbl_status.setText(f"⚠️ {e}")
-                self.lbl_status.setVisible(True)
+        self.lbl_auth_status.setText("🔍 Conectando con GitHub CLI...")
+        self.lbl_auth_status.setStyleSheet("font-weight: 600; font-size: 12px; color: #c084fc;")
 
-        self.lbl_auth_status.setText("ℹ Ingresa tu usuario o Token de GitHub para explorar tus repositorios:")
-        self.lbl_auth_status.setStyleSheet("font-weight: 600; font-size: 12px; color: #9ca3af;")
+        if self.detect_worker and self.detect_worker.isRunning():
+            return
+
+        self.detect_worker = GithubDetectWorker(self)
+        self.detect_worker.finished.connect(self._on_detect_finished)
+        self.detect_worker.start()
+
+    def _on_detect_finished(self, is_auth: bool, auth_msg: str, repos_data: list, err_msg: str):
+        if is_auth:
+            self.lbl_auth_status.setText(f"✅ Conectado a GitHub CLI ({auth_msg})")
+            self.lbl_auth_status.setStyleSheet("font-weight: 600; font-size: 12px; color: #10b981;")
+            if err_msg:
+                self.lbl_status.setText(f"⚠️ {err_msg}")
+                self.lbl_status.setVisible(True)
+            self.repos_data = repos_data
+            self.render_repos_list()
+        else:
+            self.lbl_auth_status.setText("ℹ Ingresa tu usuario o Token de GitHub para explorar tus repositorios:")
+            self.lbl_auth_status.setStyleSheet("font-weight: 600; font-size: 12px; color: #9ca3af;")
 
     def load_from_input(self):
         query = self.txt_github_user.text().strip()
