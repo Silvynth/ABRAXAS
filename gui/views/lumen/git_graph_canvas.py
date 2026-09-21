@@ -279,6 +279,7 @@ class LumenHorizontalGitGraphView(QGraphicsView):
 
     commit_selected = Signal(str)      # Emite el hash corto del commit seleccionado
     checkout_requested = Signal(str)   # Emite el nombre de la rama o hash para checkout
+    branches_updated = Signal(list, list) # Emite (selected_branches, available_branches)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -294,7 +295,7 @@ class LumenHorizontalGitGraphView(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
-        # Diseño limpio y translúcido sin recuadro negro
+        # Diseño limpio y translúcido sin recuadro negro ni sombras duras
         self.setStyleSheet("""
             QGraphicsView {
                 background: transparent;
@@ -328,20 +329,30 @@ class LumenHorizontalGitGraphView(QGraphicsView):
         self.edges = []
         self.head_node = None
         self.branches_detected = []
+        self.selected_branches = []
+        self.available_branches = []
+
+        # Encabezado fijado de ramas (Freeze Header estilo Excel / VS Code)
+        self.used_lanes = []
+        self.lane_mapping = {}
+        self.base_y = 50.0
+        self.y_step = 70.0
+        self.pinned_header_width = 145.0
+        self.hovered_lane = None
+
+        self.setMouseTracking(True)
+        self.horizontalScrollBar().valueChanged.connect(self.viewport().update)
+        self.verticalScrollBar().valueChanged.connect(self.viewport().update)
 
     def drawBackground(self, painter: QPainter, rect: QRectF):
-        """Fondo translúcido sutil con guía horizontal por carril y cuadrícula de puntos limpia."""
+        """Cuadrícula de puntos limpia sobre fondo transparente integrado con el tema."""
         super().drawBackground(painter, rect)
 
-        # Relleno translúcido muy suave para amalgamar con el degradado de Lumen
-        painter.fillRect(rect, QColor(16, 18, 25, 140))
-
-        # Cuadrícula sutil de puntos
         grid_size = 28
         left = int(rect.left()) - (int(rect.left()) % grid_size)
         top = int(rect.top()) - (int(rect.top()) % grid_size)
 
-        painter.setPen(QPen(QColor(255, 255, 255, 10), 1.0))
+        painter.setPen(QPen(QColor(255, 255, 255, 12), 1.0))
         x = left
         while x < rect.right():
             y = top
@@ -350,14 +361,53 @@ class LumenHorizontalGitGraphView(QGraphicsView):
                 y += grid_size
             x += grid_size
 
-    def load_project_graph(self, project_path: str, max_commits: int = 40, simulated_merge: Optional[Dict[str, Any]] = None):
+    def set_selected_branches(self, branches: List[str]):
+        """Configura explícitamente la lista de ramas a mostrar y recarga el grafo."""
+        self.selected_branches = [b.strip() for b in branches if b and b.strip()]
+        if self.current_project_path:
+            self.load_project_graph(self.current_project_path)
+
+    def add_branch(self, branch_name: str):
+        """Añade una rama adicional al visor de ramas (ver más ramas)."""
+        clean = branch_name.strip()
+        if clean and clean not in self.selected_branches:
+            self.selected_branches.append(clean)
+            if self.current_project_path:
+                self.load_project_graph(self.current_project_path)
+
+    def remove_branch(self, branch_name: str):
+        """Remueve una rama del visor de ramas (ver menos ramas, mínimo 1)."""
+        clean = branch_name.strip()
+        if clean in self.selected_branches and len(self.selected_branches) > 1:
+            self.selected_branches.remove(clean)
+            if self.current_project_path:
+                self.load_project_graph(self.current_project_path)
+
+    def increase_branches(self):
+        """Añade la siguiente rama disponible que no esté en pantalla."""
+        for b in self.available_branches:
+            if b not in self.selected_branches:
+                self.add_branch(b)
+                return
+
+    def decrease_branches(self):
+        """Reduce en 1 la cantidad de ramas en pantalla (manteniendo al menos 1)."""
+        if len(self.selected_branches) > 1:
+            self.remove_branch(self.selected_branches[-1])
+
+    def load_project_graph(self, project_path: str, max_commits: int = 50, simulated_merge: Optional[Dict[str, Any]] = None):
         """Carga y genera el grafo horizontal de ramas a partir del historial git del proyecto."""
+        if self.current_project_path != project_path:
+            self.selected_branches = []
         self.current_project_path = project_path
         self.scene.clear()
         self.nodes.clear()
         self.edges.clear()
         self.head_node = None
         self.branches_detected.clear()
+        self.used_lanes = []
+        self.lane_mapping = {}
+        self.hovered_lane = None
 
         if not project_path or not os.path.exists(project_path):
             self._render_empty_state("⚠️ No hay un proyecto Git activo seleccionado")
@@ -367,44 +417,87 @@ class LumenHorizontalGitGraphView(QGraphicsView):
         branch_info = self._get_git_branches(project_path)
         self.branches_detected = branch_info
 
-        # 2. Obtener historial cronológico / topológico de commits
-        commits = self._get_git_commits(project_path, max_commits)
+        # Detectar la rama activa actual (HEAD)
+        active_branch = "main"
+        try:
+            active_branch = subprocess.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=project_path, stderr=subprocess.DEVNULL, text=True
+            ).strip() or "main"
+        except Exception:
+            pass
+
+        # Lista unificada de nombres de ramas disponibles
+        all_names = []
+        if active_branch and active_branch != "HEAD":
+            all_names.append(active_branch)
+        for b in branch_info:
+            bname = b.get("name", "")
+            if bname and bname not in all_names and bname != "HEAD":
+                all_names.append(bname)
+
+        self.available_branches = all_names
+
+        # Configurar 3 ramas por defecto si no hay selección previa válida
+        if not self.selected_branches or not any(b in all_names for b in self.selected_branches):
+            # Priorizar: 1) Activa actual, 2) y 3) Primeras ramas disponibles
+            picked = [active_branch] if active_branch in all_names else []
+            for b in all_names:
+                if b not in picked:
+                    picked.append(b)
+                if len(picked) >= 3:
+                    break
+            self.selected_branches = picked if picked else [active_branch]
+        else:
+            # Mantener la selección válida
+            self.selected_branches = [b for b in self.selected_branches if b in all_names]
+            if not self.selected_branches:
+                self.selected_branches = all_names[:3] if all_names else [active_branch]
+
+        # Notificar a la UI sobre las ramas actualizadas
+        self.branches_updated.emit(self.selected_branches, self.available_branches)
+
+        # 2. Obtener historial cronológico / topológico de commits para las ramas seleccionadas
+        commits = self._get_git_commits(project_path, max_commits, self.selected_branches)
         if not commits:
-            self._render_empty_state("⚠️ No se encontraron commits en este repositorio")
+            self._render_empty_state("⚠️ No se encontraron commits en las ramas seleccionadas")
             return
 
-        # 3. Asignación de carriles horizontales (Topología de Ramas)
-        # Ordenamos de más antiguo (izquierda) a más reciente (derecha)
-        commits.reverse()
+        # 3. Asignación de carriles horizontales para las ramas seleccionadas
+        lane_mapping, commit_lanes = self._calculate_branch_lanes(
+            commits, branch_info, self.selected_branches, active_branch
+        )
 
-        lane_mapping, commit_lanes = self._calculate_branch_lanes(commits, branch_info)
+        # Ahora sí, ordenamos de más antiguo (izquierda) a más reciente (derecha) para el eje temporal
+        commits.reverse()
 
         # 4. Dimensiones de la cuadrícula horizontal
         x_step = 100.0   # Espacio horizontal entre commits consecutivos
         y_step = 70.0    # Altura de carril de cada rama
-        base_x = 120.0   # Margen izquierdo para etiquetas de carril
+        base_x = 180.0   # Margen izquierdo para dar espacio al encabezado fijado (pinned header)
         base_y = 50.0
 
-        # Dibujar guías de carril horizontales a la izquierda
-        for lane_idx, b_name in lane_mapping.items():
+        self.base_y = base_y
+        self.y_step = y_step
+        self.used_lanes = sorted(set(commit_lanes.values())) if commit_lanes else [0]
+        self.lane_mapping = lane_mapping
+
+        # Dibujar guías de carril solo para los carriles que realmente contienen commits
+        total_guide_width = base_x + (len(commits) + (2 if simulated_merge else 1)) * x_step + 60
+
+        for lane_idx in self.used_lanes:
             color = LUMEN_BRANCH_PALETTE[lane_idx % len(LUMEN_BRANCH_PALETTE)]
             lane_y = base_y + lane_idx * y_step
 
-            # Línea guía horizontal muy tenue
+            # Línea guía horizontal continua y sutil
             guide_path = QPainterPath()
-            guide_path.moveTo(base_x - 30, lane_y)
-            guide_path.lineTo(base_x + (len(commits) + (2 if simulated_merge else 1)) * x_step + 60, lane_y)
+            guide_path.moveTo(0, lane_y)
+            guide_path.lineTo(total_guide_width, lane_y)
             guide_item = QGraphicsPathItem(guide_path)
-            guide_pen = QPen(QColor(color.red(), color.green(), color.blue(), 30), 1.0, Qt.DashLine)
+            guide_pen = QPen(QColor(color.red(), color.green(), color.blue(), 35), 1.0, Qt.DashLine)
             guide_item.setPen(guide_pen)
             guide_item.setZValue(0)
             self.scene.addItem(guide_item)
-
-            # Etiqueta de cabecera de carril (Pill a la izquierda)
-            lbl_item = self.scene.addText(f"🌿 {b_name}", QFont("Inter", 8, QFont.Bold))
-            lbl_item.setDefaultTextColor(color)
-            lbl_item.setPos(10, lane_y - 12)
-            lbl_item.setZValue(5)
 
         # 5. Instanciar Nodos de Commit
         node_by_hash = {}
@@ -453,8 +546,9 @@ class LumenHorizontalGitGraphView(QGraphicsView):
 
             tgt_node = self.head_node
             if tgt_b:
+                clean_tgt = tgt_b.replace("origin/", "").strip()
                 for n in reversed(self.nodes):
-                    if any(tgt_b in r for r in n.refs):
+                    if any(tgt_b in r or clean_tgt in r for r in n.refs):
                         tgt_node = n
                         break
 
@@ -508,7 +602,8 @@ class LumenHorizontalGitGraphView(QGraphicsView):
                 self.head_node = sim_node
 
         # 7. Ajustar el rectángulo de escena y posicionar la vista hacia HEAD (derecha)
-        self.scene.setSceneRect(self.scene.itemsBoundingRect().adjusted(-60, -40, 80, 50))
+        rect = self.scene.itemsBoundingRect()
+        self.scene.setSceneRect(QRectF(0, rect.top() - 35, max(rect.right() + 80, 500.0), rect.height() + 70))
         self.scroll_to_head()
 
     def _get_git_branches(self, path: str) -> List[Dict[str, str]]:
@@ -534,12 +629,21 @@ class LumenHorizontalGitGraphView(QGraphicsView):
             pass
         return branches
 
-    def _get_git_commits(self, path: str, limit: int) -> List[Dict[str, Any]]:
-        """Obtiene la lista estructurada de commits mediante git log."""
+    def _get_git_commits(self, path: str, limit: int, branches: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Obtiene la lista estructurada de commits mediante git log para las ramas especificadas."""
         commits = []
         SEP = "@@LUMEN_GRAPH_SEP@@"
+        branch_targets = []
+        if branches:
+            for b in branches:
+                clean_b = b.strip()
+                if clean_b:
+                    branch_targets.append(clean_b)
+        if not branch_targets:
+            branch_targets = ["--all"]
+
         cmd = [
-            "git", "log", "--all", "--topo-order",
+            "git", "log", *branch_targets, "--topo-order",
             f"--format=%h{SEP}%p{SEP}%d{SEP}%s{SEP}%an{SEP}%cr",
             "-n", str(limit)
         ]
@@ -574,70 +678,99 @@ class LumenHorizontalGitGraphView(QGraphicsView):
             pass
         return commits
 
-    def _calculate_branch_lanes(self, commits: List[Dict[str, Any]], branches: List[Dict[str, str]]):
+    def _calculate_branch_lanes(
+        self, 
+        commits: List[Dict[str, Any]], 
+        branches: List[Dict[str, str]], 
+        selected_branches: Optional[List[str]] = None,
+        active_branch: Optional[str] = None
+    ):
         """
         Asigna a cada commit un carril horizontal persistente según su linaje y rama.
-        El carril 0 siempre está reservado para la rama activa (HEAD).
+        Los carriles 0, 1, 2... se asocian de manera fija a las ramas seleccionadas.
         """
         lane_mapping = {}  # lane_idx -> branch_name
         commit_lanes = {}  # hash -> lane_idx
 
-        # Detectar la rama activa actual
-        active_branch = "Lumen"
-        try:
-            active_branch = subprocess.check_output(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=self.current_project_path, stderr=subprocess.DEVNULL, text=True
-            ).strip() or "Lumen"
-        except Exception:
-            pass
+        # Si no se pasó active_branch, detectarlo
+        if not active_branch:
+            try:
+                active_branch = subprocess.check_output(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=self.current_project_path, stderr=subprocess.DEVNULL, text=True
+                ).strip() or "main"
+            except Exception:
+                active_branch = "main"
 
-        lane_mapping[0] = active_branch
+        # Establecer asignación fija de carriles según selected_branches
+        if selected_branches:
+            for idx, b_name in enumerate(selected_branches):
+                lane_mapping[idx] = b_name
+        else:
+            lane_mapping[0] = active_branch
 
-        # Identificar ramas adicionales detectadas
-        next_lane = 1
-        for b in branches:
-            b_name = b["name"]
-            if b_name != active_branch and b_name not in lane_mapping.values():
-                lane_mapping[next_lane] = b_name
-                next_lane += 1
+        # Identificar ramas conocidas secundarias
+        known_branch_names = [
+            b["name"] for b in branches
+            if b.get("name") and b["name"] not in lane_mapping.values() and b["name"] != "HEAD"
+        ]
 
-        # Algoritmo de asignación de carril por linaje
-        active_lanes = []  # commits esperados por carril
-        for c in reversed(commits):  # De más nuevo a más antiguo
-            chash = c["hash"]
-
-            # Si el commit tiene una etiqueta de rama conocida, forzar a ese carril
-            explicit_lane = None
+        # 1. Pre-mapeo directo por refs de commit
+        for c in commits:
             for lane_idx, b_name in lane_mapping.items():
-                if any(b_name in r for r in c.get("refs", [])):
-                    explicit_lane = lane_idx
+                clean_b = b_name.replace("origin/", "").strip()
+                if any(clean_b in r or f"/{clean_b}" in r for r in c.get("refs", [])):
+                    commit_lanes[c["hash"]] = lane_idx
                     break
 
-            if explicit_lane is not None:
-                lane = explicit_lane
+        # 2. Algoritmo de propagación por linaje topológico
+        num_lanes = max(len(lane_mapping), 1)
+        active_lanes = [None] * num_lanes
+
+        for c in commits:
+            chash = c["hash"]
+
+            # Si ya se asignó por refs, respetarlo
+            if chash in commit_lanes:
+                lane = commit_lanes[chash]
+            # Continuar carril activo existente
             elif chash in active_lanes:
                 lane = active_lanes.index(chash)
+                for idx in range(len(active_lanes)):
+                    if active_lanes[idx] == chash:
+                        active_lanes[idx] = None
             else:
-                # Si no hay slot libre, asignar carril 0 o el primer disponible
+                # Asignar a un carril libre de las ramas seleccionadas si existe
                 if None in active_lanes:
                     lane = active_lanes.index(None)
-                    active_lanes[lane] = chash
-                else:
+                elif len(active_lanes) < len(lane_mapping):
                     lane = len(active_lanes)
-                    active_lanes.append(chash)
+                else:
+                    lane = 0
 
+            while len(active_lanes) <= lane:
+                active_lanes.append(None)
+
+            active_lanes[lane] = chash
             commit_lanes[chash] = lane
 
-            # Actualizar active_lanes con los padres
+            if lane not in lane_mapping:
+                found_name = None
+                for r in c.get("refs", []):
+                    clean = r.replace("HEAD ->", "").replace("origin/", "").strip()
+                    if clean and "tag:" not in clean:
+                        found_name = clean
+                        break
+                if not found_name and known_branch_names:
+                    found_name = known_branch_names.pop(0)
+                lane_mapping[lane] = found_name or f"Rama #{lane}"
+
+            # 3. Propagar padres hacia los carriles
             parents = c.get("parents", [])
             if not parents:
-                if lane < len(active_lanes):
-                    active_lanes[lane] = None
+                active_lanes[lane] = None
             else:
-                p0 = parents[0]
-                if lane < len(active_lanes):
-                    active_lanes[lane] = p0
+                active_lanes[lane] = parents[0]
                 for p_extra in parents[1:]:
                     if p_extra not in active_lanes:
                         if None in active_lanes:
@@ -666,11 +799,138 @@ class LumenHorizontalGitGraphView(QGraphicsView):
 
     def scroll_to_root(self):
         """Desplaza el lienzo hacia los commits más antiguos (extremo izquierdo)."""
-        if self.nodes:
-            first_node = self.nodes[0]
-            self.centerOn(first_node.scenePos().x() + 150, first_node.scenePos().y())
+        self.horizontalScrollBar().setValue(self.horizontalScrollBar().minimum())
+
+    def drawForeground(self, painter: QPainter, rect: QRectF):
+        """Dibuja el panel de encabezado de ramas fijado a la izquierda (Freeze Header estilo Excel)."""
+        super().drawForeground(painter, rect)
+        if not self.used_lanes or not self.current_project_path or not self.nodes:
+            return
+
+        painter.save()
+        painter.resetTransform()
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.TextAntialiasing)
+
+        vp = self.viewport().rect()
+        pw = self.pinned_header_width
+
+        # 1. Fondo translúcido glass oscuro
+        bg_rect = QRectF(0, 0, pw, vp.height())
+        painter.fillRect(bg_rect, QColor(9, 13, 24, 240))
+
+        # 2. Sombra difuminada a la derecha del panel
+        shadow_rect = QRectF(pw, 0, 18, vp.height())
+        shadow_grad = QLinearGradient(pw, 0, pw + 18, 0)
+        shadow_grad.setColorAt(0.0, QColor(0, 0, 0, 120))
+        shadow_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.fillRect(shadow_rect, shadow_grad)
+
+        # 3. Borde divisor vertical sutil
+        border_pen = QPen(QColor(56, 189, 248, 60), 1.2)
+        painter.setPen(border_pen)
+        painter.drawLine(QPointF(pw, 0), QPointF(pw, vp.height()))
+
+        # 4. Etiqueta superior del encabezado
+        f_header = QFont("Inter, sans-serif", 7, QFont.Bold)
+        f_header.setLetterSpacing(QFont.AbsoluteSpacing, 0.6)
+        painter.setFont(f_header)
+        painter.setPen(QColor("#64748b"))
+        painter.drawText(QRectF(10, 8, pw - 20, 16), Qt.AlignLeft | Qt.AlignVCenter, "📌 RAMAS FIJAS")
+
+        # 5. Píldoras fijadas para cada carril visible
+        for lane_idx in self.used_lanes:
+            scene_y = self.base_y + lane_idx * self.y_step
+            vp_pt = self.mapFromScene(QPointF(0, scene_y))
+            lane_vp_y = vp_pt.y()
+
+            # Pintar si intersecta el área visible vertical
+            if -30 < lane_vp_y < vp.height() + 30:
+                b_name = self.lane_mapping.get(lane_idx, f"Rama #{lane_idx}")
+                color = LUMEN_BRANCH_PALETTE[lane_idx % len(LUMEN_BRANCH_PALETTE)]
+                is_hovered = (self.hovered_lane == lane_idx)
+
+                pill_rect = QRectF(8, lane_vp_y - 13, pw - 16, 26)
+
+                # Fondo reactivo
+                bg_alpha = 50 if is_hovered else 22
+                pill_bg = QColor(color.red(), color.green(), color.blue(), bg_alpha)
+                painter.setBrush(QBrush(pill_bg))
+
+                # Contorno
+                border_alpha = 230 if is_hovered else 115
+                pill_pen = QPen(QColor(color.red(), color.green(), color.blue(), border_alpha), 1.2 if is_hovered else 1.0)
+                painter.setPen(pill_pen)
+                painter.drawRoundedRect(pill_rect, 6, 6)
+
+                # Punto luminoso indicador
+                dot_x = 16
+                dot_y = lane_vp_y
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(color))
+                painter.drawEllipse(QPointF(dot_x, dot_y), 3.5, 3.5)
+
+                # Nombre de la rama con texto elidido
+                f_branch = QFont("JetBrains Mono, monospace", 8, QFont.Bold)
+                painter.setFont(f_branch)
+                painter.setPen(color if is_hovered else QColor("#f1f5f9"))
+
+                text_rect = QRectF(25, lane_vp_y - 11, pw - 38, 22)
+                fm = painter.fontMetrics()
+                elided_name = fm.elidedText(b_name, Qt.ElideRight, int(pw - 40))
+                painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, elided_name)
+
+        painter.restore()
+
+    def mouseMoveEvent(self, event):
+        pos = event.pos()
+        if pos.x() < self.pinned_header_width:
+            prev_hover = self.hovered_lane
+            self.hovered_lane = None
+            for lane_idx in self.used_lanes:
+                scene_y = self.base_y + lane_idx * self.y_step
+                vp_pt = self.mapFromScene(QPointF(0, scene_y))
+                if abs(pos.y() - vp_pt.y()) <= 13:
+                    self.hovered_lane = lane_idx
+                    self.setCursor(Qt.PointingHandCursor)
+                    break
+            if self.hovered_lane is None:
+                self.setCursor(Qt.ArrowCursor)
+
+            if self.hovered_lane != prev_hover:
+                self.viewport().update()
+            event.accept()
+            return
         else:
-            self.horizontalScrollBar().setValue(self.horizontalScrollBar().minimum())
+            if self.hovered_lane is not None:
+                self.hovered_lane = None
+                self.viewport().update()
+
+        super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event):
+        pos = event.pos()
+        if pos.x() < self.pinned_header_width:
+            # Clic interactivo en una píldora: centrar la vista en el último commit de esa rama
+            for lane_idx in self.used_lanes:
+                scene_y = self.base_y + lane_idx * self.y_step
+                vp_pt = self.mapFromScene(QPointF(0, scene_y))
+                if abs(pos.y() - vp_pt.y()) <= 13:
+                    lane_nodes = [n for n in self.nodes if n.lane_idx == lane_idx]
+                    if lane_nodes:
+                        target_node = lane_nodes[-1]
+                        self.centerOn(target_node.scenePos().x(), target_node.scenePos().y())
+                    break
+            event.accept()
+            return
+
+        super().mousePressEvent(event)
+
+    def leaveEvent(self, event):
+        if self.hovered_lane is not None:
+            self.hovered_lane = None
+            self.viewport().update()
+        super().leaveEvent(event)
 
     def zoom_in(self):
         """Aumenta el nivel de zoom."""

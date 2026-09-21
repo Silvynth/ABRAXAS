@@ -25,6 +25,7 @@ from core.setup import (
     write_toml_dict, read_toml_dict, TEMPLATE_PATH, get_target_config_path,
     detect_git_identity, sync_global_gitconfig
 )
+from core.environments import detect_installed_editors, get_preferred_editor, set_preferred_editor
 from core import get_version, __app_name__
 
 # =====================================================================
@@ -768,6 +769,56 @@ class AbraxasInstallerGUI(QWidget):
         self.chk_git_sync.setChecked(self.cfg.get("git", {}).get("auto_sync_global", True))
         c_layout.addWidget(self.chk_git_sync)
 
+        # 3. Editor de Código Preferido (LUMEN Sector 2)
+        sep_ed = QFrame()
+        sep_ed.setFrameShape(QFrame.HLine)
+        sep_ed.setStyleSheet("color: rgba(255, 255, 255, 0.10); margin-top: 6px; margin-bottom: 6px;")
+        c_layout.addWidget(sep_ed)
+
+        lbl_ed = QLabel("<b>💻 Editor de Código Preferido (LUMEN Sector 2):</b>")
+        c_layout.addWidget(lbl_ed)
+
+        lbl_ed_sub = QLabel("Se utilizará por defecto para abrir proyectos y archivos desde el HUD.")
+        lbl_ed_sub.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        c_layout.addWidget(lbl_ed_sub)
+
+        self.cmb_editor = QComboBox()
+        self.cmb_editor.setItemDelegate(QStyledItemDelegate(self.cmb_editor))
+        self.cmb_editor.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {BG_INPUT};
+                border: 1px solid {BORDER_BASE};
+                border-radius: 6px;
+                padding: 6px 12px;
+                color: {TEXT_PRIMARY};
+                font-weight: 600;
+            }}
+            QComboBox:focus {{
+                border-color: {BORDER_FOCUS};
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {BG_SURFACE};
+                border: 1px solid {BORDER_BASE};
+                selection-background-color: {ACCENT};
+                selection-color: #ffffff;
+                padding: 4px;
+            }}
+        """)
+        installed_eds = detect_installed_editors()
+        current_pref = get_preferred_editor()
+        
+        if installed_eds:
+            for ed in installed_eds:
+                self.cmb_editor.addItem(f"{ed['icon']} {ed['name']}", ed['id'])
+            for idx in range(self.cmb_editor.count()):
+                if self.cmb_editor.itemData(idx) == current_pref:
+                    self.cmb_editor.setCurrentIndex(idx)
+                    break
+        else:
+            self.cmb_editor.addItem("💻 code (VS Code / Predeterminado)", "code")
+
+        c_layout.addWidget(self.cmb_editor)
+
         layout.addWidget(card)
         layout.addStretch()
         return page
@@ -1203,6 +1254,10 @@ class AbraxasInstallerGUI(QWidget):
         self.cfg["git"]["user_email"] = self.txt_git_email.text().strip()
         self.cfg["git"]["auto_sync_global"] = self.chk_git_sync.isChecked()
 
+        # 1.6. Editor Preferido (LUMEN)
+        if "environments" not in self.cfg: self.cfg["environments"] = {}
+        self.cfg["environments"]["preferred_editor"] = self.cmb_editor.currentData() or "code"
+
         # 2. Sistema
         if "system" not in self.cfg: self.cfg["system"] = {}
         self.cfg["system"]["btrfs_snapshots"] = self.chk_btrfs_enable.isChecked()
@@ -1246,6 +1301,10 @@ class AbraxasInstallerGUI(QWidget):
                 if g_u or g_e:
                     sync_global_gitconfig(g_u, g_e)
             
+            # Guardar editor preferido en disco para Lumen Sector 2
+            sel_ed = self.cfg.get("environments", {}).get("preferred_editor", "code")
+            set_preferred_editor(sel_ed)
+
             # Guardar archivos de Skills personalizados o vacíos en el disco
             skills_dir = os.path.join(ROOT_DIR, "skills")
             os.makedirs(skills_dir, exist_ok=True)
@@ -1292,6 +1351,7 @@ class AbraxasInstallerGUI(QWidget):
             f"&nbsp;&nbsp;• <b>Skills:</b> Directivas configuradas en <code>skills/</code>"
         ) if self.cfg["ai"]["enabled"] else f"<font color='{TEXT_MUTED}'>Deshabilitada</font>"
         vault_status = f"{self.cfg['paths']['vault_dir']}" if self.chk_vault_enable.isChecked() else f"<font color='{TEXT_MUTED}'>Omitido</font>"
+        editor_label = self.cmb_editor.currentText()
 
         if self.is_preview:
             self.lbl_finish_status.setText("Simulación Completada con Éxito")
@@ -1299,6 +1359,7 @@ class AbraxasInstallerGUI(QWidget):
                 f"<b>Resumen de Parámetros Configurados:</b><br/><br/>"
                 f"• <b>Destino:</b> {self.config_target} <font color='{WARNING}'>(Modo Simulación: Intacto)</font><br/>"
                 f"• <b>Proyectos Git (LUMEN):</b> {self.cfg['paths']['projects_dir']}<br/>"
+                f"• <b>Editor Preferido (LUMEN):</b> {editor_label}<br/>"
                 f"• <b>Bóveda Obsidian (NOUS):</b> {vault_status}<br/>"
                 f"• <b>Protección Btrfs (UMBRA):</b> {btrfs_status}<br/>"
                 f"• <b>Asistente IA Local & Skills:</b><br/>{ai_status}<br/><br/>"
@@ -1311,6 +1372,7 @@ class AbraxasInstallerGUI(QWidget):
                 f"<b>Configuración Generada:</b><br/><br/>"
                 f"• <b>Archivo:</b> {self.config_target} (chmod 600)<br/>"
                 f"• <b>Proyectos Git (LUMEN):</b> {self.cfg['paths']['projects_dir']}<br/>"
+                f"• <b>Editor Preferido (LUMEN):</b> {editor_label}<br/>"
                 f"• <b>Bóveda Obsidian (NOUS):</b> {vault_status}<br/>"
                 f"• <b>Protección Btrfs (UMBRA):</b> {btrfs_status}<br/>"
                 f"• <b>Asistente IA Local & Skills:</b><br/>{ai_status}<br/><br/>"

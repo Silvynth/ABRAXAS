@@ -4,10 +4,7 @@
 # =====================================================================
 
 import os
-import sys
-
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT_DIR)
+from core.paths import ROOT_DIR, TEMPLATE_PATH
 from core import __version__
 
 # Import tomllib (Python 3.11+) with fallback
@@ -20,8 +17,8 @@ except ImportError:
         tomllib = None
 
 class AbraxasConfig:
-    ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    TEMPLATE_PATH = os.path.join(ROOT_DIR, "config.default.toml")
+    ROOT_DIR = ROOT_DIR
+    TEMPLATE_PATH = TEMPLATE_PATH
 
     @classmethod
     def get_default_path(cls):

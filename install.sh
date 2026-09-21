@@ -18,12 +18,10 @@ C_CYAN='\033[38;2;124;206;217m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
-if [ -f "$SCRIPT_DIR/.version" ]; then
-    VERSION=$(cat "$SCRIPT_DIR/.version" | tr -d '[:space:]')
-elif [ -f "$SCRIPT_DIR/VERSION" ]; then
-    VERSION=$(cat "$SCRIPT_DIR/VERSION" | tr -d '[:space:]')
+if [ -f "$SCRIPT_DIR/VERSION" ]; then
+    VERSION=$(tr -d '[:space:]' < "$SCRIPT_DIR/VERSION")
 else
-    VERSION="0.4.7"
+    VERSION="1.1.2"
 fi
 
 CONFIG_DIR="$SCRIPT_DIR"
@@ -296,8 +294,8 @@ else
         read -r resp_doc
         if [[ "$resp_doc" =~ ^[SsYy]$ ]]; then
             if [ -n "$PKG_INSTALL_CMD" ]; then
-                echo -e "  ${C_CYAN}Instalando paquete 'docker' con permisos de administrador...${RESET}"
-                $PKG_INSTALL_CMD docker || true
+                echo -e "  ${C_CYAN}Instalando paquetes 'docker' y 'docker-compose' con permisos de administrador...${RESET}"
+                $PKG_INSTALL_CMD docker docker-compose || true
                 if command -v docker >/dev/null 2>&1; then
                     HAS_DOCKER=true
                 fi
@@ -322,6 +320,40 @@ if [[ "$HAS_DOCKER" == "true" && "$PREVIEW_MODE" == "false" ]]; then
         if [[ "$resp_dg" =~ ^[SsYy]$ ]]; then
             sudo usermod -aG docker "$USER" || true
             echo -e "  ${C_GREEN}✔ Usuario agregado al grupo docker (se aplicará al reiniciar sesión).${RESET}"
+        fi
+    fi
+fi
+step_pause
+
+# =====================================================================
+# 4.1 AUDITORÍA DE RED & PUERTOS (lsof)
+# =====================================================================
+HAS_LSOF=false
+if command -v lsof >/dev/null 2>&1; then
+    HAS_LSOF=true
+    print_box_card \
+        "🔌 Auditoría de Red & Puertos (lsof)" \
+        "${C_GREEN}[✔ Instalado]${RESET}" \
+        "Herramienta para listar procesos y puertos TCP en escucha." \
+        "Permite a Lumen monitorear puertos ocupados y aniquilar procesos con un clic." \
+        "Lumen utilizará 'ss' como método de respaldo."
+else
+    print_box_card \
+        "🔌 Auditoría de Red & Puertos (lsof)" \
+        "${C_WARN}[○ No instalado]${RESET}" \
+        "Herramienta para listar procesos y puertos TCP en escucha." \
+        "Permite a Lumen monitorear puertos ocupados y aniquilar procesos con un clic." \
+        "Lumen utilizará 'ss' como método de respaldo." \
+        "🔒 Requiere permisos de administrador (sudo) para instalar."
+
+    if [[ "$PREVIEW_MODE" == "false" ]]; then
+        echo -en "  ${C_GOLD}¿Deseas instalar lsof con permisos de administrador (sudo)? [s/N] >> ${RESET}"
+        read -r resp_lsof
+        if [[ "$resp_lsof" =~ ^[SsYy]$ ]]; then
+            if [ -n "$PKG_INSTALL_CMD" ]; then
+                echo -e "  ${C_CYAN}Instalando paquete 'lsof' con permisos de administrador...${RESET}"
+                $PKG_INSTALL_CMD lsof || true
+            fi
         fi
     fi
 fi

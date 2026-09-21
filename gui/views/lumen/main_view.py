@@ -618,11 +618,14 @@ class LumenView(QWidget):
                     target_row = r
                     break
 
-        if not target_folder and first_row:
-            target_folder, target_row = first_row
-
         if target_folder and target_row:
-            self.on_row_clicked(target_folder, target_row)
+            for r in self.list_container.rows:
+                r.set_active(r == target_row)
+            self.selected_project = target_folder
+            self.selected_path = target_folder["path"]
+            if hasattr(self, "workspace_page") and self.main_stack.currentIndex() == 1:
+                self.workspace_page.set_project(target_folder, reset_terminal=True)
+            self.project_selected.emit(target_folder)
 
         if hasattr(self, "txt_filter") and self.txt_filter.text().strip():
             self.filter_projects(self.txt_filter.text().strip())
@@ -631,7 +634,7 @@ class LumenView(QWidget):
         """Abre el espacio de trabajo del proyecto al hacer doble clic."""
         self.selected_project = folder_data
         self.selected_path = folder_data.get("path", "")
-        self.workspace_page.set_project(folder_data)
+        self.workspace_page.set_project(folder_data, reset_terminal=True)
         self.main_stack.setCurrentIndex(1)
 
     def go_back_to_selector(self):
@@ -650,6 +653,8 @@ class LumenView(QWidget):
 
         self.selected_project = folder_data
         self.selected_path = folder_data["path"]
+        if hasattr(self, "workspace_page") and self.main_stack.currentIndex() == 1:
+            self.workspace_page.set_project(folder_data, reset_terminal=True)
         self.project_selected.emit(folder_data)
 
     def filter_projects(self, query):

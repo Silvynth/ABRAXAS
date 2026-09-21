@@ -11,13 +11,21 @@ from PySide6.QtWidgets import (
     QPushButton, QFrame, QScrollArea, QGridLayout,
     QTextEdit, QApplication, QStackedWidget, QSizePolicy,
     QProgressBar, QLineEdit, QComboBox, QStyledItemDelegate,
-    QCheckBox
+    QCheckBox, QMenu, QDialog, QRadioButton, QButtonGroup, QMessageBox,
+    QInputDialog, QSplitter
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QThread
+from PySide6.QtCore import Qt, Signal, QTimer, QThread, QPoint
 
 from core import get_version
 from core.lumen_sync import get_full_project_sync
-from core.ai import get_configured_model, audit_git_diff
+from core.github import get_repo_visibility, change_repo_visibility, publish_repo_to_github
+from core.ai import get_configured_model, audit_git_diff, generate_with_model
+from core.utilities import (
+    inspect_gitignore_and_env, apply_gitignore_preset, add_custom_gitignore_rule,
+    create_base_env_file, generate_env_example_file,
+    scan_project_documentation, read_markdown_file, generate_ai_changelog,
+    check_ollama_status, execute_history_ai_audit
+)
 from core.git_workflow import (
     get_project_semver, bump_semver, get_next_commit_seq,
     generate_ia_commit_proposal, execute_commit_and_tag,
@@ -27,9 +35,22 @@ from core.git_workflow import (
     get_git_merge_status, get_mergeable_branches,
     get_merge_diff_and_commits, generate_ia_merge_proposal,
     execute_git_merge, execute_git_merge_into, execute_git_merge_abort,
-    execute_git_resolve_conflicts, execute_git_complete_merge
+    execute_git_resolve_conflicts, execute_git_complete_merge,
+    get_git_sync_deep_status, execute_git_fetch, execute_git_pull,
+    execute_git_stage_path, execute_git_unstage_path, execute_git_discard_path,
+    execute_git_stash_pop, execute_git_stash_save, execute_git_init
+)
+from core.environments import (
+    detect_installed_editors, get_preferred_editor, set_preferred_editor,
+    launch_project_in_editor, inspect_python_venv, create_python_venv,
+    install_project_dependencies, install_custom_packages,
+    freeze_dependencies_to_file, list_installed_packages, delete_python_venv,
+    inspect_docker_status, list_docker_containers, execute_docker_container_action,
+    get_docker_container_logs, execute_docker_prune, inspect_network_ports, kill_process_by_pid,
+    deep_scan_docker_files, parse_compose_file_lightweight, detect_compose_tool, execute_compose_action
 )
 from gui.views.lumen.git_graph_canvas import LumenHorizontalGitGraphView
+
 
 
 class GitPushThread(QThread):
@@ -112,6 +133,42 @@ class GitPushThread(QThread):
                 self.finished_push.emit(False, branch, err_msg)
         except Exception as e:
             self.finished_push.emit(False, "unknown", str(e))
+
+
+class GitFetchThread(QThread):
+    """Hilo para ejecutar git fetch hacia el remoto sin congelar la GUI."""
+    finished_fetch = Signal(bool, str, dict)
+
+    def __init__(self, project_path: str, remote: str = "", prune: bool = True):
+        super().__init__()
+        self.project_path = project_path
+        self.remote = remote
+        self.prune = prune
+
+    def run(self):
+        try:
+            ok, msg, status = execute_git_fetch(self.project_path, self.remote, self.prune)
+            self.finished_fetch.emit(ok, msg, status)
+        except Exception as e:
+            self.finished_fetch.emit(False, str(e), {})
+
+
+class GitPullThread(QThread):
+    """Hilo para ejecutar git pull seguro sin congelar la GUI."""
+    finished_pull = Signal(bool, str)
+
+    def __init__(self, project_path: str, strategy: str = "rebase", autostash: bool = True):
+        super().__init__()
+        self.project_path = project_path
+        self.strategy = strategy
+        self.autostash = autostash
+
+    def run(self):
+        try:
+            ok, msg = execute_git_pull(self.project_path, self.strategy, self.autostash)
+            self.finished_pull.emit(ok, msg)
+        except Exception as e:
+            self.finished_pull.emit(False, str(e))
 
 
 class IACommitThread(QThread):
@@ -208,6 +265,322 @@ class IAMergeThread(QThread):
             self.finished_merge.emit(False, str(e), {})
 
 
+class PythonVenvWorkerThread(QThread):
+    """Hilo no bloqueante para ejecutar operaciones pesadas de entorno virtual Python."""
+    finished_task = Signal(bool, str, str)
+
+    def __init__(self, task_type: str, project_path: str, venv_path: str = "", extra_args=None):
+        super().__init__()
+        self.task_type = task_type
+        self.project_path = project_path
+        self.venv_path = venv_path
+        self.extra_args = extra_args
+
+    def run(self):
+        try:
+            if self.task_type == "create_venv":
+                use_uv = bool(self.extra_args)
+                ok, msg = create_python_venv(self.project_path, use_uv=use_uv)
+                self.finished_task.emit(ok, "CREAR-VENV", msg)
+            elif self.task_type == "install_deps":
+                ok, msg = install_project_dependencies(self.project_path, self.venv_path)
+                self.finished_task.emit(ok, "DEPS", msg)
+            elif self.task_type == "install_custom":
+                pkgs = self.extra_args or []
+                ok, msg = install_custom_packages(self.project_path, self.venv_path, pkgs)
+                self.finished_task.emit(ok, "INSTALL-PKG", msg)
+            elif self.task_type == "freeze":
+                ok, msg = freeze_dependencies_to_file(self.project_path, self.venv_path)
+                self.finished_task.emit(ok, "FREEZE", msg)
+            elif self.task_type == "delete_venv":
+                ok, msg = delete_python_venv(self.venv_path)
+                self.finished_task.emit(ok, "DELETE-VENV", msg)
+        except Exception as e:
+            self.finished_task.emit(False, self.task_type.upper(), f"Excepción en hilo de venv: {str(e)}")
+
+
+class DockerWorkerThread(QThread):
+    """Hilo no bloqueante para ejecutar operaciones de Docker (contenedor, compose, prune)."""
+    finished_task = Signal(bool, str, str)
+
+    def __init__(self, task_type: str, target: str = "", compose_path: str = "", service: str = ""):
+        super().__init__()
+        self.task_type = task_type
+        self.target = target
+        self.compose_path = compose_path
+        self.service = service
+
+    def run(self):
+        try:
+            if self.task_type == "prune":
+                ok, msg = execute_docker_prune()
+                self.finished_task.emit(ok, "DOCKER-PRUNE", msg)
+            elif self.task_type in ["start", "stop", "restart", "rm"]:
+                ok, msg = execute_docker_container_action(self.task_type, self.target)
+                self.finished_task.emit(ok, f"DOCKER-{self.task_type.upper()}", msg)
+            elif self.task_type.startswith("compose-"):
+                action = self.task_type.replace("compose-", "")
+                ok, msg = execute_compose_action(self.compose_path, action, self.service or None)
+                label = f"COMPOSE-{action.upper()}"
+                self.finished_task.emit(ok, label, msg)
+        except Exception as e:
+            self.finished_task.emit(False, self.task_type.upper(), f"Excepción en hilo de Docker: {str(e)}")
+
+
+class Sector3WorkerThread(QThread):
+    """Hilo no bloqueante para operaciones pesadas de Herramientas & IA (Sector 3)."""
+    finished_task = Signal(bool, str, str, object)
+
+    def __init__(self, task_type: str, project_path: str = "", extra_data=None):
+        super().__init__()
+        self.task_type = task_type
+        self.project_path = project_path
+        self.extra_data = extra_data
+
+    def run(self):
+        try:
+            if self.task_type == "apply_preset":
+                preset_type = self.extra_data or "all"
+                ok, msg = apply_gitignore_preset(self.project_path, preset_type)
+                self.finished_task.emit(ok, "GITIGNORE-PRESET", msg, None)
+            elif self.task_type == "add_rule":
+                rule = self.extra_data or ""
+                ok, msg = add_custom_gitignore_rule(self.project_path, rule)
+                self.finished_task.emit(ok, "GITIGNORE-RULE", msg, None)
+            elif self.task_type == "create_env":
+                ok, msg = create_base_env_file(self.project_path)
+                self.finished_task.emit(ok, "ENV-CREATE", msg, None)
+            elif self.task_type == "generate_env_example":
+                ok, msg = generate_env_example_file(self.project_path)
+                self.finished_task.emit(ok, "ENV-EXAMPLE", msg, None)
+            elif self.task_type == "generate_changelog":
+                count = int(self.extra_data or 15)
+                ok, res = generate_ai_changelog(self.project_path, count=count)
+                self.finished_task.emit(ok, "AI-CHANGELOG", "Changelog generado exitosamente." if ok else res, res if ok else None)
+            elif self.task_type == "history_audit":
+                model_choice = (self.extra_data or {}).get("model_choice", "light")
+                count = int((self.extra_data or {}).get("count", 5))
+                ok, audit_text = execute_history_ai_audit(self.project_path, commit_count=count, model_choice=model_choice)
+                self.finished_task.emit(ok, "AI-AUDIT", "Auditoría de historial completada." if ok else audit_text, audit_text if ok else None)
+            elif self.task_type == "ai_consult":
+                prompt = (self.extra_data or {}).get("prompt", "")
+                system = (self.extra_data or {}).get("system", "")
+                model_choice = (self.extra_data or {}).get("model_choice", "light")
+                res = generate_with_model(prompt, model_choice=model_choice, system_instruction=system)
+                if res:
+                    self.finished_task.emit(True, "AI-CONSULT", "Consulta resuelta por IA.", res)
+                else:
+                    self.finished_task.emit(False, "AI-CONSULT", "Ollama no devolvió respuesta. Verifica el servicio local.", None)
+        except Exception as e:
+            self.finished_task.emit(False, self.task_type.upper(), f"Excepción en Sector 3: {str(e)}", None)
+
+
+class LumenRepoVisibilityDialog(QDialog):
+    """Diálogo modal ciber-ilustre para consultar y alternar la visibilidad (Público/Privado) o publicar en GitHub."""
+
+    def __init__(self, project_path: str, project_name: str, parent=None):
+        super().__init__(parent)
+        self.project_path = project_path
+        self.project_name = project_name
+        self.setWindowTitle("Gestión de Visibilidad GitHub • Abraxas")
+        self.setFixedSize(500, 420)
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #0f1117;
+                color: #e5e7eb;
+                border: 1px solid rgba(99, 102, 241, 0.45);
+                border-radius: 12px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        # Header
+        h_layout = QHBoxLayout()
+        lbl_icon = QLabel("🌐")
+        lbl_icon.setStyleSheet("font-size: 20px;")
+        h_layout.addWidget(lbl_icon)
+
+        lbl_head = QLabel("Gestión de Visibilidad en GitHub")
+        lbl_head.setStyleSheet("font-size: 15px; font-weight: 800; color: #a5b4fc;")
+        h_layout.addWidget(lbl_head)
+        h_layout.addStretch()
+
+        btn_close = QPushButton("✕")
+        btn_close.setFixedSize(26, 26)
+        btn_close.setCursor(Qt.PointingHandCursor)
+        btn_close.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: #9ca3af;
+                border: none;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            QPushButton:hover { color: #f87171; }
+        """)
+        btn_close.clicked.connect(self.reject)
+        h_layout.addWidget(btn_close)
+        layout.addLayout(h_layout)
+
+        # Separador
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px;")
+        layout.addWidget(sep)
+
+        # Consultar estado actual
+        self.vis_data = get_repo_visibility(self.project_path)
+        self.is_github = self.vis_data.get("is_github", False)
+        self.has_remote = self.vis_data.get("has_remote", False)
+        self.current_is_private = self.vis_data.get("is_private", True)
+
+        # Información del Repositorio
+        info_frame = QFrame()
+        info_frame.setStyleSheet("""
+            background-color: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 8px;
+            padding: 10px;
+        """)
+        info_lay = QVBoxLayout(info_frame)
+        info_lay.setContentsMargins(10, 8, 10, 8)
+        info_lay.setSpacing(6)
+
+        repo_name = self.vis_data.get("repo_name") or self.project_name
+        lbl_rname = QLabel(f"<b>Repositorio:</b> <span style='color:#38bdf8;'>{repo_name}</span>")
+        lbl_rname.setStyleSheet("font-size: 13px; color: #d1d5db;")
+        info_lay.addWidget(lbl_rname)
+
+        if self.has_remote and self.is_github:
+            status_color = "#f87171" if self.current_is_private else "#34d399"
+            status_text = "🔒 PRIVADO" if self.current_is_private else "🌐 PÚBLICO"
+            lbl_cur = QLabel(f"<b>Estado Actual en GitHub:</b> <span style='color:{status_color}; font-weight:800;'>{status_text}</span>")
+            lbl_cur.setStyleSheet("font-size: 13px; color: #d1d5db;")
+            info_lay.addWidget(lbl_cur)
+        else:
+            lbl_cur = QLabel("<b>Estado:</b> <span style='color:#fbbf24; font-weight:700;'>Solo Local (Sin vincular a GitHub)</span>")
+            lbl_cur.setStyleSheet("font-size: 13px; color: #d1d5db;")
+            info_lay.addWidget(lbl_cur)
+
+        layout.addWidget(info_frame)
+
+        # Opciones de configuración
+        lbl_opt_title = QLabel("Selecciona la visibilidad deseada:")
+        lbl_opt_title.setStyleSheet("font-size: 12.5px; font-weight: 700; color: #e5e7eb;")
+        layout.addWidget(lbl_opt_title)
+
+        self.btn_group = QButtonGroup(self)
+
+        self.rb_private = QRadioButton("🔒 Repositorio Privado (Solo tú y colaboradores)")
+        self.rb_private.setStyleSheet("font-size: 12.5px; color: #f3f4f6; padding: 4px;")
+        self.rb_private.setCursor(Qt.PointingHandCursor)
+
+        self.rb_public = QRadioButton("🌐 Repositorio Público (Acceso abierto en GitHub)")
+        self.rb_public.setStyleSheet("font-size: 12.5px; color: #f3f4f6; padding: 4px;")
+        self.rb_public.setCursor(Qt.PointingHandCursor)
+
+        self.btn_group.addButton(self.rb_private)
+        self.btn_group.addButton(self.rb_public)
+
+        if self.current_is_private:
+            self.rb_private.setChecked(True)
+        else:
+            self.rb_public.setChecked(True)
+
+        layout.addWidget(self.rb_private)
+        layout.addWidget(self.rb_public)
+
+        # Advertencia dinámica
+        self.lbl_warn = QLabel("⚠️ Atención: Al cambiar a Público, todo el código fuente, ramas e historial serán visibles por cualquier persona en internet.")
+        self.lbl_warn.setWordWrap(True)
+        self.lbl_warn.setStyleSheet("""
+            background-color: rgba(245, 158, 11, 0.12);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.35);
+            border-radius: 6px;
+            padding: 8px;
+            font-size: 11.5px;
+        """)
+        self.lbl_warn.setVisible(not self.current_is_private)
+        layout.addWidget(self.lbl_warn)
+
+        self.rb_public.toggled.connect(lambda checked: self.lbl_warn.setVisible(checked))
+
+        layout.addStretch()
+
+        # Botones de acción
+        btn_box = QHBoxLayout()
+        btn_box.setSpacing(10)
+
+        self.btn_apply = QPushButton("Aplicar Cambio en GitHub" if (self.has_remote and self.is_github) else "Publicar en GitHub")
+        self.btn_apply.setCursor(Qt.PointingHandCursor)
+        self.btn_apply.setStyleSheet("""
+            QPushButton {
+                background-color: #6366f1;
+                color: #ffffff;
+                border: 1px solid #818cf8;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 12.5px;
+                font-weight: 700;
+            }
+            QPushButton:hover { background-color: #4f46e5; }
+            QPushButton:disabled { background-color: #374151; color: #9ca3af; border: none; }
+        """)
+        self.btn_apply.clicked.connect(self._on_apply_clicked)
+        btn_box.addWidget(self.btn_apply)
+
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.setCursor(Qt.PointingHandCursor)
+        btn_cancel.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 12.5px;
+                font-weight: 600;
+            }
+            QPushButton:hover { color: #ffffff; }
+        """)
+        btn_cancel.clicked.connect(self.reject)
+        btn_box.addWidget(btn_cancel)
+
+        layout.addLayout(btn_box)
+
+    def _on_apply_clicked(self):
+        target_vis = "private" if self.rb_private.isChecked() else "public"
+        self.btn_apply.setEnabled(False)
+        self.btn_apply.setText("Procesando...")
+        QApplication.processEvents()
+
+        if self.has_remote and self.is_github:
+            ok, msg = change_repo_visibility(self.project_path, target_vis)
+        else:
+            ok, msg = publish_repo_to_github(self.project_path, repo_name=self.project_name, visibility=target_vis)
+
+        if ok:
+            self.result_message = msg
+            self.accept()
+        else:
+            self.btn_apply.setEnabled(True)
+            self.btn_apply.setText("Reintentar")
+            self.lbl_warn.setText(f"❌ Error: {msg}")
+            self.lbl_warn.setStyleSheet("""
+                background-color: rgba(239, 68, 68, 0.15);
+                color: #f87171;
+                border: 1px solid rgba(239, 68, 68, 0.35);
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 11.5px;
+            """)
+            self.lbl_warn.setVisible(True)
+
+
 class LumenCyberActionButton(QFrame):
     """Botón interactivo de diseño ciber-ilustre con icono, título, subtítulo y efectos de hover."""
     
@@ -216,6 +589,8 @@ class LumenCyberActionButton(QFrame):
     def __init__(self, icon: str, title: str, subtitle: str, accent_color="#6366f1", parent=None):
         super().__init__(parent)
         self.action_title = title
+        self._original_sub = subtitle
+        self.is_locked = False
         self.accent_color = accent_color
         self.setCursor(Qt.PointingHandCursor)
         self.setProperty("class", "cyber_action_card")
@@ -272,14 +647,55 @@ class LumenCyberActionButton(QFrame):
             }}
         """)
 
+    def set_locked(self, locked: bool, lock_reason: str = ""):
+        self.is_locked = locked
+        self.setEnabled(not locked)
+        self.setCursor(Qt.ForbiddenCursor if locked else Qt.PointingHandCursor)
+        if locked:
+            self.lbl_arrow.setText("🔒")
+            self.lbl_arrow.setStyleSheet("font-size: 13px; color: #ef4444;")
+            self.lbl_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #6b7280;")
+            self.lbl_sub.setStyleSheet("font-size: 11px; color: #ef4444; font-weight: 600;")
+            if lock_reason:
+                self.lbl_sub.setText(lock_reason)
+            self.setStyleSheet("""
+                QFrame.cyber_action_card {
+                    background-color: rgba(255, 255, 255, 0.01);
+                    border: 1px dashed rgba(239, 68, 68, 0.25);
+                    border-radius: 8px;
+                }
+            """)
+        else:
+            self.lbl_arrow.setText("›")
+            self.lbl_arrow.setStyleSheet("font-size: 18px; font-weight: 800; color: #4b5563;")
+            self.lbl_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #f3f4f6;")
+            self.lbl_sub.setStyleSheet("font-size: 11px; color: #9ca3af; font-weight: normal;")
+            if hasattr(self, "_original_sub"):
+                self.lbl_sub.setText(self._original_sub)
+            self.setStyleSheet(f"""
+                QFrame.cyber_action_card {{
+                    background-color: rgba(255, 255, 255, 0.02);
+                    border: 1px solid rgba(255, 255, 255, 0.07);
+                    border-radius: 8px;
+                }}
+                QFrame.cyber_action_card:hover {{
+                    background-color: rgba(99, 102, 241, 0.14);
+                    border: 1px solid {self.accent_color};
+                }}
+            """)
+
     def set_title(self, title: str):
         self.action_title = title
         self.lbl_title.setText(title)
 
     def set_subtitle(self, subtitle: str):
-        self.lbl_sub.setText(subtitle)
+        self._original_sub = subtitle
+        if not self.is_locked:
+            self.lbl_sub.setText(subtitle)
 
     def mousePressEvent(self, event):
+        if getattr(self, "is_locked", False) or not self.isEnabled():
+            return
         if event.button() == Qt.LeftButton:
             self.clicked.emit(self.action_title)
         super().mousePressEvent(event)
@@ -545,6 +961,7 @@ class LumenProjectWorkspaceView(QWidget):
         hud_layout.setSpacing(8)
 
         # Línea 1: Proyecto | Rama | Remoto
+        # Línea 1: Proyecto | Rama | Remoto
         row1 = QHBoxLayout()
         row1.setSpacing(8)
 
@@ -552,6 +969,15 @@ class LumenProjectWorkspaceView(QWidget):
         lbl_p_tag.setStyleSheet("font-weight: 700; color: #9ca3af; font-size: 13.5px;")
         self.lbl_proj_title = QLabel("Cargando...")
         self.lbl_proj_title.setStyleSheet("font-weight: 800; color: #fbbf24; font-size: 14px;")
+
+        row1.addWidget(lbl_p_tag)
+        row1.addWidget(self.lbl_proj_title)
+
+        # Contenedor para Rama y Remoto de la fila 1 (solo se muestra con Git)
+        self.row1_git_widget = QWidget()
+        row1_git_lay = QHBoxLayout(self.row1_git_widget)
+        row1_git_lay.setContentsMargins(0, 0, 0, 0)
+        row1_git_lay.setSpacing(8)
 
         sep1 = QLabel(" | ")
         sep1.setStyleSheet("color: #4b5563; font-weight: 700;")
@@ -569,18 +995,39 @@ class LumenProjectWorkspaceView(QWidget):
         self.lbl_proj_remote = QLabel("origin/main")
         self.lbl_proj_remote.setStyleSheet("font-weight: 700; color: #c7d2fe; font-size: 13.5px;")
 
-        row1.addWidget(lbl_p_tag)
-        row1.addWidget(self.lbl_proj_title)
-        row1.addWidget(sep1)
-        row1.addWidget(lbl_b_tag)
-        row1.addWidget(self.lbl_proj_branch)
-        row1.addWidget(sep2)
-        row1.addWidget(lbl_r_tag)
-        row1.addWidget(self.lbl_proj_remote)
+        self.btn_repo_vis = QPushButton("⚙️ Visibilidad")
+        self.btn_repo_vis.setCursor(Qt.PointingHandCursor)
+        self.btn_repo_vis.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.15);
+                color: #a5b4fc;
+                border: 1px solid rgba(99, 102, 241, 0.45);
+                border-radius: 5px;
+                padding: 2px 8px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: rgba(99, 102, 241, 0.35);
+                color: #ffffff;
+                border-color: #818cf8;
+            }
+        """)
+        self.btn_repo_vis.clicked.connect(self.open_visibility_dialog)
+
+        row1_git_lay.addWidget(sep1)
+        row1_git_lay.addWidget(lbl_b_tag)
+        row1_git_lay.addWidget(self.lbl_proj_branch)
+        row1_git_lay.addWidget(sep2)
+        row1_git_lay.addWidget(lbl_r_tag)
+        row1_git_lay.addWidget(self.lbl_proj_remote)
+        row1_git_lay.addWidget(self.btn_repo_vis)
+
+        row1.addWidget(self.row1_git_widget)
         row1.addStretch()
         hud_layout.addLayout(row1)
 
-        # Línea 2: Entorno | Docker | Hora
+        # Línea 2: Entorno | Docker | Hora (SIEMPRE VISIBLE)
         row2 = QHBoxLayout()
         row2.setSpacing(8)
 
@@ -616,8 +1063,10 @@ class LumenProjectWorkspaceView(QWidget):
         row2.addStretch()
         hud_layout.addLayout(row2)
 
-        # Línea 3: Git HUD: | Git Mod | Untracked | Deleted
-        row3 = QHBoxLayout()
+        # Línea 3: Git HUD: | Git Mod | Untracked | Deleted (solo se muestra con Git)
+        self.hud_row3_widget = QWidget()
+        row3 = QHBoxLayout(self.hud_row3_widget)
+        row3.setContentsMargins(0, 0, 0, 0)
         row3.setSpacing(8)
 
         lbl_hud_title = QLabel("📊 Git HUD:")
@@ -658,25 +1107,32 @@ class LumenProjectWorkspaceView(QWidget):
         row3.addWidget(lbl_del_tag)
         row3.addWidget(self.lbl_git_deleted)
         row3.addStretch()
-        hud_layout.addLayout(row3)
+        hud_layout.addWidget(self.hud_row3_widget)
+
+        # Línea 4: Historial reciente de Git (solo se muestra con Git)
+        self.hud_history_widget = QWidget()
+        hist_layout = QVBoxLayout(self.hud_history_widget)
+        hist_layout.setContentsMargins(0, 0, 0, 0)
+        hist_layout.setSpacing(6)
 
         # Separador sutil
         sep_hud = QFrame()
         sep_hud.setFrameShape(QFrame.HLine)
         sep_hud.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px;")
-        hud_layout.addWidget(sep_hud)
+        hist_layout.addWidget(sep_hud)
 
-        # Línea 4: Historial reciente
         lbl_hist_head = QLabel("📜 Historial reciente (Últimos 4 commits):")
         lbl_hist_head.setStyleSheet("font-size: 13px; font-weight: 800; color: #e5e7eb;")
-        hud_layout.addWidget(lbl_hist_head)
+        hist_layout.addWidget(lbl_hist_head)
 
         # Contenedor dinámico de commits
         self.history_items_container = QWidget()
         self.history_items_layout = QVBoxLayout(self.history_items_container)
         self.history_items_layout.setContentsMargins(0, 0, 0, 0)
         self.history_items_layout.setSpacing(6)
-        hud_layout.addWidget(self.history_items_container)
+        hist_layout.addWidget(self.history_items_container)
+
+        hud_layout.addWidget(self.hud_history_widget)
 
         content_layout.addWidget(self.hud_card)
 
@@ -696,7 +1152,7 @@ class LumenProjectWorkspaceView(QWidget):
         overview_layout.setAlignment(Qt.AlignTop)
 
         # Pilar 1: Sector 1 (Protocolo Git y Ciclos)
-        card_s1 = self.create_overview_sector_card(
+        self.card_s1 = self.create_overview_sector_card(
             title="🔄  SECTOR 1 : PROTOCOLO GIT",
             accent_color="#38bdf8",
             sector_idx=1,
@@ -704,13 +1160,14 @@ class LumenProjectWorkspaceView(QWidget):
                 ("🔄", "Ciclos de Trabajo", "ADD / IA Commit / IA Audit / Push"),
                 ("🌿", "Control de Ramas", "Checkout / Crear / Borrar"),
                 ("🔀", "Fusión de Ramas", "git merge"),
-                ("⚡", "Estado y Sincronización", "Status / Fetch / Pull")
+                ("⚡", "Estado y Sincronización", "Status / Fetch / Pull"),
+                ("🌐", "Visibilidad GitHub", "Alternar entre Público y Privado")
             ]
         )
-        overview_layout.addWidget(card_s1, 1)
+        overview_layout.addWidget(self.card_s1, 1)
 
         # Pilar 2: Sector 2 (Entornos y Ejecución)
-        card_s2 = self.create_overview_sector_card(
+        self.card_s2 = self.create_overview_sector_card(
             title="🚀  SECTOR 2 : ENTORNOS & RUN",
             accent_color="#10b981",
             sector_idx=2,
@@ -720,10 +1177,10 @@ class LumenProjectWorkspaceView(QWidget):
                 ("🐳", "Docker y puertos", "Control de contenedores, compose y mapeos")
             ]
         )
-        overview_layout.addWidget(card_s2, 1)
+        overview_layout.addWidget(self.card_s2, 1)
 
         # Pilar 3: Sector 3 (Herramientas & IA)
-        card_s3 = self.create_overview_sector_card(
+        self.card_s3 = self.create_overview_sector_card(
             title="🧠  SECTOR 3 : HERRAMIENTAS & IA",
             accent_color="#c084fc",
             sector_idx=3,
@@ -733,7 +1190,7 @@ class LumenProjectWorkspaceView(QWidget):
                 ("🤖", "Utilidades IA", "Asistente Ollama local, refactor y ayuda dev")
             ]
         )
-        overview_layout.addWidget(card_s3, 1)
+        overview_layout.addWidget(self.card_s3, 1)
 
         self.sectors_stack.addWidget(self.page_overview)
 
@@ -746,29 +1203,13 @@ class LumenProjectWorkspaceView(QWidget):
         # =============================================================
         # PÁGINA 2: VENTANA DEDICADA DEL SECTOR 2 (ENTORNOS Y EJECUCIÓN)
         # =============================================================
-        self.page_sector2_view = self.create_simple_sector_view(
-            title="🚀  SEGUNDO SECTOR : ENTORNOS Y EJECUCIÓN",
-            accent_color="#10b981",
-            actions=[
-                ("💻", "Ejecutar proyecto en editor", "Lanzar espacio de trabajo en VS Code / IDE"),
-                ("🐍", "Entornos python", "Gestor de paquetes, dependencias y virtualenv"),
-                ("🐳", "Docker y puertos", "Control de contenedores, compose y mapeos")
-            ]
-        )
+        self.page_sector2_view = self.create_sector2_dedicated_view()
         self.sectors_stack.addWidget(self.page_sector2_view)
 
         # =============================================================
         # PÁGINA 3: VENTANA DEDICADA DEL SECTOR 3 (HERRAMIENTAS & IA)
         # =============================================================
-        self.page_sector3_view = self.create_simple_sector_view(
-            title="🧠  TERCER SECTOR : HERRAMIENTAS & IA",
-            accent_color="#c084fc",
-            actions=[
-                ("🛡️", "Gestor de gitignore", "Plantillas inteligentes y reglas de exclusión"),
-                ("📖", "Lector de documentación", "Visor interactivo de Markdown, README y APIs"),
-                ("🤖", "Utilidades IA", "Asistente Ollama local, refactor y ayuda dev")
-            ]
-        )
+        self.page_sector3_view = self.create_sector3_dedicated_view()
         self.sectors_stack.addWidget(self.page_sector3_view)
 
         content_layout.addWidget(self.sectors_stack)
@@ -903,8 +1344,18 @@ class LumenProjectWorkspaceView(QWidget):
 
         b_layout.addWidget(self.terminal_stack)
 
-        self.terminal_frame.setMinimumHeight(320)
-        content_layout.addWidget(self.terminal_frame, 1)
+        self.terminal_frame.setMinimumHeight(240)
+        self.terminal_frame.setMaximumHeight(16777215)
+        self.terminal_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        # Contenedor para terminal en posición inferior estándar (para toda la app)
+        self.bottom_terminal_container = QWidget()
+        self.bottom_terminal_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.bottom_terminal_layout = QVBoxLayout(self.bottom_terminal_container)
+        self.bottom_terminal_layout.setContentsMargins(0, 4, 0, 0)
+        self.bottom_terminal_layout.setSpacing(0)
+        self.bottom_terminal_layout.addWidget(self.terminal_frame)
+        content_layout.addWidget(self.bottom_terminal_container, 1)
 
         scroll_area.setWidget(scroll_content)
         root_layout.addWidget(scroll_area, 1)
@@ -930,40 +1381,81 @@ class LumenProjectWorkspaceView(QWidget):
         c_layout.setContentsMargins(14, 10, 14, 10)
         c_layout.setSpacing(6)
 
-        # Header del Sector con botón de abrir
+        # Header del Sector
         h_layout = QHBoxLayout()
         lbl_title = QLabel(title)
         lbl_title.setStyleSheet(f"font-size: 12.5px; font-weight: 900; color: {accent_color}; letter-spacing: 0.5px;")
         h_layout.addWidget(lbl_title)
         h_layout.addStretch()
-
-        btn_enter = QPushButton("Abrir Sector ›")
-        btn_enter.setCursor(Qt.PointingHandCursor)
-        btn_enter.setStyleSheet(f"""
-            QPushButton {{
-                background-color: rgba(255, 255, 255, 0.04);
-                color: {accent_color};
-                border: 1px solid {accent_color};
-                border-radius: 5px;
-                padding: 3px 8px;
-                font-size: 11px;
-                font-weight: 700;
-            }}
-            QPushButton:hover {{
-                background-color: {accent_color};
-                color: #07090e;
-            }}
-        """)
-        btn_enter.clicked.connect(lambda: self.open_sector_view(sector_idx, title))
-        h_layout.addWidget(btn_enter)
         c_layout.addLayout(h_layout)
 
-        for icon, act_title, act_sub in actions:
-            btn = LumenCyberActionButton(icon, act_title, act_sub, accent_color=accent_color)
-            btn.clicked.connect(lambda t=act_title, s=sector_idx, st=title: self.open_sector_and_handle(s, st, t))
-            c_layout.addWidget(btn)
+        card.lbl_title = lbl_title
+        card.action_buttons = []
+        card.original_title = title
+        card.accent_color = accent_color
+
+        if sector_idx == 1:
+            # Contenedor de acciones normales con Git inicializado
+            card.git_container = QWidget()
+            g_layout = QVBoxLayout(card.git_container)
+            g_layout.setContentsMargins(0, 0, 0, 0)
+            g_layout.setSpacing(6)
+            for icon, act_title, act_sub in actions:
+                btn = LumenCyberActionButton(icon, act_title, act_sub, accent_color=accent_color)
+                btn.clicked.connect(lambda t=act_title, s=sector_idx, st=title: self.open_sector_and_handle(s, st, t))
+                g_layout.addWidget(btn)
+                card.action_buttons.append(btn)
+            c_layout.addWidget(card.git_container)
+
+            # Contenedor de acciones cuando NO está inicializado en Git
+            card.nogit_container = QWidget()
+            ng_layout = QVBoxLayout(card.nogit_container)
+            ng_layout.setContentsMargins(0, 0, 0, 0)
+            ng_layout.setSpacing(6)
+
+            btn_init_git = LumenCyberActionButton(
+                "🌱", "Iniciar Proyecto Git", "Ejecutar git init con rama principal 'main'", accent_color="#10b981"
+            )
+            btn_init_git.clicked.connect(lambda: self.handle_git_init(create_gitignore=False))
+            ng_layout.addWidget(btn_init_git)
+
+            btn_init_git_ign = LumenCyberActionButton(
+                "🛡️", "Iniciar Git con .gitignore", "Inicializar git init y generar plantilla de exclusión", accent_color="#38bdf8"
+            )
+            btn_init_git_ign.clicked.connect(lambda: self.handle_git_init(create_gitignore=True))
+            ng_layout.addWidget(btn_init_git_ign)
+
+            card.nogit_actions = [btn_init_git, btn_init_git_ign]
+            card.nogit_container.setVisible(False)
+            c_layout.addWidget(card.nogit_container)
+        else:
+            for icon, act_title, act_sub in actions:
+                btn = LumenCyberActionButton(icon, act_title, act_sub, accent_color=accent_color)
+                btn.clicked.connect(lambda t=act_title, s=sector_idx, st=title: self.open_sector_and_handle(s, st, t))
+                c_layout.addWidget(btn)
+                card.action_buttons.append(btn)
 
         c_layout.addStretch()
+
+        def set_git_state(is_git: bool):
+            if sector_idx == 1:
+                card.git_container.setVisible(is_git)
+                card.nogit_container.setVisible(not is_git)
+                if is_git:
+                    lbl_title.setText(card.original_title)
+                else:
+                    lbl_title.setText("🔄  SECTOR 1 : PROTOCOLO GIT  [NO INICIALIZADO]")
+            elif sector_idx == 3:
+                if is_git:
+                    lbl_title.setText(card.original_title)
+                    for b in card.action_buttons:
+                        b.set_locked(False)
+                else:
+                    lbl_title.setText("🧠  SECTOR 3 : HERRAMIENTAS & IA  [BLOQUEADO]")
+                    for b in card.action_buttons:
+                        b.set_locked(True, "Bloqueado: Requiere repositorio Git")
+
+        card.set_git_state = set_git_state
         return card
 
     def create_sector1_dedicated_view(self) -> QFrame:
@@ -1054,11 +1546,6 @@ class LumenProjectWorkspaceView(QWidget):
         btn_push = LumenCyberActionButton("🚀", "Push", "Publicar commits locales confirmados a la rama remota origin", accent_color="#60a5fa")
         btn_push.clicked.connect(self.run_git_push)
         w_lay.addWidget(btn_push)
-
-        # Botón 6: Volver
-        btn_volver = LumenCyberActionButton("◀", "Volver", "Regresar al menú principal de Sectores", accent_color="#9ca3af")
-        btn_volver.clicked.connect(self.go_back_to_sectors_overview)
-        w_lay.addWidget(btn_volver)
 
         w_lay.addStretch()
         self.sector1_sub_stack.addWidget(page_work)
@@ -1637,6 +2124,12 @@ class LumenProjectWorkspaceView(QWidget):
         self.page_merge = self.create_sector1_merge_view()
         self.sector1_sub_stack.addWidget(self.page_merge)
 
+        # =============================================================
+        # SUB-PÁGINA 10: ESTADO Y SINCRONIZACIÓN (STATUS • FETCH • PULL)
+        # =============================================================
+        self.page_sync = self.create_sector1_sync_view()
+        self.sector1_sub_stack.addWidget(self.page_sync)
+
         layout.addWidget(self.sector1_sub_stack)
         return card
 
@@ -1713,6 +2206,27 @@ class LumenProjectWorkspaceView(QWidget):
         """)
         btn_to_merge.clicked.connect(self.open_merge_view)
         head.addWidget(btn_to_merge)
+
+        btn_to_sync = QPushButton("⚡  Estado y Sync")
+        btn_to_sync.setCursor(Qt.PointingHandCursor)
+        btn_to_sync.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border: 1px solid rgba(52, 211, 153, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.30);
+                border-color: #34d399;
+                color: #ffffff;
+            }
+        """)
+        btn_to_sync.clicked.connect(self.open_sync_view)
+        head.addWidget(btn_to_sync)
 
         lbl_title = QLabel("🌿  CONTROL DE RAMAS")
         lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
@@ -2034,6 +2548,3015 @@ class LumenProjectWorkspaceView(QWidget):
 
         return page
 
+    # =================================================================
+    # SEGUNDO SECTOR : ENTORNOS Y EJECUCIÓN (VENV & EDITOR LAUNCHER)
+    # =================================================================
+    def create_sector2_dedicated_view(self) -> QFrame:
+        """Crea la ventana interactiva dedicada del Sector 2 (Entornos y Ejecución)."""
+        card = QFrame()
+        card.setProperty("class", "surface")
+        card.setStyleSheet("""
+            QFrame.surface {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(22, 24, 34, 0.95), stop:1 rgba(16, 18, 25, 0.95));
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-top: 3px solid #10b981;
+                border-radius: 10px;
+            }
+        """)
+        card.setMinimumHeight(440)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        self.sector2_sub_stack = LumenDynamicStackedWidget()
+
+        # Página 0: Lanzador y Selector de Editores
+        self.page_s2_editor = self.create_sector2_editor_view()
+        self.sector2_sub_stack.addWidget(self.page_s2_editor)
+
+        # Página 1: Gestor de Entornos Virtuales Python
+        self.page_s2_venv = self.create_sector2_venv_view()
+        self.sector2_sub_stack.addWidget(self.page_s2_venv)
+
+        # Página 2: Control de Docker y Compose
+        self.page_s2_docker = self.create_sector2_docker_view()
+        self.sector2_sub_stack.addWidget(self.page_s2_docker)
+
+        # Página 3: Auditoría y Monitor de Puertos TCP
+        self.page_s2_ports = self.create_sector2_ports_view()
+        self.sector2_sub_stack.addWidget(self.page_s2_ports)
+
+        layout.addWidget(self.sector2_sub_stack)
+        return card
+
+    def create_sector2_editor_view(self) -> QWidget:
+        """Sub-página interactiva para seleccionar y lanzar editores de código."""
+        page = QWidget()
+        page.setMinimumHeight(340)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # Barra de navegación con botón único de volver al menú global y pestañas
+        nav = QHBoxLayout()
+        nav.setSpacing(10)
+
+        btn_back = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(16, 185, 129, 0.15);
+                color: #6ee7b7;
+                border: 1px solid rgba(16, 185, 129, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(16, 185, 129, 0.30);
+                border-color: #10b981;
+                color: #ffffff;
+            }
+        """)
+        btn_back.clicked.connect(self.go_back_to_sectors_overview)
+        nav.addWidget(btn_back)
+
+        lbl_title = QLabel("🚀  SECTOR 2 : ENTORNOS & RUN")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #10b981; letter-spacing: 0.5px;")
+        nav.addWidget(lbl_title)
+
+        # Pestañas de Navegación Sector 2
+        btn_tab_editor = QPushButton("💻  Selector de Editor")
+        btn_tab_editor.setCursor(Qt.PointingHandCursor)
+        btn_tab_editor.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(16, 185, 129, 0.25);
+                color: #ffffff;
+                border: 1px solid #10b981;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 800;
+                font-size: 11px;
+            }
+        """)
+        nav.addWidget(btn_tab_editor)
+
+        btn_tab_venv = QPushButton("🐍  Entorno Python")
+        btn_tab_venv.setCursor(Qt.PointingHandCursor)
+        btn_tab_venv.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border-color: #34d399;
+            }
+        """)
+        btn_tab_venv.clicked.connect(self.open_sector2_venv_view)
+        nav.addWidget(btn_tab_venv)
+
+        btn_tab_docker = QPushButton("🐳  Docker")
+        btn_tab_docker.setCursor(Qt.PointingHandCursor)
+        btn_tab_docker.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #38bdf8;
+                border-color: #38bdf8;
+            }
+        """)
+        btn_tab_docker.clicked.connect(self.open_sector2_docker_view)
+        nav.addWidget(btn_tab_docker)
+
+        btn_tab_ports = QPushButton("🔌  Puertos TCP")
+        btn_tab_ports.setCursor(Qt.PointingHandCursor)
+        btn_tab_ports.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(251, 191, 36, 0.15);
+                color: #fbbf24;
+                border-color: #fbbf24;
+            }
+        """)
+        btn_tab_ports.clicked.connect(self.open_sector2_ports_view)
+        nav.addWidget(btn_tab_ports)
+
+        nav.addStretch()
+
+        self.lbl_s2_pref_editor_pill = QLabel("PREFERIDO: DETECTANDO...")
+        self.lbl_s2_pref_editor_pill.setFixedHeight(24)
+        self.lbl_s2_pref_editor_pill.setAlignment(Qt.AlignCenter)
+        self.lbl_s2_pref_editor_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #34d399; background-color: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 4px; padding: 2px 8px;")
+        nav.addWidget(self.lbl_s2_pref_editor_pill)
+        layout.addLayout(nav)
+
+        # Botón de apertura rápida con el editor predeterminado
+        self.btn_s2_quick_launch = QPushButton("🚀  Abrir Proyecto con Editor Predeterminado")
+        self.btn_s2_quick_launch.setCursor(Qt.PointingHandCursor)
+        self.btn_s2_quick_launch.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #059669, stop:1 #10b981);
+                color: #ffffff;
+                font-size: 12.5px;
+                font-weight: 800;
+                border-radius: 8px;
+                padding: 8px 14px;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #10b981, stop:1 #34d399);
+                border-color: #6ee7b7;
+            }
+        """)
+        self.btn_s2_quick_launch.clicked.connect(self.quick_launch_preferred_editor)
+        layout.addWidget(self.btn_s2_quick_launch)
+
+        # Panel de lista de editores detectados con ScrollArea con altura mínima asegurada
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(180)
+        scroll.setMaximumHeight(260)
+        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+                background-color: rgba(0, 0, 0, 0.20);
+            }
+        """)
+
+        self.editor_list_widget = QWidget()
+        self.editor_list_layout = QVBoxLayout(self.editor_list_widget)
+        self.editor_list_layout.setContentsMargins(6, 6, 6, 6)
+        self.editor_list_layout.setSpacing(6)
+        scroll.setWidget(self.editor_list_widget)
+
+        layout.addWidget(scroll, 1)
+        return page
+
+    def create_sector2_venv_view(self) -> QWidget:
+        """Sub-página interactiva para gestionar entornos virtuales Python y dependencias."""
+        page = QWidget()
+        page.setMinimumHeight(340)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # Barra de navegación
+        nav = QHBoxLayout()
+        nav.setSpacing(10)
+
+        btn_back = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border: 1px solid rgba(52, 211, 153, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.30);
+                border-color: #34d399;
+                color: #ffffff;
+            }
+        """)
+        btn_back.clicked.connect(self.go_back_to_sectors_overview)
+        nav.addWidget(btn_back)
+
+        lbl_title = QLabel("🚀  SECTOR 2 : ENTORNOS & RUN")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #10b981; letter-spacing: 0.5px;")
+        nav.addWidget(lbl_title)
+
+        # Pestañas de Navegación Sector 2
+        btn_tab_editor = QPushButton("💻  Selector de Editor")
+        btn_tab_editor.setCursor(Qt.PointingHandCursor)
+        btn_tab_editor.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(16, 185, 129, 0.15);
+                color: #6ee7b7;
+                border-color: #10b981;
+            }
+        """)
+        btn_tab_editor.clicked.connect(self.open_sector2_editor_view)
+        nav.addWidget(btn_tab_editor)
+
+        btn_tab_venv = QPushButton("🐍  Entorno Python")
+        btn_tab_venv.setCursor(Qt.PointingHandCursor)
+        btn_tab_venv.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.25);
+                color: #ffffff;
+                border: 1px solid #34d399;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 800;
+                font-size: 11px;
+            }
+        """)
+        nav.addWidget(btn_tab_venv)
+
+        btn_tab_docker = QPushButton("🐳  Docker")
+        btn_tab_docker.setCursor(Qt.PointingHandCursor)
+        btn_tab_docker.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #38bdf8;
+                border-color: #38bdf8;
+            }
+        """)
+        btn_tab_docker.clicked.connect(self.open_sector2_docker_view)
+        nav.addWidget(btn_tab_docker)
+
+        btn_tab_ports = QPushButton("🔌  Puertos TCP")
+        btn_tab_ports.setCursor(Qt.PointingHandCursor)
+        btn_tab_ports.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(251, 191, 36, 0.15);
+                color: #fbbf24;
+                border-color: #fbbf24;
+            }
+        """)
+        btn_tab_ports.clicked.connect(self.open_sector2_ports_view)
+        nav.addWidget(btn_tab_ports)
+
+        nav.addStretch()
+
+        btn_refresh = QPushButton("🔄  Refrescar Estado")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
+        btn_refresh.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                padding: 5px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
+            }
+        """)
+        btn_refresh.clicked.connect(self.refresh_sector2_venv_view)
+        nav.addWidget(btn_refresh)
+        layout.addLayout(nav)
+
+        # Panel de Telemetría del Venv
+        self.frame_venv_telemetry = QFrame()
+        self.frame_venv_telemetry.setStyleSheet("""
+            QFrame {
+                background-color: rgba(0, 0, 0, 0.25);
+                border: 1px solid rgba(52, 211, 153, 0.25);
+                border-radius: 8px;
+                padding: 8px 12px;
+            }
+        """)
+        t_lay = QVBoxLayout(self.frame_venv_telemetry)
+        t_lay.setContentsMargins(10, 8, 10, 8)
+        t_lay.setSpacing(4)
+
+        self.lbl_s2_venv_status = QLabel("Estado: Inspeccionando...")
+        self.lbl_s2_venv_status.setStyleSheet("font-size: 12px; font-weight: 800; color: #f3f4f6;")
+        t_lay.addWidget(self.lbl_s2_venv_status)
+
+        self.lbl_s2_venv_details = QLabel("Intérprete: Desconocido | Paquetes: 0")
+        self.lbl_s2_venv_details.setStyleSheet("font-size: 11px; color: #9ca3af;")
+        t_lay.addWidget(self.lbl_s2_venv_details)
+
+        self.lbl_s2_venv_deps = QLabel("Dependencias detectadas: Ninguna")
+        self.lbl_s2_venv_deps.setStyleSheet("font-size: 11px; color: #34d399;")
+        t_lay.addWidget(self.lbl_s2_venv_deps)
+
+        layout.addWidget(self.frame_venv_telemetry)
+
+        # Contenedor dinámico de acciones de Venv
+        self.venv_actions_container = QWidget()
+        self.venv_actions_layout = QVBoxLayout(self.venv_actions_container)
+        self.venv_actions_layout.setContentsMargins(0, 4, 0, 4)
+        self.venv_actions_layout.setSpacing(8)
+
+        layout.addWidget(self.venv_actions_container, 1)
+        return page
+
+    def open_sector2_editor_view(self):
+        """Abre la sub-página del lanzador de editores y refresca los editores detectados."""
+        self.dock_terminal_at_bottom()
+        self.sectors_stack.setCurrentIndex(2)
+        if hasattr(self, "sector2_sub_stack"):
+            self.sector2_sub_stack.setCurrentIndex(0)
+            self.sector2_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.refresh_sector2_editor_view()
+        p_name = self.project_data.get("name", "Proyecto")
+        self.terminal_display.log("IDE", f"Panel de Lanzador de Editor abierto para <b>{p_name}</b>.", tag_color="#10b981", prefix="💻")
+
+    def refresh_sector2_editor_view(self):
+        """Detecta editores en el sistema y reconstruye la lista."""
+        while self.editor_list_layout.count():
+            item = self.editor_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        pref = get_preferred_editor()
+        detected = detect_installed_editors()
+
+        pref_name = pref
+        for e in detected:
+            if e["id"] == pref:
+                pref_name = e["name"]
+                break
+
+        self.lbl_s2_pref_editor_pill.setText(f"PREFERIDO: {pref_name.upper()}")
+        self.btn_s2_quick_launch.setText(f"🚀  Abrir Proyecto Ahora con {pref_name}")
+
+        if not detected:
+            lbl_none = QLabel("⚠️ No se detectaron editores conocidos en el sistema (VS Code, Cursor, Neovim, etc.).")
+            lbl_none.setStyleSheet("color: #f87171; font-weight: 700; padding: 12px;")
+            self.editor_list_layout.addWidget(lbl_none)
+            self.btn_s2_quick_launch.setEnabled(False)
+            return
+
+        self.btn_s2_quick_launch.setEnabled(True)
+
+        for ed in detected:
+            card = QFrame()
+            card.setStyleSheet("""
+                QFrame {
+                    background-color: rgba(255, 255, 255, 0.03);
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 8px;
+                }
+                QFrame:hover {
+                    background-color: rgba(255, 255, 255, 0.06);
+                    border-color: rgba(16, 185, 129, 0.35);
+                }
+            """)
+            c_lay = QHBoxLayout(card)
+            c_lay.setContentsMargins(12, 8, 12, 8)
+            c_lay.setSpacing(10)
+
+            lbl_ic = QLabel(ed["icon"])
+            lbl_ic.setStyleSheet("font-size: 18px;")
+            c_lay.addWidget(lbl_ic)
+
+            info_lay = QVBoxLayout()
+            info_lay.setSpacing(1)
+            lbl_name = QLabel(ed["name"])
+            lbl_name.setStyleSheet("font-size: 12.5px; font-weight: 800; color: #f3f4f6;")
+            info_lay.addWidget(lbl_name)
+
+            type_label = "Aplicación Gráfica (GUI)" if ed["type"] == "gui" else "Editor de Consola (Terminal)"
+            is_pref = (ed["id"] == pref)
+            if is_pref:
+                type_label += "  •  ⭐ Predeterminado"
+
+            lbl_sub = QLabel(type_label)
+            lbl_sub.setStyleSheet("font-size: 10.5px; color: #34d399;" if is_pref else "font-size: 10.5px; color: #9ca3af;")
+            info_lay.addWidget(lbl_sub)
+            c_lay.addLayout(info_lay, 1)
+
+            if not is_pref:
+                btn_set_pref = QPushButton("⭐ Establecer por Defecto")
+                btn_set_pref.setCursor(Qt.PointingHandCursor)
+                btn_set_pref.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(255, 255, 255, 0.05);
+                        color: #d1d5db;
+                        border: 1px solid rgba(255, 255, 255, 0.15);
+                        border-radius: 6px;
+                        padding: 5px 10px;
+                        font-weight: 600;
+                        font-size: 11px;
+                    }
+                    QPushButton:hover {
+                        background-color: rgba(255, 255, 255, 0.12);
+                        color: #ffffff;
+                    }
+                """)
+                btn_set_pref.clicked.connect(lambda _, eid=ed["id"], ename=ed["name"]: self.execute_set_preferred_editor(eid, ename))
+                c_lay.addWidget(btn_set_pref)
+
+            btn_open = QPushButton(f"🚀 Abrir ({ed['id']})")
+            btn_open.setCursor(Qt.PointingHandCursor)
+            btn_open.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(16, 185, 129, 0.20);
+                    color: #6ee7b7;
+                    border: 1px solid rgba(16, 185, 129, 0.45);
+                    border-radius: 6px;
+                    padding: 5px 12px;
+                    font-weight: 700;
+                    font-size: 11.5px;
+                }
+                QPushButton:hover {
+                    background-color: #10b981;
+                    color: #064e3b;
+                }
+            """)
+            btn_open.clicked.connect(lambda _, eid=ed["id"], ename=ed["name"]: self.execute_launch_editor(eid, ename))
+            c_lay.addWidget(btn_open)
+
+            self.editor_list_layout.addWidget(card)
+
+        self.editor_list_layout.addStretch()
+
+    def quick_launch_preferred_editor(self):
+        """Lanza rápidamente el proyecto con el editor predeterminado."""
+        pref = get_preferred_editor()
+        detected = detect_installed_editors()
+        name = pref
+        for e in detected:
+            if e["id"] == pref:
+                name = e["name"]
+                break
+        self.execute_launch_editor(pref, name)
+
+    def execute_set_preferred_editor(self, editor_id: str, editor_name: str):
+        """Guarda la preferencia del editor y refresca la vista."""
+        if set_preferred_editor(editor_id):
+            self.terminal_display.log_success("IDE", f"Editor predeterminado actualizado a: <b>{editor_name}</b> (<code>{editor_id}</code>).")
+            self.refresh_sector2_editor_view()
+        else:
+            self.terminal_display.log_error("IDE", "No se pudo guardar la preferencia del editor en disco.")
+
+    def execute_launch_editor(self, editor_id: str, editor_name: str):
+        """Lanza el editor apuntando a la carpeta del proyecto activo."""
+        path = self.project_data.get("path")
+        if not path or not os.path.exists(path):
+            self.terminal_display.log_error("IDE", "Ruta de proyecto no válida.")
+            return
+
+        self.terminal_display.log("IDE", f"Lanzando <b>{editor_name}</b> en <code>{path}</code>...", tag_color="#10b981", prefix="🚀")
+        ok, msg = launch_project_in_editor(editor_id, path)
+        if ok:
+            self.terminal_display.log_success("IDE", f"<b>{editor_name}</b> iniciado exitosamente: {msg}")
+        else:
+            self.terminal_display.log_error("IDE", f"Error al lanzar {editor_name}: {msg}")
+
+    def open_sector2_venv_view(self):
+        """Abre la sub-página de gestión de entornos virtuales y refresca la telemetría."""
+        self.dock_terminal_at_bottom()
+        self.sectors_stack.setCurrentIndex(2)
+        if hasattr(self, "sector2_sub_stack"):
+            self.sector2_sub_stack.setCurrentIndex(1)
+            self.sector2_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.refresh_sector2_venv_view()
+        p_name = self.project_data.get("name", "Proyecto")
+        self.terminal_display.log("VENV", f"Gestor de Entorno Virtual cargado para <b>{p_name}</b>.", tag_color="#34d399", prefix="🐍")
+
+    def refresh_sector2_venv_view(self):
+        """Inspecciona el entorno virtual del proyecto y actualiza los widgets dinámicos."""
+        path = self.project_data.get("path")
+        if not path or not os.path.exists(path):
+            return
+
+        venv_info = inspect_python_venv(path)
+        self.current_venv_info = venv_info
+
+        if venv_info["has_venv"]:
+            status_text = f"🟢 ACTIVO / VINCULADO ({venv_info['venv_name']})"
+            self.lbl_s2_venv_status.setText(f"Entorno Virtual: <b>{venv_info['venv_name']}</b>  |  Estado: {status_text}")
+            self.lbl_s2_venv_details.setText(f"Intérprete: {venv_info['python_version']}  |  Paquetes instalados: {venv_info['package_count']}")
+        else:
+            self.lbl_s2_venv_status.setText("Entorno Virtual: ⚠️ NO DETECTADO EN EL PROYECTO")
+            self.lbl_s2_venv_details.setText("No se encontró ninguna carpeta .venv / venv / env con intérprete de Python.")
+
+        deps_str = ", ".join(venv_info["dependency_files"]) if venv_info["dependency_files"] else "Ninguno detectado"
+        self.lbl_s2_venv_deps.setText(f"Archivos de especificación: <b>{deps_str}</b>")
+
+        while self.venv_actions_layout.count():
+            item = self.venv_actions_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not venv_info["has_venv"]:
+            btn_uv = LumenCyberActionButton("⚡", "Crear Entorno Rápido con uv (.venv)", "Aislamiento ultra veloz utilizando motor uv", accent_color="#10b981")
+            btn_uv.clicked.connect(lambda: self.execute_create_venv(use_uv=True))
+            self.venv_actions_layout.addWidget(btn_uv)
+
+            btn_std = LumenCyberActionButton("🐍", "Crear Entorno Estándar con python venv (.venv)", "Creación nativa con módulo python3 -m venv", accent_color="#34d399")
+            btn_std.clicked.connect(lambda: self.execute_create_venv(use_uv=False))
+            self.venv_actions_layout.addWidget(btn_std)
+        else:
+            btn_sync_deps = LumenCyberActionButton("📦", "Sincronizar / Instalar Dependencias del Proyecto", "Instalar paquetes desde requirements.txt o pyproject.toml", accent_color="#10b981")
+            btn_sync_deps.clicked.connect(self.execute_install_venv_dependencies)
+            self.venv_actions_layout.addWidget(btn_sync_deps)
+
+            btn_custom_pkg = LumenCyberActionButton("➕", "Instalar Paquete Individual", "Instalar librerías específicas (ej: fastapi requests numpy)", accent_color="#38bdf8")
+            btn_custom_pkg.clicked.connect(self.execute_install_custom_package)
+            self.venv_actions_layout.addWidget(btn_custom_pkg)
+
+            btn_freeze = LumenCyberActionButton("📄", "Congelar Dependencias (pip freeze)", "Actualizar o generar requirements.txt con las versiones exactas", accent_color="#fbbf24")
+            btn_freeze.clicked.connect(self.execute_freeze_venv_dependencies)
+            self.venv_actions_layout.addWidget(btn_freeze)
+
+            btn_list = LumenCyberActionButton("📋", "Listar Paquetes Instalados", "Mostrar en la terminal la lista de librerías y versiones instaladas", accent_color="#818cf8")
+            btn_list.clicked.connect(self.execute_list_venv_packages)
+            self.venv_actions_layout.addWidget(btn_list)
+
+            btn_delete = LumenCyberActionButton("🗑️", f"Eliminar Entorno Virtual ({venv_info['venv_name']})", "Borrar permanentemente el entorno virtual del disco", accent_color="#ef4444")
+            btn_delete.clicked.connect(self.execute_delete_venv)
+            self.venv_actions_layout.addWidget(btn_delete)
+
+        self.venv_actions_layout.addStretch()
+
+    def execute_create_venv(self, use_uv: bool = False):
+        """Crea el entorno virtual en segundo plano."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        engine = "uv" if use_uv else "python venv"
+        self.terminal_display.log("VENV", f"Creando entorno virtual <code>.venv</code> usando <b>{engine}</b>...", tag_color="#10b981", prefix="⚡")
+        self.venv_worker = PythonVenvWorkerThread("create_venv", path, extra_args=use_uv)
+        self.venv_worker.finished_task.connect(self.on_venv_worker_finished)
+        self.venv_worker.start()
+
+    def execute_install_venv_dependencies(self):
+        """Instala las dependencias del proyecto."""
+        path = self.project_data.get("path")
+        venv_path = getattr(self, "current_venv_info", {}).get("venv_path", "")
+        if not path or not venv_path:
+            self.terminal_display.log_error("VENV", "No se detectó la ruta del entorno virtual.")
+            return
+
+        self.terminal_display.log("VENV", "Instalando dependencias del proyecto en el entorno virtual...", tag_color="#10b981", prefix="📦")
+        self.venv_worker = PythonVenvWorkerThread("install_deps", path, venv_path=venv_path)
+        self.venv_worker.finished_task.connect(self.on_venv_worker_finished)
+        self.venv_worker.start()
+
+    def execute_install_custom_package(self):
+        """Solicita paquetes al usuario e instala en el venv."""
+        path = self.project_data.get("path")
+        venv_path = getattr(self, "current_venv_info", {}).get("venv_path", "")
+        if not path or not venv_path:
+            return
+
+        pkgs_str, ok = QInputDialog.getText(
+            self, "Instalar Paquetes Python", 
+            "Escribe los nombres de los paquetes a instalar (separados por espacio):",
+            text="fastapi uvicorn"
+        )
+        if ok and pkgs_str.strip():
+            pkgs = pkgs_str.strip().split()
+            self.terminal_display.log("VENV", f"Instalando paquete(s): <b>{' '.join(pkgs)}</b>...", tag_color="#38bdf8", prefix="➕")
+            self.venv_worker = PythonVenvWorkerThread("install_custom", path, venv_path=venv_path, extra_args=pkgs)
+            self.venv_worker.finished_task.connect(self.on_venv_worker_finished)
+            self.venv_worker.start()
+
+    def execute_freeze_venv_dependencies(self):
+        """Congela las dependencias del entorno."""
+        path = self.project_data.get("path")
+        venv_path = getattr(self, "current_venv_info", {}).get("venv_path", "")
+        if not path or not venv_path:
+            return
+
+        self.terminal_display.log("VENV", "Congelando dependencias a <code>requirements.txt</code>...", tag_color="#fbbf24", prefix="📄")
+        self.venv_worker = PythonVenvWorkerThread("freeze", path, venv_path=venv_path)
+        self.venv_worker.finished_task.connect(self.on_venv_worker_finished)
+        self.venv_worker.start()
+
+    def execute_list_venv_packages(self):
+        """Lista los paquetes instalados en la terminal."""
+        venv_path = getattr(self, "current_venv_info", {}).get("venv_path", "")
+        if not venv_path:
+            return
+        pkgs = list_installed_packages(venv_path)
+        if not pkgs:
+            self.terminal_display.log_info("VENV", "No se detectaron paquetes instalados en el venv.")
+            return
+
+        self.terminal_display.log("VENV", f"Lista de paquetes instalados en <code>{os.path.basename(venv_path)}</code> ({len(pkgs)} librerías):", tag_color="#818cf8", prefix="📋")
+        for name, ver in pkgs:
+            self.terminal_display.log("PKG", f"{name} == {ver}", tag_color="#9ca3af", prefix="•")
+
+    def execute_delete_venv(self):
+        """Elimina el entorno virtual con confirmación."""
+        venv_path = getattr(self, "current_venv_info", {}).get("venv_path", "")
+        if not venv_path:
+            return
+
+        reply = QMessageBox.question(
+            self, "Confirmar Eliminación",
+            f"¿Estás seguro de que deseas eliminar permanentemente la carpeta '{os.path.basename(venv_path)}'?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            path = self.project_data.get("path", "")
+            self.terminal_display.log_warn("VENV", f"Eliminando entorno virtual: <code>{venv_path}</code>...")
+            self.venv_worker = PythonVenvWorkerThread("delete_venv", path, venv_path=venv_path)
+            self.venv_worker.finished_task.connect(self.on_venv_worker_finished)
+            self.venv_worker.start()
+
+    def on_venv_worker_finished(self, success: bool, task_name: str, message: str):
+        """Callback al finalizar tareas de venv en segundo plano."""
+        if success:
+            self.terminal_display.log_success(task_name, message)
+        else:
+            self.terminal_display.log_error(task_name, message)
+        self.refresh_sector2_venv_view()
+
+    # =================================================================
+    # SUB-PÁGINA 2: CONTROL DE DOCKER Y COMPOSE
+    # =================================================================
+    def create_sector2_docker_view(self) -> QWidget:
+        """Sub-página interactiva para gestionar Docker, contenedores y Compose con Deep Discovery."""
+        page = QWidget()
+        page.setMinimumHeight(440)
+        page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(0)
+
+        # Contenedor Izquierdo: Controles, Telemetría y Contenedores
+        docker_left_widget = QWidget()
+        layout = QVBoxLayout(docker_left_widget)
+        layout.setContentsMargins(0, 0, 6, 0)
+        layout.setSpacing(10)
+
+        # Barra de navegación
+        nav = QHBoxLayout()
+        nav.setSpacing(10)
+
+        btn_back = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #bae6fd;
+                border: 1px solid rgba(56, 189, 248, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.30);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_back.clicked.connect(self.go_back_to_sectors_overview)
+        nav.addWidget(btn_back)
+
+        lbl_title = QLabel("🚀  SECTOR 2 : ENTORNOS & RUN")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #10b981; letter-spacing: 0.5px;")
+        nav.addWidget(lbl_title)
+
+        # Pestañas de Navegación Sector 2
+        btn_tab_editor = QPushButton("💻  Selector de Editor")
+        btn_tab_editor.setCursor(Qt.PointingHandCursor)
+        btn_tab_editor.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(16, 185, 129, 0.15);
+                color: #6ee7b7;
+                border-color: #10b981;
+            }
+        """)
+        btn_tab_editor.clicked.connect(self.open_sector2_editor_view)
+        nav.addWidget(btn_tab_editor)
+
+        btn_tab_venv = QPushButton("🐍  Entorno Python")
+        btn_tab_venv.setCursor(Qt.PointingHandCursor)
+        btn_tab_venv.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border-color: #34d399;
+            }
+        """)
+        btn_tab_venv.clicked.connect(self.open_sector2_venv_view)
+        nav.addWidget(btn_tab_venv)
+
+        btn_tab_docker = QPushButton("🐳  Docker")
+        btn_tab_docker.setCursor(Qt.PointingHandCursor)
+        btn_tab_docker.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.25);
+                color: #ffffff;
+                border: 1px solid #38bdf8;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 800;
+                font-size: 11px;
+            }
+        """)
+        nav.addWidget(btn_tab_docker)
+
+        btn_tab_ports = QPushButton("🔌  Puertos TCP")
+        btn_tab_ports.setCursor(Qt.PointingHandCursor)
+        btn_tab_ports.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(251, 191, 36, 0.15);
+                color: #fbbf24;
+                border-color: #fbbf24;
+            }
+        """)
+        btn_tab_ports.clicked.connect(self.open_sector2_ports_view)
+        nav.addWidget(btn_tab_ports)
+
+        nav.addStretch()
+
+        btn_refresh = QPushButton("🔄  Refrescar")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
+        btn_refresh.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                padding: 5px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
+            }
+        """)
+        btn_refresh.clicked.connect(self.refresh_sector2_docker_view)
+        nav.addWidget(btn_refresh)
+        layout.addLayout(nav)
+
+        # Panel de Telemetría Docker + Estado Compose Tool
+        self.frame_docker_telemetry = QFrame()
+        self.frame_docker_telemetry.setStyleSheet("""
+            QFrame {
+                background-color: rgba(0, 0, 0, 0.25);
+                border: 1px solid rgba(56, 189, 248, 0.25);
+                border-radius: 8px;
+                padding: 8px 12px;
+            }
+        """)
+        d_lay = QVBoxLayout(self.frame_docker_telemetry)
+        d_lay.setContentsMargins(10, 8, 10, 8)
+        d_lay.setSpacing(4)
+
+        self.lbl_s2_docker_status = QLabel("Docker: Inspeccionando estado...")
+        self.lbl_s2_docker_status.setStyleSheet("font-size: 12px; font-weight: 800; color: #f3f4f6;")
+        d_lay.addWidget(self.lbl_s2_docker_status)
+
+        self.lbl_s2_docker_details = QLabel("Demonio: Desconocido | Archivos Compose: Ninguno")
+        self.lbl_s2_docker_details.setStyleSheet("font-size: 11px; color: #9ca3af;")
+        d_lay.addWidget(self.lbl_s2_docker_details)
+
+        self.lbl_s2_compose_tool = QLabel("Compose Tool: Detectando...")
+        self.lbl_s2_compose_tool.setStyleSheet("font-size: 10.5px; color: #6b7280;")
+        d_lay.addWidget(self.lbl_s2_compose_tool)
+
+        layout.addWidget(self.frame_docker_telemetry)
+
+        # Barra de Acciones Globales Docker (Prune, etc.)
+        docker_acts = QHBoxLayout()
+        docker_acts.setSpacing(8)
+
+        btn_prune = QPushButton("🧹 Purgar Recursos Inactivos (Prune)")
+        btn_prune.setCursor(Qt.PointingHandCursor)
+        btn_prune.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(239, 68, 68, 0.12);
+                color: #fca5a5;
+                border: 1px solid rgba(239, 68, 68, 0.30);
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(239, 68, 68, 0.25);
+                color: #ffffff;
+            }
+        """)
+        btn_prune.clicked.connect(self.execute_docker_system_prune)
+        docker_acts.addWidget(btn_prune)
+        docker_acts.addStretch()
+        layout.addLayout(docker_acts)
+
+        # ScrollArea con Compose Stacks + Contenedores
+        scroll_docker = QScrollArea()
+        scroll_docker.setWidgetResizable(True)
+        scroll_docker.setMinimumHeight(280)
+        scroll_docker.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        scroll_docker.setStyleSheet("""
+            QScrollArea {
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+                background-color: rgba(0, 0, 0, 0.20);
+            }
+        """)
+
+        self.docker_containers_widget = QWidget()
+        self.docker_containers_layout = QVBoxLayout(self.docker_containers_widget)
+        self.docker_containers_layout.setContentsMargins(6, 6, 6, 6)
+        self.docker_containers_layout.setSpacing(6)
+        scroll_docker.setWidget(self.docker_containers_widget)
+
+        layout.addWidget(scroll_docker, 1)
+
+        # Contenedor Derecho: Panel Lateral Exclusivo para Terminal en Docker
+        self.docker_side_terminal_container = QWidget()
+        self.docker_side_terminal_layout = QVBoxLayout(self.docker_side_terminal_container)
+        self.docker_side_terminal_layout.setContentsMargins(0, 0, 0, 0)
+        self.docker_side_terminal_layout.setSpacing(0)
+        self.docker_side_terminal_container.setMinimumWidth(340)
+        self.docker_side_terminal_container.setVisible(False)
+
+        # Splitter Horizontal Interno de Docker
+        self.docker_splitter = QSplitter(Qt.Horizontal)
+        self.docker_splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: rgba(255, 255, 255, 0.08);
+                width: 4px;
+                border-radius: 2px;
+            }
+            QSplitter::handle:hover {
+                background-color: #38bdf8;
+            }
+        """)
+        self.docker_splitter.addWidget(docker_left_widget)
+        self.docker_splitter.addWidget(self.docker_side_terminal_container)
+        self.docker_splitter.setStretchFactor(0, 6)
+        self.docker_splitter.setStretchFactor(1, 4)
+
+        page_layout.addWidget(self.docker_splitter, 1)
+        return page
+
+    # =================================================================
+    # SUB-PÁGINA 3: AUDITORÍA Y MONITOR DE PUERTOS TCP
+    # =================================================================
+    def create_sector2_ports_view(self) -> QWidget:
+        """Sub-página interactiva para auditar puertos TCP en escucha y matar procesos."""
+        page = QWidget()
+        page.setMinimumHeight(350)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # Barra de navegación
+        nav = QHBoxLayout()
+        nav.setSpacing(10)
+
+        btn_back = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(251, 191, 36, 0.15);
+                color: #fde68a;
+                border: 1px solid rgba(251, 191, 36, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(251, 191, 36, 0.30);
+                border-color: #fbbf24;
+                color: #ffffff;
+            }
+        """)
+        btn_back.clicked.connect(self.go_back_to_sectors_overview)
+        nav.addWidget(btn_back)
+
+        lbl_title = QLabel("🚀  SECTOR 2 : ENTORNOS & RUN")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #10b981; letter-spacing: 0.5px;")
+        nav.addWidget(lbl_title)
+
+        # Pestañas de Navegación Sector 2
+        btn_tab_editor = QPushButton("💻  Selector de Editor")
+        btn_tab_editor.setCursor(Qt.PointingHandCursor)
+        btn_tab_editor.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(16, 185, 129, 0.15);
+                color: #6ee7b7;
+                border-color: #10b981;
+            }
+        """)
+        btn_tab_editor.clicked.connect(self.open_sector2_editor_view)
+        nav.addWidget(btn_tab_editor)
+
+        btn_tab_venv = QPushButton("🐍  Entorno Python")
+        btn_tab_venv.setCursor(Qt.PointingHandCursor)
+        btn_tab_venv.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border-color: #34d399;
+            }
+        """)
+        btn_tab_venv.clicked.connect(self.open_sector2_venv_view)
+        nav.addWidget(btn_tab_venv)
+
+        btn_tab_docker = QPushButton("🐳  Docker")
+        btn_tab_docker.setCursor(Qt.PointingHandCursor)
+        btn_tab_docker.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #38bdf8;
+                border-color: #38bdf8;
+            }
+        """)
+        btn_tab_docker.clicked.connect(self.open_sector2_docker_view)
+        nav.addWidget(btn_tab_docker)
+
+        btn_tab_ports = QPushButton("🔌  Puertos TCP")
+        btn_tab_ports.setCursor(Qt.PointingHandCursor)
+        btn_tab_ports.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(251, 191, 36, 0.25);
+                color: #ffffff;
+                border: 1px solid #fbbf24;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 800;
+                font-size: 11px;
+            }
+        """)
+        nav.addWidget(btn_tab_ports)
+
+        nav.addStretch()
+
+        btn_refresh = QPushButton("🔄  Escanear Puertos")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
+        btn_refresh.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                padding: 5px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
+            }
+        """)
+        btn_refresh.clicked.connect(self.refresh_sector2_ports_view)
+        nav.addWidget(btn_refresh)
+        layout.addLayout(nav)
+
+        # Panel de Resumen de Puertos
+        self.lbl_s2_ports_summary = QLabel("Puertos TCP Activos: Escaneando...")
+        self.lbl_s2_ports_summary.setStyleSheet("font-size: 11.5px; font-weight: 700; color: #fbbf24; padding: 4px 0;")
+        layout.addWidget(self.lbl_s2_ports_summary)
+
+        # ScrollArea con Lista de Puertos
+        scroll_ports = QScrollArea()
+        scroll_ports.setWidgetResizable(True)
+        scroll_ports.setMinimumHeight(180)
+        scroll_ports.setMaximumHeight(260)
+        scroll_ports.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        scroll_ports.setStyleSheet("""
+            QScrollArea {
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+                background-color: rgba(0, 0, 0, 0.20);
+            }
+        """)
+
+        self.ports_list_widget = QWidget()
+        self.ports_list_layout = QVBoxLayout(self.ports_list_widget)
+        self.ports_list_layout.setContentsMargins(6, 6, 6, 6)
+        self.ports_list_layout.setSpacing(6)
+        scroll_ports.setWidget(self.ports_list_widget)
+
+        layout.addWidget(scroll_ports, 1)
+        return page
+
+    # =================================================================
+    # MÉTODOS DE ACCIÓN Y APERTURA DE DOCKER Y PUERTOS
+    # =================================================================
+    def open_sector2_docker_view(self):
+        """Abre la sub-página de control de Docker y refresca contenedores."""
+        self.dock_terminal_in_docker()
+        self.sectors_stack.setCurrentIndex(2)
+        if hasattr(self, "sector2_sub_stack"):
+            self.sector2_sub_stack.setCurrentIndex(2)
+            self.sector2_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.refresh_sector2_docker_view()
+        p_name = self.project_data.get("name", "Proyecto")
+        self.terminal_display.log("DOCKER", f"Panel de Control Docker & Compose abierto para <b>{p_name}</b>.", tag_color="#38bdf8", prefix="🐳")
+
+    def open_sector2_ports_view(self):
+        """Abre la sub-página de auditoría de puertos TCP."""
+        self.dock_terminal_at_bottom()
+        self.sectors_stack.setCurrentIndex(2)
+        if hasattr(self, "sector2_sub_stack"):
+            self.sector2_sub_stack.setCurrentIndex(3)
+            self.sector2_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.refresh_sector2_ports_view()
+        self.terminal_display.log("PORTS", "Monitor de Puertos TCP y Procesos en Escucha abierto.", tag_color="#fbbf24", prefix="🔌")
+
+    def refresh_sector2_docker_view(self):
+        """Inspecciona Docker, descubre compose/Dockerfile recursivamente y lista contenedores."""
+        path = self.project_data.get("path", "")
+        status = inspect_docker_status(path)
+
+        # --- Telemetría del Demonio ---
+        if not status["installed"]:
+            self.lbl_s2_docker_status.setText("Docker: ❌ No instalado en el sistema")
+            self.lbl_s2_docker_details.setText("Instala 'docker' o 'docker.io' para habilitar la orquestación de contenedores.")
+        elif not status["daemon_running"]:
+            self.lbl_s2_docker_status.setText("Docker: 🔴 Demonio Inactivo / Sin Permisos")
+            self.lbl_s2_docker_details.setText("Ejecuta 'sudo systemctl start docker' o añade tu usuario al grupo docker.")
+        else:
+            self.lbl_s2_docker_status.setText("Docker: 🟢 Demonio Activo y Operativo")
+            deep = status.get("deep_scan", {})
+            n_compose = len(deep.get("compose_files", []))
+            n_docker = len(deep.get("dockerfiles", []))
+            comp_str = ", ".join(status["compose_files"]) if status["compose_files"] else "Ninguno"
+            self.lbl_s2_docker_details.setText(
+                f"Compose: <b>{comp_str}</b>  |  "
+                f"Dockerfiles: {n_docker}  |  Compose Files: {n_compose}"
+            )
+
+        # --- Estado Compose Tool ---
+        _, tool_name = detect_compose_tool()
+        tool_labels = {
+            "docker-compose-v2": "✅ docker compose (plugin v2)",
+            "docker-compose-v1": "✅ docker-compose (standalone v1)",
+            "podman-compose": "✅ podman-compose",
+            "none": "⚠️ No disponible (instala docker-compose o habilita el plugin compose)"
+        }
+        if hasattr(self, "lbl_s2_compose_tool"):
+            self.lbl_s2_compose_tool.setText(f"Herramienta Compose: {tool_labels.get(tool_name, '?')}")
+
+        # --- Limpiar contenido previo ---
+        while self.docker_containers_layout.count():
+            item = self.docker_containers_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not status.get("installed"):
+            return
+
+        if not status["daemon_running"]:
+            lbl_warn = QLabel("⚠️ El servicio Docker no está respondiendo. Inicia el demonio para visualizar contenedores.")
+            lbl_warn.setStyleSheet("color: #f87171; font-weight: 700; padding: 12px;")
+            self.docker_containers_layout.addWidget(lbl_warn)
+            return
+
+        deep = status.get("deep_scan", {})
+
+        # ===== SECCIÓN: COMPOSE STACKS DESCUBIERTOS =====
+        compose_files = deep.get("compose_files", [])
+        if compose_files:
+            lbl_section_compose = QLabel(f"🐙  COMPOSE STACKS DESCUBIERTOS ({len(compose_files)})")
+            lbl_section_compose.setStyleSheet("font-size: 12px; font-weight: 900; color: #a78bfa; padding: 6px 0 2px 4px;")
+            self.docker_containers_layout.addWidget(lbl_section_compose)
+
+            for cf in compose_files:
+                compose_card = QFrame()
+                compose_card.setStyleSheet("""
+                    QFrame {
+                        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                            stop:0 rgba(167, 139, 250, 0.08), stop:1 rgba(56, 189, 248, 0.05));
+                        border: 1px solid rgba(167, 139, 250, 0.25);
+                        border-left: 3px solid #a78bfa;
+                        border-radius: 8px;
+                    }
+                """)
+                cc_lay = QVBoxLayout(compose_card)
+                cc_lay.setContentsMargins(12, 10, 12, 10)
+                cc_lay.setSpacing(6)
+
+                # Header del compose file
+                header_row = QHBoxLayout()
+                lbl_cf_icon = QLabel("📄")
+                lbl_cf_icon.setStyleSheet("font-size: 16px;")
+                header_row.addWidget(lbl_cf_icon)
+
+                lbl_cf_path = QLabel(f"<b>{cf['relative']}</b>")
+                lbl_cf_path.setStyleSheet("font-size: 12px; font-weight: 800; color: #e9d5ff;")
+                header_row.addWidget(lbl_cf_path)
+
+                lbl_cf_dir = QLabel(f"<span style='color: #6b7280;'>en {cf['dir']}</span>")
+                lbl_cf_dir.setStyleSheet("font-size: 10px;")
+                header_row.addWidget(lbl_cf_dir)
+                header_row.addStretch()
+                cc_lay.addLayout(header_row)
+
+                # Servicios detectados
+                services = cf.get("services", [])
+                if services:
+                    parsed = parse_compose_file_lightweight(cf["path"])
+                    svc_detail_parts = []
+                    for svc_name in services:
+                        svc_data = parsed.get("services", {}).get(svc_name, {})
+                        img = svc_data.get("image") or svc_data.get("build") or "?"
+                        ports = svc_data.get("ports", [])
+                        port_str = ", ".join(ports[:3]) if ports else "sin puertos"
+                        svc_detail_parts.append(f"<b>{svc_name}</b> ({img}) → {port_str}")
+
+                    svc_text = "  •  ".join(svc_detail_parts) if len(svc_detail_parts) <= 4 else "  •  ".join(svc_detail_parts[:4]) + f"  (+{len(svc_detail_parts)-4} más)"
+                    lbl_svcs = QLabel(f"Servicios: {svc_text}")
+                    lbl_svcs.setStyleSheet("font-size: 10.5px; color: #c4b5fd; padding-left: 4px;")
+                    lbl_svcs.setWordWrap(True)
+                    cc_lay.addWidget(lbl_svcs)
+                else:
+                    lbl_no_svc = QLabel("Servicios: <i>No se pudieron parsear</i>")
+                    lbl_no_svc.setStyleSheet("font-size: 10.5px; color: #6b7280; font-style: italic;")
+                    cc_lay.addWidget(lbl_no_svc)
+
+                # Botones de ciclo de vida compose
+                compose_btns_row = QHBoxLayout()
+                compose_btns_row.setSpacing(5)
+
+                compose_tool_available = (tool_name != "none")
+
+                compose_actions = [
+                    ("🚀 Up",      "compose-up",      "#10b981", "#6ee7b7"),
+                    ("🛑 Down",    "compose-down",    "#ef4444", "#fca5a5"),
+                    ("⏸ Stop",     "compose-stop",    "#f59e0b", "#fcd34d"),
+                    ("🔄 Restart", "compose-restart", "#3b82f6", "#93c5fd"),
+                    ("⏯ Pause",    "compose-pause",   "#8b5cf6", "#c4b5fd"),
+                    ("▶ Unpause",  "compose-unpause", "#14b8a6", "#5eead4"),
+                    ("🔨 Build",   "compose-build",   "#f97316", "#fdba74"),
+                    ("📋 Logs",    "compose-logs",    "#6b7280", "#d1d5db"),
+                ]
+                for btn_text, task_type, accent, text_color in compose_actions:
+                    btn = QPushButton(btn_text)
+                    btn.setCursor(Qt.PointingHandCursor)
+                    btn.setEnabled(compose_tool_available)
+                    btn.setStyleSheet(f"""
+                        QPushButton {{
+                            background-color: rgba({self._hex_to_rgba(accent, 0.12)});
+                            color: {text_color};
+                            border: 1px solid rgba({self._hex_to_rgba(accent, 0.35)});
+                            border-radius: 5px;
+                            padding: 4px 7px;
+                            font-weight: 700;
+                            font-size: 10px;
+                        }}
+                        QPushButton:hover {{
+                            background-color: rgba({self._hex_to_rgba(accent, 0.30)});
+                            color: #ffffff;
+                        }}
+                        QPushButton:disabled {{
+                            background-color: rgba(255, 255, 255, 0.03);
+                            color: #4b5563;
+                            border-color: rgba(255, 255, 255, 0.06);
+                        }}
+                    """)
+                    compose_path = cf["path"]
+                    if task_type == "compose-logs":
+                        btn.clicked.connect(lambda _, cp=compose_path: self.show_compose_logs(cp))
+                    else:
+                        btn.clicked.connect(lambda _, tt=task_type, cp=compose_path: self.execute_compose_lifecycle(tt, cp))
+                    compose_btns_row.addWidget(btn)
+
+                compose_btns_row.addStretch()
+                cc_lay.addLayout(compose_btns_row)
+
+                if not compose_tool_available:
+                    lbl_no_tool = QLabel("⚠️ Instala docker-compose o habilita el plugin 'compose' para usar estos controles.")
+                    lbl_no_tool.setStyleSheet("font-size: 10px; color: #f87171; padding-left: 4px;")
+                    cc_lay.addWidget(lbl_no_tool)
+
+                self.docker_containers_layout.addWidget(compose_card)
+
+        # ===== SECCIÓN: DOCKERFILES DESCUBIERTOS =====
+        dockerfiles = deep.get("dockerfiles", [])
+        if dockerfiles:
+            lbl_section_df = QLabel(f"📦  DOCKERFILES DESCUBIERTOS ({len(dockerfiles)})")
+            lbl_section_df.setStyleSheet("font-size: 12px; font-weight: 900; color: #60a5fa; padding: 10px 0 2px 4px;")
+            self.docker_containers_layout.addWidget(lbl_section_df)
+
+            for df in dockerfiles:
+                df_card = QFrame()
+                df_card.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(96, 165, 250, 0.06);
+                        border: 1px solid rgba(96, 165, 250, 0.20);
+                        border-radius: 6px;
+                    }
+                """)
+                df_lay = QHBoxLayout(df_card)
+                df_lay.setContentsMargins(10, 6, 10, 6)
+                df_lay.setSpacing(8)
+
+                lbl_df_ic = QLabel("🐳")
+                lbl_df_ic.setStyleSheet("font-size: 14px;")
+                df_lay.addWidget(lbl_df_ic)
+
+                lbl_df_path = QLabel(f"<b>{df['relative']}</b>  <span style='color: #6b7280;'>({df['dir']})</span>")
+                lbl_df_path.setStyleSheet("font-size: 11px; color: #93c5fd;")
+                df_lay.addWidget(lbl_df_path, 1)
+
+                self.docker_containers_layout.addWidget(df_card)
+
+        # ===== SECCIÓN: CONTENEDORES DEL SISTEMA =====
+        containers = list_docker_containers()
+        lbl_section_ctr = QLabel(f"📦  CONTENEDORES DEL SISTEMA ({len(containers)})")
+        lbl_section_ctr.setStyleSheet("font-size: 12px; font-weight: 900; color: #38bdf8; padding: 10px 0 2px 4px;")
+        self.docker_containers_layout.addWidget(lbl_section_ctr)
+
+        if not containers:
+            lbl_empty = QLabel("ℹ️ No hay contenedores registrados en el sistema (activos o detenidos).")
+            lbl_empty.setStyleSheet("color: #9ca3af; font-style: italic; padding: 8px 12px;")
+            self.docker_containers_layout.addWidget(lbl_empty)
+        else:
+            for c in containers:
+                card = QFrame()
+                card.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(255, 255, 255, 0.03);
+                        border: 1px solid rgba(255, 255, 255, 0.08);
+                        border-radius: 8px;
+                    }
+                    QFrame:hover {
+                        background-color: rgba(255, 255, 255, 0.06);
+                        border-color: rgba(56, 189, 248, 0.35);
+                    }
+                """)
+                c_lay = QHBoxLayout(card)
+                c_lay.setContentsMargins(12, 8, 12, 8)
+                c_lay.setSpacing(10)
+
+                is_running = (c["state"] == "running")
+                icon = "🟢" if is_running else "🔴"
+                lbl_ic = QLabel(icon)
+                lbl_ic.setStyleSheet("font-size: 14px;")
+                c_lay.addWidget(lbl_ic)
+
+                info_lay = QVBoxLayout()
+                info_lay.setSpacing(1)
+                lbl_cname = QLabel(f"{c['name']}  <span style='color: #9ca3af; font-size: 11px;'>({c['image']})</span>")
+                lbl_cname.setStyleSheet("font-size: 12px; font-weight: 800; color: #f3f4f6;")
+                info_lay.addWidget(lbl_cname)
+
+                lbl_csub = QLabel(f"Estado: {c['status']}  •  Puertos: {c['ports']}")
+                lbl_csub.setStyleSheet("font-size: 10.5px; color: #38bdf8;" if is_running else "font-size: 10.5px; color: #9ca3af;")
+                info_lay.addWidget(lbl_csub)
+                c_lay.addLayout(info_lay, 1)
+
+                # Botones de Acción de Contenedor
+                if is_running:
+                    btn_stop = QPushButton("🛑 Detener")
+                    btn_stop.setCursor(Qt.PointingHandCursor)
+                    btn_stop.setStyleSheet("""
+                        QPushButton {
+                            background-color: rgba(239, 68, 68, 0.15);
+                            color: #fca5a5;
+                            border: 1px solid rgba(239, 68, 68, 0.35);
+                            border-radius: 5px;
+                            padding: 4px 8px;
+                            font-weight: 700;
+                            font-size: 10.5px;
+                        }
+                        QPushButton:hover { background-color: #ef4444; color: #ffffff; }
+                    """)
+                    btn_stop.clicked.connect(lambda _, cid=c["name"]: self.execute_docker_container_action("stop", cid))
+                    c_lay.addWidget(btn_stop)
+
+                    btn_restart = QPushButton("🔄 Reiniciar")
+                    btn_restart.setCursor(Qt.PointingHandCursor)
+                    btn_restart.setStyleSheet("""
+                        QPushButton {
+                            background-color: rgba(56, 189, 248, 0.15);
+                            color: #7dd3fc;
+                            border: 1px solid rgba(56, 189, 248, 0.35);
+                            border-radius: 5px;
+                            padding: 4px 8px;
+                            font-weight: 700;
+                            font-size: 10.5px;
+                        }
+                        QPushButton:hover { background-color: #0284c7; color: #ffffff; }
+                    """)
+                    btn_restart.clicked.connect(lambda _, cid=c["name"]: self.execute_docker_container_action("restart", cid))
+                    c_lay.addWidget(btn_restart)
+                else:
+                    btn_start = QPushButton("⚡ Iniciar")
+                    btn_start.setCursor(Qt.PointingHandCursor)
+                    btn_start.setStyleSheet("""
+                        QPushButton {
+                            background-color: rgba(16, 185, 129, 0.15);
+                            color: #6ee7b7;
+                            border: 1px solid rgba(16, 185, 129, 0.35);
+                            border-radius: 5px;
+                            padding: 4px 8px;
+                            font-weight: 700;
+                            font-size: 10.5px;
+                        }
+                        QPushButton:hover { background-color: #10b981; color: #ffffff; }
+                    """)
+                    btn_start.clicked.connect(lambda _, cid=c["name"]: self.execute_docker_container_action("start", cid))
+                    c_lay.addWidget(btn_start)
+
+                # Ver Logs
+                btn_logs = QPushButton("📋 Logs")
+                btn_logs.setCursor(Qt.PointingHandCursor)
+                btn_logs.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(255, 255, 255, 0.05);
+                        color: #d1d5db;
+                        border: 1px solid rgba(255, 255, 255, 0.15);
+                        border-radius: 5px;
+                        padding: 4px 8px;
+                        font-weight: 600;
+                        font-size: 10.5px;
+                    }
+                    QPushButton:hover { background-color: rgba(255, 255, 255, 0.12); color: #ffffff; }
+                """)
+                btn_logs.clicked.connect(lambda _, cid=c["name"]: self.show_docker_logs_dialog(cid))
+                c_lay.addWidget(btn_logs)
+
+                self.docker_containers_layout.addWidget(card)
+
+        self.docker_containers_layout.addStretch()
+
+
+    def refresh_sector2_ports_view(self):
+        """Escanea los puertos TCP en escucha y actualiza la lista interactiva."""
+        ports = inspect_network_ports()
+        self.lbl_s2_ports_summary.setText(f"Puertos TCP en escucha detectados ({len(ports)} servicios activos):")
+
+        while self.ports_list_layout.count():
+            item = self.ports_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not ports:
+            lbl_none = QLabel("ℹ️ No se detectaron puertos TCP en estado LISTEN en este momento.")
+            lbl_none.setStyleSheet("color: #9ca3af; font-style: italic; padding: 12px;")
+            self.ports_list_layout.addWidget(lbl_none)
+            return
+
+        for p in ports:
+            card = QFrame()
+            card.setStyleSheet("""
+                QFrame {
+                    background-color: rgba(255, 255, 255, 0.03);
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 8px;
+                }
+                QFrame:hover {
+                    background-color: rgba(255, 255, 255, 0.06);
+                    border-color: rgba(251, 191, 36, 0.35);
+                }
+            """)
+            p_lay = QHBoxLayout(card)
+            p_lay.setContentsMargins(12, 7, 12, 7)
+            p_lay.setSpacing(10)
+
+            lbl_ic = QLabel("🔌")
+            lbl_ic.setStyleSheet("font-size: 15px;")
+            p_lay.addWidget(lbl_ic)
+
+            info_lay = QVBoxLayout()
+            info_lay.setSpacing(1)
+            lbl_p_info = QLabel(f"<b style='color: #fbbf24; font-size: 12.5px;'>Puerto {p['port']}</b>  ➔  <span style='color: #f3f4f6;'>{p['command']}</span>  <span style='color: #9ca3af; font-size: 11px;'>(PID: {p['pid']})</span>")
+            info_lay.addWidget(lbl_p_info)
+
+            lbl_p_addr = QLabel(f"Dirección: {p['address']}  •  Protocolo: {p['protocol']}")
+            lbl_p_addr.setStyleSheet("font-size: 10.5px; color: #9ca3af;")
+            info_lay.addWidget(lbl_p_addr)
+            p_lay.addLayout(info_lay, 1)
+
+            btn_kill = QPushButton("💀 Matar Proceso")
+            btn_kill.setCursor(Qt.PointingHandCursor)
+            btn_kill.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(239, 68, 68, 0.15);
+                    color: #fca5a5;
+                    border: 1px solid rgba(239, 68, 68, 0.35);
+                    border-radius: 5px;
+                    padding: 4px 10px;
+                    font-weight: 700;
+                    font-size: 11px;
+                }
+                QPushButton:hover {
+                    background-color: #ef4444;
+                    color: #ffffff;
+                }
+            """)
+            btn_kill.clicked.connect(lambda _, pid=str(p["pid"]), cmd=p["command"], port=p["port"]: self.execute_kill_port_process(pid, cmd, port))
+            p_lay.addWidget(btn_kill)
+
+            self.ports_list_layout.addWidget(card)
+
+        self.ports_list_layout.addStretch()
+
+    def execute_docker_container_action(self, action: str, container_name: str):
+        """Ejecuta una acción de contenedor en segundo plano."""
+        act_labels = {"start": "Iniciando", "stop": "Deteniendo", "restart": "Reiniciando", "rm": "Eliminando"}
+        self.terminal_display.log("DOCKER", f"{act_labels.get(action, 'Procesando')} contenedor <b>{container_name}</b>...", tag_color="#38bdf8", prefix="⚡")
+        self.docker_worker = DockerWorkerThread(action, target=container_name)
+        self.docker_worker.finished_task.connect(self.on_docker_worker_finished)
+        self.docker_worker.start()
+
+    def execute_docker_system_prune(self):
+        """Ejecuta docker system prune en segundo plano con confirmación previa."""
+        reply = QMessageBox.question(
+            self, "Confirmar Limpieza Docker",
+            "¿Deseas purgar contenedores detenidos, redes no usadas e imágenes huérfanas (docker system prune)?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self.terminal_display.log_warn("DOCKER", "Ejecutando limpieza de recursos Docker en segundo plano...")
+            self.docker_worker = DockerWorkerThread("prune")
+            self.docker_worker.finished_task.connect(self.on_docker_worker_finished)
+            self.docker_worker.start()
+
+    def show_docker_logs_dialog(self, container_name: str):
+        """Muestra los logs del contenedor en la terminal inferior."""
+        self.terminal_display.log("DOCKER", f"Obteniendo últimos logs de <b>{container_name}</b>...", tag_color="#38bdf8", prefix="📋")
+        ok, logs = get_docker_container_logs(container_name, tail_lines=100)
+        if ok:
+            for line in logs.splitlines():
+                self.terminal_display.log("LOG", line, tag_color="#9ca3af", prefix="•")
+        else:
+            self.terminal_display.log_error("DOCKER", f"Error al obtener logs: {logs}")
+
+    def execute_kill_port_process(self, pid: str, cmd: str, port: int):
+        """Aniquila un proceso ocupando un puerto tras confirmación."""
+        reply = QMessageBox.question(
+            self, "Confirmar Aniquilación de Proceso",
+            f"¿Estás seguro de que deseas aniquilar el proceso '{cmd}' (PID: {pid}) en el puerto {port}?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self.terminal_display.log_warn("PORTS", f"Aniquilando proceso <b>{cmd}</b> (PID: {pid}) en puerto {port}...")
+            ok, msg = kill_process_by_pid(pid)
+            if ok:
+                self.terminal_display.log_success("PORTS", msg)
+            else:
+                self.terminal_display.log_error("PORTS", msg)
+            self.refresh_sector2_ports_view()
+
+    def on_docker_worker_finished(self, success: bool, task_name: str, message: str):
+        """Callback al terminar una operación de Docker en segundo plano."""
+        if success:
+            self.terminal_display.log_success(task_name, message)
+        else:
+            self.terminal_display.log_error(task_name, message)
+        self.refresh_sector2_docker_view()
+
+    def _hex_to_rgba(self, hex_code: str, alpha: float) -> str:
+        """Convierte código hexadecimal '#RRGGBB' a 'r, g, b, alpha'."""
+        h = hex_code.lstrip("#")
+        if len(h) == 6:
+            r = int(h[0:2], 16)
+            g = int(h[2:4], 16)
+            b = int(h[4:6], 16)
+            return f"{r}, {g}, {b}, {alpha}"
+        return f"255, 255, 255, {alpha}"
+
+    def execute_compose_lifecycle(self, task_type: str, compose_path: str, service: str = ""):
+        """Ejecuta una acción de ciclo de vida de Docker Compose en segundo plano."""
+        action = task_type.replace("compose-", "")
+        rel = os.path.basename(compose_path)
+        target = f"{rel} [{service}]" if service else rel
+        self.terminal_display.log("COMPOSE", f"Ejecutando <b>{action.upper()}</b> en stack <b>{target}</b>...", tag_color="#a78bfa", prefix="🚀")
+        self.docker_worker = DockerWorkerThread(task_type, compose_path=compose_path, service=service)
+        self.docker_worker.finished_task.connect(self.on_docker_worker_finished)
+        self.docker_worker.start()
+
+    def show_compose_logs(self, compose_path: str, service: str = ""):
+        """Muestra los logs del stack de Compose en la terminal inferior."""
+        rel = os.path.basename(compose_path)
+        target = f"{rel} ({service})" if service else rel
+        self.terminal_display.log("COMPOSE", f"Obteniendo logs recientes de <b>{target}</b>...", tag_color="#a78bfa", prefix="📋")
+        ok, logs = execute_compose_action(compose_path, "logs", service or None)
+        if ok:
+            for line in logs.splitlines():
+                self.terminal_display.log("LOG", line, tag_color="#9ca3af", prefix="•")
+        else:
+            self.terminal_display.log_error("COMPOSE", f"Error al obtener logs de Compose: {logs}")
+
+    # =================================================================
+    # 🧠 TERCER SECTOR : HERRAMIENTAS & IA (DEDICATED VIEW & SUB-PAGES)
+    # =================================================================
+    def create_sector3_dedicated_view(self) -> QFrame:
+        """Crea la ventana interactiva dedicada del Sector 3 (Herramientas & IA)."""
+        card = QFrame()
+        card.setProperty("class", "surface")
+        card.setStyleSheet("""
+            QFrame.surface {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(22, 24, 34, 0.95), stop:1 rgba(16, 18, 25, 0.95));
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-top: 3px solid #c084fc;
+                border-radius: 10px;
+            }
+        """)
+        card.setMinimumHeight(440)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        self.sector3_sub_stack = LumenDynamicStackedWidget()
+
+        # Sub-página 0: Gestor de .gitignore & .env
+        self.page_s3_gitignore = self.create_sector3_gitignore_view()
+        self.sector3_sub_stack.addWidget(self.page_s3_gitignore)
+
+        # Sub-página 1: Lector de Documentación
+        self.page_s3_docs = self.create_sector3_docs_view()
+        self.sector3_sub_stack.addWidget(self.page_s3_docs)
+
+        # Sub-página 2: Utilidades IA & Ollama
+        self.page_s3_ai = self.create_sector3_ai_view()
+        self.sector3_sub_stack.addWidget(self.page_s3_ai)
+
+        layout.addWidget(self.sector3_sub_stack)
+        return card
+
+    def _create_sector3_nav_bar(self, active_tab_index: int) -> QHBoxLayout:
+        """Crea la barra superior de navegación interactiva para las sub-páginas del Sector 3."""
+        nav = QHBoxLayout()
+        nav.setSpacing(10)
+
+        btn_back = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(192, 132, 252, 0.15);
+                color: #e9d5ff;
+                border: 1px solid rgba(192, 132, 252, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(192, 132, 252, 0.30);
+                border-color: #c084fc;
+                color: #ffffff;
+            }
+        """)
+        btn_back.clicked.connect(self.go_back_to_sectors_overview)
+        nav.addWidget(btn_back)
+
+        lbl_title = QLabel("🧠  SECTOR 3 : HERRAMIENTAS & IA")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #c084fc; letter-spacing: 0.5px;")
+        nav.addWidget(lbl_title)
+
+        tab_items = [
+            ("🛡️  Gestor .gitignore & .env", self.open_sector3_gitignore_view),
+            ("📖  Lector de Documentación", self.open_sector3_docs_view),
+            ("🤖  Utilidades IA & Ollama", self.open_sector3_ai_view),
+        ]
+
+        for i, (tab_title, slot) in enumerate(tab_items):
+            btn = QPushButton(tab_title)
+            btn.setCursor(Qt.PointingHandCursor)
+            if i == active_tab_index:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(192, 132, 252, 0.25);
+                        color: #ffffff;
+                        border: 1px solid #c084fc;
+                        border-radius: 6px;
+                        padding: 4px 10px;
+                        font-weight: 800;
+                        font-size: 11px;
+                    }
+                """)
+            else:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(255, 255, 255, 0.05);
+                        color: #9ca3af;
+                        border: 1px solid rgba(255, 255, 255, 0.12);
+                        border-radius: 6px;
+                        padding: 4px 10px;
+                        font-weight: 600;
+                        font-size: 11px;
+                    }
+                    QPushButton:hover {
+                        background-color: rgba(192, 132, 252, 0.15);
+                        color: #e9d5ff;
+                        border-color: #c084fc;
+                    }
+                """)
+                btn.clicked.connect(slot)
+            nav.addWidget(btn)
+
+        nav.addStretch()
+        return nav
+
+    # -----------------------------------------------------------------
+    # SUB-PÁGINA 0: GESTOR DE .GITIGNORE & .ENV
+    # -----------------------------------------------------------------
+    def create_sector3_gitignore_view(self) -> QWidget:
+        """Sub-página para inspeccionar y aplicar presets a .gitignore y gestionar .env."""
+        page = QWidget()
+        page.setMinimumHeight(350)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        nav = self._create_sector3_nav_bar(0)
+        layout.addLayout(nav)
+
+        # Barra de Telemetría (.gitignore, .env, .env.example)
+        telemetry_frame = QFrame()
+        telemetry_frame.setStyleSheet("""
+            QFrame {
+                background: rgba(14, 16, 23, 0.85);
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 8px;
+                padding: 4px;
+            }
+        """)
+        telem_layout = QHBoxLayout(telemetry_frame)
+        telem_layout.setContentsMargins(12, 6, 12, 6)
+        telem_layout.setSpacing(16)
+
+        # Badge Gitignore
+        self.lbl_s3_gi_stat = QLabel("🛡️ .gitignore: Escaneando...")
+        self.lbl_s3_gi_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #c084fc;")
+        telem_layout.addWidget(self.lbl_s3_gi_stat)
+
+        # Separador vertical
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.VLine)
+        sep1.setStyleSheet("color: rgba(255, 255, 255, 0.15);")
+        telem_layout.addWidget(sep1)
+
+        # Badge .env
+        self.lbl_s3_env_stat = QLabel("🔐 .env: Escaneando...")
+        self.lbl_s3_env_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #34d399;")
+        telem_layout.addWidget(self.lbl_s3_env_stat)
+
+        # Separador vertical
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.VLine)
+        sep2.setStyleSheet("color: rgba(255, 255, 255, 0.15);")
+        telem_layout.addWidget(sep2)
+
+        # Badge .env.example
+        self.lbl_s3_example_stat = QLabel("📋 .env.example: Escaneando...")
+        self.lbl_s3_example_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #9ca3af;")
+        telem_layout.addWidget(self.lbl_s3_example_stat)
+
+        telem_layout.addStretch()
+
+        btn_refresh = QPushButton("🔄  Refrescar Estado")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
+        btn_refresh.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.05);
+                color: #d8b4fe;
+                border: 1px solid rgba(192, 132, 252, 0.25);
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 10.5px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(192, 132, 252, 0.20);
+                color: #ffffff;
+            }
+        """)
+        btn_refresh.clicked.connect(self.refresh_sector3_gitignore_view)
+        telem_layout.addWidget(btn_refresh)
+
+        layout.addWidget(telemetry_frame)
+
+        # Splitter principal: Izquierda Presets & Acciones, Derecha Visor en Vivo de .gitignore
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: rgba(255, 255, 255, 0.08);
+                width: 3px;
+            }
+        """)
+
+        # Panel Izquierdo: Acciones y Plantillas
+        left_panel = QFrame()
+        left_panel.setStyleSheet("""
+            QFrame {
+                background: rgba(14, 16, 23, 0.70);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+            }
+        """)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(12, 10, 12, 10)
+        left_layout.setSpacing(8)
+
+        lbl_presets = QLabel("⚡ PLANTILLAS INTELIGENTES (PRESETS)")
+        lbl_presets.setStyleSheet("font-size: 11px; font-weight: 800; color: #e9d5ff; letter-spacing: 0.5px;")
+        left_layout.addWidget(lbl_presets)
+
+        lbl_presets_sub = QLabel("Inyecta exclusiones estándar sin sobreescribir tus reglas existentes.")
+        lbl_presets_sub.setStyleSheet("font-size: 10px; color: #9ca3af;")
+        left_layout.addWidget(lbl_presets_sub)
+
+        # Botones de presets
+        presets_grid = QGridLayout()
+        presets_grid.setSpacing(6)
+
+        presets = [
+            ("🐍 Python Stack", "pycache, .venv, *.pyc...", "python"),
+            ("🌐 Node / Web", "node_modules, dist, .npm...", "node"),
+            ("💻 IDEs & Sistema", ".vscode, .idea, .DS_Store...", "ide"),
+            ("🔐 Seguridad", ".env, *.pem, *.key, secrets...", "security"),
+        ]
+
+        for idx, (p_title, p_desc, p_key) in enumerate(presets):
+            btn_p = QPushButton(f"{p_title}\n({p_desc})")
+            btn_p.setCursor(Qt.PointingHandCursor)
+            btn_p.setStyleSheet("""
+                QPushButton {
+                    background: rgba(255, 255, 255, 0.04);
+                    color: #e5e7eb;
+                    border: 1px solid rgba(255, 255, 255, 0.09);
+                    border-radius: 6px;
+                    padding: 6px 8px;
+                    text-align: left;
+                    font-size: 10.5px;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background: rgba(192, 132, 252, 0.15);
+                    border-color: #c084fc;
+                    color: #ffffff;
+                }
+            """)
+            btn_p.clicked.connect(lambda _, k=p_key: self.execute_apply_gitignore_preset(k))
+            presets_grid.addWidget(btn_p, idx // 2, idx % 2)
+
+        left_layout.addLayout(presets_grid)
+
+        # Botón Pack Completo
+        btn_all = QPushButton("⚡  Inyectar Pack Completo Recomendado (Python + Node + IDE + Seguridad)")
+        btn_all.setCursor(Qt.PointingHandCursor)
+        btn_all.setStyleSheet("""
+            QPushButton {
+                background: rgba(192, 132, 252, 0.18);
+                color: #f3e8ff;
+                border: 1px solid rgba(192, 132, 252, 0.50);
+                border-radius: 6px;
+                padding: 7px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: rgba(192, 132, 252, 0.32);
+                border-color: #c084fc;
+                color: #ffffff;
+            }
+        """)
+        btn_all.clicked.connect(lambda: self.execute_apply_gitignore_preset("all"))
+        left_layout.addWidget(btn_all)
+
+        # Sección Variables de Entorno
+        sep_mid = QFrame()
+        sep_mid.setFrameShape(QFrame.HLine)
+        sep_mid.setStyleSheet("color: rgba(255, 255, 255, 0.10); margin-top: 4px; margin-bottom: 4px;")
+        left_layout.addWidget(sep_mid)
+
+        lbl_env = QLabel("🔐 GESTIÓN DE VARIABLES DE ENTORNO (.ENV)")
+        lbl_env.setStyleSheet("font-size: 11px; font-weight: 800; color: #6ee7b7; letter-spacing: 0.5px;")
+        left_layout.addWidget(lbl_env)
+
+        env_btn_box = QHBoxLayout()
+        env_btn_box.setSpacing(6)
+
+        btn_create_env = QPushButton("➕  Crear .env Base")
+        btn_create_env.setCursor(Qt.PointingHandCursor)
+        btn_create_env.setStyleSheet("""
+            QPushButton {
+                background: rgba(16, 185, 129, 0.12);
+                color: #6ee7b7;
+                border: 1px solid rgba(16, 185, 129, 0.35);
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-size: 10.5px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(16, 185, 129, 0.25);
+                border-color: #10b981;
+                color: #ffffff;
+            }
+        """)
+        btn_create_env.clicked.connect(self.execute_create_env_file)
+        env_btn_box.addWidget(btn_create_env)
+
+        btn_gen_example = QPushButton("📋  Generar .env.example")
+        btn_gen_example.setCursor(Qt.PointingHandCursor)
+        btn_gen_example.setStyleSheet("""
+            QPushButton {
+                background: rgba(56, 189, 248, 0.12);
+                color: #7dd3fc;
+                border: 1px solid rgba(56, 189, 248, 0.35);
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-size: 10.5px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(56, 189, 248, 0.25);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_gen_example.clicked.connect(self.execute_generate_env_example)
+        env_btn_box.addWidget(btn_gen_example)
+
+        left_layout.addLayout(env_btn_box)
+
+        # Regla personalizada
+        lbl_custom = QLabel("➕ AGREGAR REGLA PERSONALIZADA")
+        lbl_custom.setStyleSheet("font-size: 10.5px; font-weight: 800; color: #9ca3af; margin-top: 4px;")
+        left_layout.addWidget(lbl_custom)
+
+        custom_row = QHBoxLayout()
+        custom_row.setSpacing(6)
+
+        self.input_s3_custom_rule = QLineEdit()
+        self.input_s3_custom_rule.setPlaceholderText("ej. build/ o *.log o tmp/")
+        self.input_s3_custom_rule.setStyleSheet("""
+            QLineEdit {
+                background: #090a0f;
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 5px;
+                padding: 5px 8px;
+                font-size: 11px;
+            }
+            QLineEdit:focus {
+                border-color: #c084fc;
+            }
+        """)
+        self.input_s3_custom_rule.returnPressed.connect(self.execute_add_custom_rule)
+        custom_row.addWidget(self.input_s3_custom_rule, 1)
+
+        btn_add_rule = QPushButton("Añadir")
+        btn_add_rule.setCursor(Qt.PointingHandCursor)
+        btn_add_rule.setStyleSheet("""
+            QPushButton {
+                background: rgba(192, 132, 252, 0.20);
+                color: #e9d5ff;
+                border: 1px solid #c084fc;
+                border-radius: 5px;
+                padding: 5px 12px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #c084fc;
+                color: #0c0e14;
+            }
+        """)
+        btn_add_rule.clicked.connect(self.execute_add_custom_rule)
+        custom_row.addWidget(btn_add_rule)
+
+        left_layout.addLayout(custom_row)
+        left_layout.addStretch()
+
+        splitter.addWidget(left_panel)
+
+        # Panel Derecho: Visor en vivo de .gitignore
+        right_panel = QFrame()
+        right_panel.setStyleSheet("""
+            QFrame {
+                background: rgba(14, 16, 23, 0.70);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+            }
+        """)
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(12, 10, 12, 10)
+        right_layout.setSpacing(6)
+
+        header_right = QHBoxLayout()
+        lbl_gi_title = QLabel("📄 CONTENIDO ACTIVO DE .GITIGNORE")
+        lbl_gi_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #e9d5ff; letter-spacing: 0.5px;")
+        header_right.addWidget(lbl_gi_title)
+
+        header_right.addStretch()
+
+        btn_open_gi = QPushButton("💻  Abrir en Editor")
+        btn_open_gi.setCursor(Qt.PointingHandCursor)
+        btn_open_gi.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.04);
+                color: #93c5fd;
+                border: 1px solid rgba(147, 197, 253, 0.30);
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(147, 197, 253, 0.20);
+                color: #ffffff;
+            }
+        """)
+        btn_open_gi.clicked.connect(self.open_gitignore_in_editor)
+        header_right.addWidget(btn_open_gi)
+
+        right_layout.addLayout(header_right)
+
+        self.txt_s3_gitignore_content = QTextEdit()
+        self.txt_s3_gitignore_content.setReadOnly(True)
+        self.txt_s3_gitignore_content.setStyleSheet("""
+            QTextEdit {
+                background-color: #08090d;
+                color: #cbd5e1;
+                font-family: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', monospace;
+                font-size: 11px;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 6px;
+                padding: 8px;
+                line-height: 1.4;
+            }
+        """)
+        right_layout.addWidget(self.txt_s3_gitignore_content, 1)
+
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 4)
+
+        layout.addWidget(splitter, 1)
+        return page
+
+    # -----------------------------------------------------------------
+    # SUB-PÁGINA 1: LECTOR DE DOCUMENTACIÓN
+    # -----------------------------------------------------------------
+    def create_sector3_docs_view(self) -> QWidget:
+        """Sub-página interactiva para leer Markdown/Docs del proyecto y generar Changelogs con IA."""
+        page = QWidget()
+        page.setMinimumHeight(350)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        nav = self._create_sector3_nav_bar(1)
+        layout.addLayout(nav)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: rgba(255, 255, 255, 0.08);
+                width: 3px;
+            }
+        """)
+
+        # Panel Izquierdo: Lista de Archivos Markdown & Acciones
+        left_panel = QFrame()
+        left_panel.setStyleSheet("""
+            QFrame {
+                background: rgba(14, 16, 23, 0.70);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+            }
+        """)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(10, 10, 10, 10)
+        left_layout.setSpacing(8)
+
+        left_hdr = QHBoxLayout()
+        lbl_docs_title = QLabel("📑 DOCUMENTOS DETECTADOS")
+        lbl_docs_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #e9d5ff; letter-spacing: 0.5px;")
+        left_hdr.addWidget(lbl_docs_title)
+
+        left_hdr.addStretch()
+
+        btn_ref_docs = QPushButton("🔄")
+        btn_ref_docs.setToolTip("Volver a escanear documentos del proyecto")
+        btn_ref_docs.setCursor(Qt.PointingHandCursor)
+        btn_ref_docs.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.04);
+                color: #d8b4fe;
+                border: 1px solid rgba(192, 132, 252, 0.25);
+                border-radius: 4px;
+                padding: 2px 7px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background: rgba(192, 132, 252, 0.20);
+                color: #ffffff;
+            }
+        """)
+        btn_ref_docs.clicked.connect(self.refresh_sector3_docs_view)
+        left_hdr.addWidget(btn_ref_docs)
+
+        left_layout.addLayout(left_hdr)
+
+        # Scroll área con lista de documentos
+        self.docs_scroll = QScrollArea()
+        self.docs_scroll.setWidgetResizable(True)
+        self.docs_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        self.docs_list_container = QWidget()
+        self.docs_list_layout = QVBoxLayout(self.docs_list_container)
+        self.docs_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.docs_list_layout.setSpacing(4)
+        self.docs_list_layout.addStretch()
+
+        self.docs_scroll.setWidget(self.docs_list_container)
+        left_layout.addWidget(self.docs_scroll, 1)
+
+        # Tarjeta inferior: Generador de Changelog IA
+        ai_box = QFrame()
+        ai_box.setStyleSheet("""
+            QFrame {
+                background: rgba(192, 132, 252, 0.08);
+                border: 1px solid rgba(192, 132, 252, 0.30);
+                border-radius: 6px;
+                padding: 6px;
+            }
+        """)
+        ai_box_layout = QVBoxLayout(ai_box)
+        ai_box_layout.setContentsMargins(8, 6, 8, 6)
+        ai_box_layout.setSpacing(4)
+
+        lbl_ai_cg = QLabel("✨ GENERADOR DE CHANGELOG IA")
+        lbl_ai_cg.setStyleSheet("font-size: 10px; font-weight: 800; color: #e9d5ff;")
+        ai_box_layout.addWidget(lbl_ai_cg)
+
+        lbl_ai_cg_sub = QLabel("Sintetiza los últimos 15 commits en un changelog estructurado.")
+        lbl_ai_cg_sub.setWordWrap(True)
+        lbl_ai_cg_sub.setStyleSheet("font-size: 9.5px; color: #9ca3af;")
+        ai_box_layout.addWidget(lbl_ai_cg_sub)
+
+        self.btn_gen_changelog = QPushButton("✨  Generar Changelog con IA")
+        self.btn_gen_changelog.setCursor(Qt.PointingHandCursor)
+        self.btn_gen_changelog.setStyleSheet("""
+            QPushButton {
+                background: rgba(192, 132, 252, 0.22);
+                color: #f3e8ff;
+                border: 1px solid #c084fc;
+                border-radius: 5px;
+                padding: 5px 10px;
+                font-size: 10.5px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #c084fc;
+                color: #0f1117;
+            }
+        """)
+        self.btn_gen_changelog.clicked.connect(self.execute_generate_ai_changelog)
+        ai_box_layout.addWidget(self.btn_gen_changelog)
+
+        left_layout.addWidget(ai_box)
+        splitter.addWidget(left_panel)
+
+        # Panel Derecho: Visor de Documentación
+        right_panel = QFrame()
+        right_panel.setStyleSheet("""
+            QFrame {
+                background: rgba(14, 16, 23, 0.70);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+            }
+        """)
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(12, 10, 12, 10)
+        right_layout.setSpacing(6)
+
+        hdr_doc = QHBoxLayout()
+        self.lbl_s3_selected_doc = QLabel("📖  Ningún documento seleccionado")
+        self.lbl_s3_selected_doc.setStyleSheet("font-size: 11.5px; font-weight: 800; color: #e9d5ff;")
+        hdr_doc.addWidget(self.lbl_s3_selected_doc, 1)
+
+        self.btn_s3_toggle_doc_mode = QPushButton("📝  Ver Código Fuente")
+        self.btn_s3_toggle_doc_mode.setCursor(Qt.PointingHandCursor)
+        self.btn_s3_toggle_doc_mode.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.05);
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
+            }
+        """)
+        self.btn_s3_toggle_doc_mode.clicked.connect(self.toggle_doc_view_mode)
+        hdr_doc.addWidget(self.btn_s3_toggle_doc_mode)
+
+        self.btn_s3_doc_editor = QPushButton("💻  Abrir en Editor")
+        self.btn_s3_doc_editor.setCursor(Qt.PointingHandCursor)
+        self.btn_s3_doc_editor.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.05);
+                color: #93c5fd;
+                border: 1px solid rgba(147, 197, 253, 0.30);
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(147, 197, 253, 0.20);
+                color: #ffffff;
+            }
+        """)
+        self.btn_s3_doc_editor.clicked.connect(self.open_current_doc_in_editor)
+        hdr_doc.addWidget(self.btn_s3_doc_editor)
+
+        right_layout.addLayout(hdr_doc)
+
+        self.txt_s3_doc_viewer = QTextEdit()
+        self.txt_s3_doc_viewer.setReadOnly(True)
+        self.txt_s3_doc_viewer.setStyleSheet("""
+            QTextEdit {
+                background-color: #08090d;
+                color: #e2e8f0;
+                font-size: 12px;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 6px;
+                padding: 12px;
+                line-height: 1.5;
+            }
+        """)
+        right_layout.addWidget(self.txt_s3_doc_viewer, 1)
+
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 5)
+
+        layout.addWidget(splitter, 1)
+
+        # Variables internas de estado
+        self._current_doc_path = ""
+        self._current_doc_raw_content = ""
+        self._doc_is_rendered = True
+
+        return page
+
+    # -----------------------------------------------------------------
+    # SUB-PÁGINA 2: UTILIDADES IA & OLLAMA LOCAL
+    # -----------------------------------------------------------------
+    def create_sector3_ai_view(self) -> QWidget:
+        """Sub-página interactiva para auditoría de historial reciente y consultas directas a Ollama."""
+        page = QWidget()
+        page.setMinimumHeight(350)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        nav = self._create_sector3_nav_bar(2)
+        layout.addLayout(nav)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: rgba(255, 255, 255, 0.08);
+                width: 3px;
+            }
+        """)
+
+        # Panel Izquierdo: Telemetría Ollama & Auditoría de Historial
+        left_panel = QFrame()
+        left_panel.setStyleSheet("""
+            QFrame {
+                background: rgba(14, 16, 23, 0.70);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+            }
+        """)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(12, 10, 12, 10)
+        left_layout.setSpacing(10)
+
+        # Bloque Estado Ollama
+        hdr_ol = QHBoxLayout()
+        lbl_ol_title = QLabel("⚡ DEMONIO OLLAMA LOCAL")
+        lbl_ol_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #e9d5ff; letter-spacing: 0.5px;")
+        hdr_ol.addWidget(lbl_ol_title)
+        hdr_ol.addStretch()
+
+        btn_chk_ol = QPushButton("🔄 Comprobar")
+        btn_chk_ol.setCursor(Qt.PointingHandCursor)
+        btn_chk_ol.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.04);
+                color: #d8b4fe;
+                border: 1px solid rgba(192, 132, 252, 0.25);
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(192, 132, 252, 0.20);
+                color: #ffffff;
+            }
+        """)
+        btn_chk_ol.clicked.connect(self.refresh_sector3_ai_view)
+        hdr_ol.addWidget(btn_chk_ol)
+
+        left_layout.addLayout(hdr_ol)
+
+        self.lbl_s3_ol_status = QLabel("Ollama: Comprobando...")
+        self.lbl_s3_ol_status.setStyleSheet("font-size: 11px; font-weight: 700; color: #fbbf24;")
+        left_layout.addWidget(self.lbl_s3_ol_status)
+
+        self.lbl_s3_ol_models = QLabel("Modelos: Escaneando...")
+        self.lbl_s3_ol_models.setWordWrap(True)
+        self.lbl_s3_ol_models.setStyleSheet("font-size: 10px; color: #9ca3af;")
+        left_layout.addWidget(self.lbl_s3_ol_models)
+
+        # Separador
+        sep_ai = QFrame()
+        sep_ai.setFrameShape(QFrame.HLine)
+        sep_ai.setStyleSheet("color: rgba(255, 255, 255, 0.10);")
+        left_layout.addWidget(sep_ai)
+
+        # Bloque Auditoría de Historial Reciente
+        lbl_audit_title = QLabel("🔍 AUDITORÍA DE HISTORIAL RECIENTE")
+        lbl_audit_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #38bdf8; letter-spacing: 0.5px;")
+        left_layout.addWidget(lbl_audit_title)
+
+        lbl_audit_sub = QLabel("Audita el diff acumulado de los últimos commits buscando regresiones o bugs.")
+        lbl_audit_sub.setWordWrap(True)
+        lbl_audit_sub.setStyleSheet("font-size: 10px; color: #9ca3af;")
+        left_layout.addWidget(lbl_audit_sub)
+
+        # Selector de número de commits
+        row_c = QHBoxLayout()
+        lbl_c = QLabel("Commits:")
+        lbl_c.setStyleSheet("font-size: 10.5px; color: #d1d5db;")
+        row_c.addWidget(lbl_c)
+
+        self.combo_s3_audit_count = QComboBox()
+        self.combo_s3_audit_count.addItems(["3 commits recientes (Rápido)", "5 commits recientes (Estándar)", "10 commits recientes (Profundo)"])
+        self.combo_s3_audit_count.setStyleSheet("""
+            QComboBox {
+                background: #090a0f;
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 10.5px;
+            }
+        """)
+        row_c.addWidget(self.combo_s3_audit_count, 1)
+        left_layout.addLayout(row_c)
+
+        # Selector de modelo
+        row_m = QHBoxLayout()
+        lbl_m = QLabel("Modelo:")
+        lbl_m.setStyleSheet("font-size: 10.5px; color: #d1d5db;")
+        row_m.addWidget(lbl_m)
+
+        self.combo_s3_audit_model = QComboBox()
+        self.combo_s3_audit_model.addItems(["Ligero (qwen2.5-coder:7b)", "Pesado (deepseek-r1:8b)"])
+        self.combo_s3_audit_model.setStyleSheet("""
+            QComboBox {
+                background: #090a0f;
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 10.5px;
+            }
+        """)
+        row_m.addWidget(self.combo_s3_audit_model, 1)
+        left_layout.addLayout(row_m)
+
+        self.btn_run_history_audit = QPushButton("🔍  Auditar Historial Reciente")
+        self.btn_run_history_audit.setCursor(Qt.PointingHandCursor)
+        self.btn_run_history_audit.setStyleSheet("""
+            QPushButton {
+                background: rgba(56, 189, 248, 0.18);
+                color: #bae6fd;
+                border: 1px solid #38bdf8;
+                border-radius: 6px;
+                padding: 7px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #38bdf8;
+                color: #07090e;
+            }
+        """)
+        self.btn_run_history_audit.clicked.connect(self.execute_history_ai_audit)
+        left_layout.addWidget(self.btn_run_history_audit)
+
+        left_layout.addStretch()
+        splitter.addWidget(left_panel)
+
+        # Panel Derecho: Consultor Dev Directo & Respuestas
+        right_panel = QFrame()
+        right_panel.setStyleSheet("""
+            QFrame {
+                background: rgba(14, 16, 23, 0.70);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+            }
+        """)
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(12, 10, 12, 10)
+        right_layout.setSpacing(6)
+
+        hdr_cons = QHBoxLayout()
+        lbl_cons_title = QLabel("💬 CONSULTOR TÉCNICO DEV (OLLAMA DIRECT)")
+        lbl_cons_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #e9d5ff; letter-spacing: 0.5px;")
+        hdr_cons.addWidget(lbl_cons_title)
+
+        hdr_cons.addStretch()
+
+        btn_copy_ai = QPushButton("📋  Copiar Respuesta")
+        btn_copy_ai.setCursor(Qt.PointingHandCursor)
+        btn_copy_ai.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.04);
+                color: #d1d5db;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
+            }
+        """)
+        btn_copy_ai.clicked.connect(self.copy_ai_response_to_clipboard)
+        hdr_cons.addWidget(btn_copy_ai)
+
+        right_layout.addLayout(hdr_cons)
+
+        # Chips de prompts rápidos
+        chips_layout = QHBoxLayout()
+        chips_layout.setSpacing(6)
+
+        chips = [
+            ("⚡ Optimizar Snippet", "optimize"),
+            ("🔍 Auditar Sintaxis / Tipado", "syntax"),
+            ("🛡️ Revisar Seguridad", "security"),
+            ("📝 Explicar Código", "explain")
+        ]
+
+        for chip_label, chip_type in chips:
+            btn_chip = QPushButton(chip_label)
+            btn_chip.setCursor(Qt.PointingHandCursor)
+            btn_chip.setStyleSheet("""
+                QPushButton {
+                    background: rgba(192, 132, 252, 0.10);
+                    color: #d8b4fe;
+                    border: 1px solid rgba(192, 132, 252, 0.25);
+                    border-radius: 12px;
+                    padding: 3px 8px;
+                    font-size: 10px;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background: rgba(192, 132, 252, 0.25);
+                    color: #ffffff;
+                }
+            """)
+            btn_chip.clicked.connect(lambda _, t=chip_type: self.set_ai_prompt_template(t))
+            chips_layout.addWidget(btn_chip)
+
+        chips_layout.addStretch()
+        right_layout.addLayout(chips_layout)
+
+        # Input de consulta
+        self.txt_s3_ai_prompt = QTextEdit()
+        self.txt_s3_ai_prompt.setPlaceholderText("Escribe tu consulta de código, error o arquitectura...")
+        self.txt_s3_ai_prompt.setMaximumHeight(70)
+        self.txt_s3_ai_prompt.setStyleSheet("""
+            QTextEdit {
+                background-color: #090a0f;
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                padding: 6px;
+                font-size: 11px;
+            }
+            QTextEdit:focus {
+                border-color: #c084fc;
+            }
+        """)
+        right_layout.addWidget(self.txt_s3_ai_prompt)
+
+        # Fila de control de envío
+        prompt_ctrl_row = QHBoxLayout()
+        prompt_ctrl_row.setSpacing(6)
+
+        lbl_pm = QLabel("Modelo:")
+        lbl_pm.setStyleSheet("font-size: 10.5px; color: #9ca3af;")
+        prompt_ctrl_row.addWidget(lbl_pm)
+
+        self.combo_s3_prompt_model = QComboBox()
+        self.combo_s3_prompt_model.addItems(["Ligero (qwen2.5-coder:7b)", "Pesado (deepseek-r1:8b)"])
+        self.combo_s3_prompt_model.setStyleSheet("""
+            QComboBox {
+                background: #090a0f;
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-size: 10.5px;
+            }
+        """)
+        prompt_ctrl_row.addWidget(self.combo_s3_prompt_model)
+
+        prompt_ctrl_row.addStretch()
+
+        self.btn_s3_consult = QPushButton("🚀  Consultar a Ollama")
+        self.btn_s3_consult.setCursor(Qt.PointingHandCursor)
+        self.btn_s3_consult.setStyleSheet("""
+            QPushButton {
+                background: rgba(192, 132, 252, 0.25);
+                color: #ffffff;
+                border: 1px solid #c084fc;
+                border-radius: 5px;
+                padding: 5px 14px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #c084fc;
+                color: #0f1117;
+            }
+        """)
+        self.btn_s3_consult.clicked.connect(self.execute_quick_ai_consult)
+        prompt_ctrl_row.addWidget(self.btn_s3_consult)
+
+        right_layout.addLayout(prompt_ctrl_row)
+
+        # Cuadro de resultados de IA
+        self.txt_s3_ai_output = QTextEdit()
+        self.txt_s3_ai_output.setReadOnly(True)
+        self.txt_s3_ai_output.setStyleSheet("""
+            QTextEdit {
+                background-color: #08090d;
+                color: #e2e8f0;
+                font-family: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', monospace;
+                font-size: 11px;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 6px;
+                padding: 8px;
+                line-height: 1.45;
+            }
+        """)
+        self.txt_s3_ai_output.setPlaceholderText("Las respuestas de Ollama o los resultados de auditorías aparecerán aquí...")
+        right_layout.addWidget(self.txt_s3_ai_output, 1)
+
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 5)
+
+        layout.addWidget(splitter, 1)
+        return page
+
+    # -----------------------------------------------------------------
+    # CONTROLADORES DE NAVEGACIÓN SECTOR 3
+    # -----------------------------------------------------------------
+    def open_sector3_gitignore_view(self):
+        """Navega a la sub-página de Gitignore y .env."""
+        self.dock_terminal_at_bottom()
+        self.sectors_stack.setCurrentIndex(3)
+        if hasattr(self, "sector3_sub_stack"):
+            self.sector3_sub_stack.setCurrentIndex(0)
+            self.sector3_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.refresh_sector3_gitignore_view()
+        p_name = self.project_data.get("name", "Proyecto")
+        self.terminal_display.log("GITIGNORE", f"Gestor de .gitignore & .env abierto para <b>{p_name}</b>.", tag_color="#c084fc", prefix="🛡️")
+
+    def open_sector3_docs_view(self):
+        """Navega a la sub-página de Lector de Documentación."""
+        self.dock_terminal_at_bottom()
+        self.sectors_stack.setCurrentIndex(3)
+        if hasattr(self, "sector3_sub_stack"):
+            self.sector3_sub_stack.setCurrentIndex(1)
+            self.sector3_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.refresh_sector3_docs_view()
+        p_name = self.project_data.get("name", "Proyecto")
+        self.terminal_display.log("DOCS", f"Lector de Documentación Markdown abierto para <b>{p_name}</b>.", tag_color="#c084fc", prefix="📖")
+
+    def open_sector3_ai_view(self):
+        """Navega a la sub-página de Utilidades IA y Ollama."""
+        self.dock_terminal_at_bottom()
+        self.sectors_stack.setCurrentIndex(3)
+        if hasattr(self, "sector3_sub_stack"):
+            self.sector3_sub_stack.setCurrentIndex(2)
+            self.sector3_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.refresh_sector3_ai_view()
+        p_name = self.project_data.get("name", "Proyecto")
+        self.terminal_display.log("IA", f"Utilidades IA & Ollama abiertas para <b>{p_name}</b>.", tag_color="#c084fc", prefix="🤖")
+
+    # -----------------------------------------------------------------
+    # MÉTODOS DE REFRESH Y ACCIÓN SECTOR 3
+    # -----------------------------------------------------------------
+    def refresh_sector3_gitignore_view(self):
+        """Actualiza la telemetría de .gitignore y .env y lee el contenido actual."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        status = inspect_gitignore_and_env(p_path)
+
+        # Telemetría .gitignore
+        if status.get("has_gitignore", False):
+            self.lbl_s3_gi_stat.setText(f"🛡️ .gitignore: {status.get('rules_count', 0)} reglas activas")
+            self.lbl_s3_gi_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #a7f3d0;")
+        else:
+            self.lbl_s3_gi_stat.setText("🛡️ .gitignore: No existe")
+            self.lbl_s3_gi_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #f87171;")
+
+        # Telemetría .env
+        if not status.get("has_env", False):
+            self.lbl_s3_env_stat.setText("🔐 .env: No existe")
+            self.lbl_s3_env_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #9ca3af;")
+        elif status.get("env_is_ignored", False):
+            self.lbl_s3_env_stat.setText("🔐 .env: Presente y Protegido ✅")
+            self.lbl_s3_env_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #34d399;")
+        else:
+            self.lbl_s3_env_stat.setText("🔐 .env: Presente (¡SIN PROTEGER! ⚠️)")
+            self.lbl_s3_env_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #f87171;")
+
+        # Telemetría .env.example
+        if status.get("has_env_example", status.get("has_example", False)):
+            self.lbl_s3_example_stat.setText("📋 .env.example: Presente")
+            self.lbl_s3_example_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #6ee7b7;")
+        else:
+            self.lbl_s3_example_stat.setText("📋 .env.example: Ausente")
+            self.lbl_s3_example_stat.setStyleSheet("font-size: 11px; font-weight: 700; color: #9ca3af;")
+
+        # Cargar contenido de .gitignore
+        gi_file = os.path.join(p_path, ".gitignore")
+        if os.path.isfile(gi_file):
+            try:
+                with open(gi_file, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                self.txt_s3_gitignore_content.setPlainText(content)
+            except Exception as e:
+                self.txt_s3_gitignore_content.setPlainText(f"Error al leer .gitignore: {str(e)}")
+        else:
+            self.txt_s3_gitignore_content.setPlainText("# No existe archivo .gitignore en este proyecto.\n# Usa las plantillas inteligentes de la izquierda para crear uno al instante.")
+
+    def execute_apply_gitignore_preset(self, preset_type: str):
+        """Aplica un preset al archivo .gitignore en segundo plano."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        self.terminal_display.log("GITIGNORE", f"Aplicando preset de exclusión: <b>{preset_type.upper()}</b>...", tag_color="#c084fc", prefix="⚡")
+        self.s3_worker = Sector3WorkerThread("apply_preset", project_path=p_path, extra_data=preset_type)
+        self.s3_worker.finished_task.connect(self.on_sector3_task_finished)
+        self.s3_worker.start()
+
+    def execute_add_custom_rule(self):
+        """Añade una regla individual escrita por el usuario al .gitignore."""
+        rule = self.input_s3_custom_rule.text().strip()
+        if not rule:
+            return
+
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        self.input_s3_custom_rule.clear()
+        self.terminal_display.log("GITIGNORE", f"Agregando regla: <code>{rule}</code>...", tag_color="#c084fc", prefix="➕")
+        self.s3_worker = Sector3WorkerThread("add_rule", project_path=p_path, extra_data=rule)
+        self.s3_worker.finished_task.connect(self.on_sector3_task_finished)
+        self.s3_worker.start()
+
+    def execute_create_env_file(self):
+        """Crea el archivo .env base y asegura su protección en .gitignore."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        self.terminal_display.log("ENV", "Creando plantilla de variables de entorno <code>.env</code>...", tag_color="#34d399", prefix="🔐")
+        self.s3_worker = Sector3WorkerThread("create_env", project_path=p_path)
+        self.s3_worker.finished_task.connect(self.on_sector3_task_finished)
+        self.s3_worker.start()
+
+    def execute_generate_env_example(self):
+        """Genera el archivo .env.example anonimizado a partir de .env."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        self.terminal_display.log("ENV", "Generando plantilla segura <code>.env.example</code> anonimizada...", tag_color="#38bdf8", prefix="📋")
+        self.s3_worker = Sector3WorkerThread("generate_env_example", project_path=p_path)
+        self.s3_worker.finished_task.connect(self.on_sector3_task_finished)
+        self.s3_worker.start()
+
+    def open_gitignore_in_editor(self):
+        """Abre el archivo .gitignore en el editor de código preferido."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        gi_file = os.path.join(p_path, ".gitignore")
+        if not os.path.isfile(gi_file):
+            self.terminal_display.log_warn("GITIGNORE", "El archivo .gitignore no existe aún.")
+            return
+
+        launch_project_in_editor(gi_file)
+        self.terminal_display.log("IDE", "Abriendo <code>.gitignore</code> en tu editor...", tag_color="#10b981", prefix="💻")
+
+    def refresh_sector3_docs_view(self):
+        """Escanea los archivos Markdown y de documentación del proyecto y los lista."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        # Limpiar lista anterior
+        while self.docs_list_layout.count() > 1:
+            item = self.docs_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        docs = scan_project_documentation(p_path)
+        if not docs:
+            empty_lbl = QLabel("No se encontraron archivos de documentación (*.md, README, etc.).")
+            empty_lbl.setStyleSheet("font-size: 10.5px; color: #9ca3af; padding: 8px;")
+            self.docs_list_layout.insertWidget(0, empty_lbl)
+            return
+
+        for doc_item in docs:
+            rel = doc_item.get("rel_path") or doc_item.get("relative", "")
+            sz = doc_item.get("size_kb", round(doc_item.get("size", 0) / 1024, 1))
+            name = doc_item.get("name", "Documento")
+            card = QPushButton(f"📄  {name}\n    {rel} ({sz} KB)")
+            card.setCursor(Qt.PointingHandCursor)
+            card.setStyleSheet("""
+                QPushButton {
+                    background: rgba(255, 255, 255, 0.03);
+                    color: #e5e7eb;
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 5px;
+                    padding: 6px 8px;
+                    text-align: left;
+                    font-size: 10.5px;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background: rgba(192, 132, 252, 0.15);
+                    border-color: #c084fc;
+                    color: #ffffff;
+                }
+            """)
+            item_path = doc_item.get("path", "")
+            card.clicked.connect(lambda _, p=item_path: self.on_doc_file_selected(p))
+            self.docs_list_layout.insertWidget(self.docs_list_layout.count() - 1, card)
+
+        # Si hay documentos y ninguno está cargado, cargar el primero automáticamente
+        if docs and not self._current_doc_path:
+            first_path = docs[0].get("path", "")
+            if first_path:
+                self.on_doc_file_selected(first_path)
+
+    def on_doc_file_selected(self, file_path: str):
+        """Carga y muestra el contenido del archivo de documentación seleccionado."""
+        self._current_doc_path = file_path
+        self._current_doc_raw_content = read_markdown_file(file_path)
+        filename = os.path.basename(file_path)
+        self.lbl_s3_selected_doc.setText(f"📖  {filename}")
+
+        if self._doc_is_rendered:
+            self.txt_s3_doc_viewer.setMarkdown(self._current_doc_raw_content)
+            self.btn_s3_toggle_doc_mode.setText("📝  Ver Código Fuente")
+        else:
+            self.txt_s3_doc_viewer.setPlainText(self._current_doc_raw_content)
+            self.btn_s3_toggle_doc_mode.setText("👁️  Ver Renderizado")
+
+    def toggle_doc_view_mode(self):
+        """Alterna entre vista renderizada con markdown y texto plano del documento."""
+        if not self._current_doc_path:
+            return
+
+        self._doc_is_rendered = not self._doc_is_rendered
+        if self._doc_is_rendered:
+            self.txt_s3_doc_viewer.setMarkdown(self._current_doc_raw_content)
+            self.btn_s3_toggle_doc_mode.setText("📝  Ver Código Fuente")
+        else:
+            self.txt_s3_doc_viewer.setPlainText(self._current_doc_raw_content)
+            self.btn_s3_toggle_doc_mode.setText("👁️  Ver Renderizado")
+
+    def open_current_doc_in_editor(self):
+        """Abre el archivo de documentación activo en el editor configurado."""
+        if not self._current_doc_path or not os.path.isfile(self._current_doc_path):
+            self.terminal_display.log_warn("DOCS", "No hay ningún documento abierto para editar.")
+            return
+
+        launch_project_in_editor(self._current_doc_path)
+        filename = os.path.basename(self._current_doc_path)
+        self.terminal_display.log("IDE", f"Abriendo <code>{filename}</code> en tu editor...", tag_color="#10b981", prefix="💻")
+
+    def execute_generate_ai_changelog(self):
+        """Lanza la generación de un changelog estructurado con IA."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        self.btn_gen_changelog.setEnabled(False)
+        self.btn_gen_changelog.setText("⏳ Generando...")
+        self.terminal_display.log("IA", "Analizando los últimos 15 commits para generar el Changelog con Ollama...", tag_color="#c084fc", prefix="✨")
+
+        self.s3_worker = Sector3WorkerThread("generate_changelog", project_path=p_path, extra_data=15)
+        self.s3_worker.finished_task.connect(self.on_sector3_task_finished)
+        self.s3_worker.start()
+
+    def refresh_sector3_ai_view(self):
+        """Comprueba el estado del demonio Ollama y los modelos instalados."""
+        status = check_ollama_status()
+        is_online = status.get("online", status.get("running", False))
+        models = status.get("models", [])
+        if is_online:
+            self.lbl_s3_ol_status.setText("Ollama: ● En línea (http://localhost:11434)")
+            self.lbl_s3_ol_status.setStyleSheet("font-size: 11px; font-weight: 700; color: #34d399;")
+            models_str = ", ".join(models) if models else "Sin modelos detectados"
+            self.lbl_s3_ol_models.setText(f"Modelos disponibles: {models_str}")
+            self.lbl_s3_ol_models.setStyleSheet("font-size: 10px; color: #e5e7eb;")
+        else:
+            self.lbl_s3_ol_status.setText("Ollama: ○ Desconectado / Sin respuesta")
+            self.lbl_s3_ol_status.setStyleSheet("font-size: 11px; font-weight: 700; color: #f87171;")
+            self.lbl_s3_ol_models.setText("Asegúrate de que 'ollama serve' esté en ejecución en localhost:11434.")
+            self.lbl_s3_ol_models.setStyleSheet("font-size: 10px; color: #fca5a5;")
+
+    def execute_history_ai_audit(self):
+        """Ejecuta una auditoría con IA sobre el diff acumulado de commits recientes."""
+        p_path = self.project_data.get("path", "")
+        if not p_path:
+            return
+
+        idx_c = self.combo_s3_audit_count.currentIndex()
+        count = 3 if idx_c == 0 else (5 if idx_c == 1 else 10)
+
+        idx_m = self.combo_s3_audit_model.currentIndex()
+        model_choice = "light" if idx_m == 0 else "heavy"
+
+        self.btn_run_history_audit.setEnabled(False)
+        self.btn_run_history_audit.setText("⏳ Auditando con IA...")
+        self.txt_s3_ai_output.setPlainText(f"Auditoría iniciada sobre los últimos {count} commits usando modelo {model_choice}...\nAnalizando diff acumulado con Ollama...")
+
+        self.terminal_display.log("IA", f"Lanzando auditoría de {count} commits recientes con modelo <b>{model_choice}</b>...", tag_color="#38bdf8", prefix="🔍")
+        self.s3_worker = Sector3WorkerThread("history_audit", project_path=p_path, extra_data={"count": count, "model_choice": model_choice})
+        self.s3_worker.finished_task.connect(self.on_sector3_task_finished)
+        self.s3_worker.start()
+
+    def execute_quick_ai_consult(self):
+        """Envía la consulta técnica escrita a Ollama."""
+        prompt = self.txt_s3_ai_prompt.toPlainText().strip()
+        if not prompt:
+            self.terminal_display.log_warn("IA", "Escribe una consulta antes de enviar.")
+            return
+
+        idx_m = self.combo_s3_prompt_model.currentIndex()
+        model_choice = "light" if idx_m == 0 else "heavy"
+
+        self.btn_s3_consult.setEnabled(False)
+        self.btn_s3_consult.setText("⏳ Pensando...")
+        self.txt_s3_ai_output.setPlainText(f"Consultando a Ollama ({model_choice})...\nGenerando respuesta...")
+
+        self.terminal_display.log("IA", f"Consultando a Ollama (modelo: {model_choice})...", tag_color="#c084fc", prefix="🚀")
+        system_instruction = "Eres un asistente de desarrollo experto integrado en el entorno de desarrollo Abraxas (Lumen). Proporciona respuestas técnicas concisas, precisas y snippets listos para producción."
+
+        self.s3_worker = Sector3WorkerThread("ai_consult", extra_data={"prompt": prompt, "model_choice": model_choice, "system": system_instruction})
+        self.s3_worker.finished_task.connect(self.on_sector3_task_finished)
+        self.s3_worker.start()
+
+    def set_ai_prompt_template(self, template_type: str):
+        """Inserta una plantilla de prompt rápida en el cuadro de texto."""
+        templates = {
+            "optimize": "Por favor revisa el siguiente snippet y sugiere optimizaciones de rendimiento y legibilidad:\n\n```python\n# Pega tu código aquí\n```",
+            "syntax": "Por favor revisa el siguiente código y detecta posibles errores de sintaxis, typing o lógica:\n\n```python\n# Pega tu código aquí\n```",
+            "security": "Realiza un análisis de seguridad sobre las siguientes funciones, identificando posibles inyecciones, fugas de memoria o vulnerabilidades:\n\n```python\n# Pega tu código aquí\n```",
+            "explain": "Explica de forma didáctica y concisa qué hace exactamente el siguiente bloque de código y sus casos borde:\n\n```python\n# Pega tu código aquí\n```"
+        }
+        text = templates.get(template_type, "")
+        if text:
+            self.txt_s3_ai_prompt.setPlainText(text)
+            self.txt_s3_ai_prompt.setFocus()
+
+    def copy_ai_response_to_clipboard(self):
+        """Copia el texto del visor de respuestas de IA al portapapeles."""
+        text = self.txt_s3_ai_output.toPlainText().strip()
+        if not text:
+            return
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text)
+        self.terminal_display.log_success("CLIPBOARD", "Respuesta de IA copiada al portapapeles.")
+
+    def on_sector3_task_finished(self, success: bool, action_type: str, message: str, data: object):
+        """Callback invocado cuando una tarea de Sector 3 finaliza en su hilo de trabajo."""
+        # Restaurar botones
+        if hasattr(self, "btn_gen_changelog"):
+            self.btn_gen_changelog.setEnabled(True)
+            self.btn_gen_changelog.setText("✨  Generar Changelog con IA")
+        if hasattr(self, "btn_run_history_audit"):
+            self.btn_run_history_audit.setEnabled(True)
+            self.btn_run_history_audit.setText("🔍  Auditar Historial Reciente")
+        if hasattr(self, "btn_s3_consult"):
+            self.btn_s3_consult.setEnabled(True)
+            self.btn_s3_consult.setText("🚀  Consultar a Ollama")
+
+        # Registro en terminal y actualización de vista
+        if action_type in ["GITIGNORE-PRESET", "GITIGNORE-RULE", "ENV-CREATE", "ENV-EXAMPLE"]:
+            if success:
+                self.terminal_display.log_success(action_type, message)
+            else:
+                self.terminal_display.log_error(action_type, message)
+            self.refresh_sector3_gitignore_view()
+
+        elif action_type == "AI-CHANGELOG":
+            if success:
+                self.terminal_display.log_success(action_type, "Changelog generado e integrado exitosamente.")
+                self.refresh_sector3_docs_view()
+                # Abrir CHANGELOG.md si existe
+                p_path = self.project_data.get("path", "")
+                cg_path = os.path.join(p_path, "CHANGELOG.md")
+                if os.path.isfile(cg_path):
+                    self.on_doc_file_selected(cg_path)
+            else:
+                self.terminal_display.log_error(action_type, f"Fallo al generar changelog: {message}")
+
+        elif action_type == "AI-AUDIT":
+            if success and data:
+                self.terminal_display.log_success(action_type, "Auditoría de historial completada exitosamente.")
+                self.txt_s3_ai_output.setPlainText(str(data))
+            else:
+                self.terminal_display.log_error(action_type, f"Error en auditoría: {message}")
+                self.txt_s3_ai_output.setPlainText(f"Error durante la auditoría:\n{message}")
+
+        elif action_type == "AI-CONSULT":
+            if success and data:
+                self.terminal_display.log_success(action_type, "Respuesta recibida de Ollama.")
+                self.txt_s3_ai_output.setPlainText(str(data))
+            else:
+                self.terminal_display.log_error(action_type, f"Error en consulta: {message}")
+                self.txt_s3_ai_output.setPlainText(f"Error al consultar Ollama:\n{message}")
+
     def create_simple_sector_view(self, title: str, accent_color: str, actions: list) -> QFrame:
         """Crea una ventana dedicada y limpia para un sector específico con diseño consistente."""
         card = QFrame()
@@ -2093,11 +5616,45 @@ class LumenProjectWorkspaceView(QWidget):
     # -----------------------------------------------------------------
     # NAVEGACIÓN DENTRO DE SECTORES Y CICLOS DE TRABAJO
     # -----------------------------------------------------------------
+    def handle_git_init(self, create_gitignore: bool = True):
+        """Inicializa el repositorio Git en el proyecto actual y refresca el workspace."""
+        if not self.project_data:
+            self.terminal_display.log_error("GIT-INIT", "No hay ningún proyecto activo cargado.")
+            return
+
+        p_path = self.project_data.get("path", "")
+        p_name = self.project_data.get("name", "Proyecto")
+
+        self.terminal_display.log("GIT-INIT", f"Inicializando repositorio Git para <b>{p_name}</b> (rama <code>main</code>)...", tag_color="#38bdf8", prefix="🌱")
+
+        success, msg = execute_git_init(p_path, initial_branch="main", create_gitignore=create_gitignore)
+        if success:
+            self.terminal_display.log_success("GIT-INIT", msg)
+            if create_gitignore:
+                self.terminal_display.log_info("GITIGNORE", "Archivo <code>.gitignore</code> creado con reglas de exclusión base.")
+            self.refresh_current_project(reset_terminal=True)
+        else:
+            self.terminal_display.log_error("GIT-INIT", msg)
+
     def open_sector_view(self, sector_idx: int, sector_title: str):
         """Abre la ventana limpia dedicada del sector seleccionado."""
+        self.dock_terminal_at_bottom()
+        if not getattr(self, "is_project_git", True):
+            if sector_idx == 1:
+                self.terminal_display.log_warn("SECTOR-1", "El <b>Sector 1 (Protocolo Git)</b> no está disponible. Inicia el repositorio Git primero.")
+                return
+            elif sector_idx == 3:
+                self.terminal_display.log_warn("SECTOR-3", "El <b>Sector 3 (Herramientas & IA)</b> está bloqueado. Requiere un repositorio Git inicializado.")
+                return
+
         self.sectors_stack.setCurrentIndex(sector_idx)
         if sector_idx == 1 and hasattr(self, "sector1_sub_stack"):
             self.sector1_sub_stack.setCurrentIndex(0)
+        if sector_idx == 2 and hasattr(self, "sector2_sub_stack"):
+            self.sector2_sub_stack.setCurrentIndex(0)
+        if sector_idx == 3 and hasattr(self, "sector3_sub_stack"):
+            self.sector3_sub_stack.setCurrentIndex(0)
+            self.refresh_sector3_gitignore_view()
         if hasattr(self, "btn_toggle_graph_terminal"):
             self.btn_toggle_graph_terminal.setVisible(False)
         if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 1:
@@ -2106,6 +5663,11 @@ class LumenProjectWorkspaceView(QWidget):
 
     def open_sector_and_handle(self, sector_idx: int, sector_title: str, action_title: str):
         """Abre la ventana del sector o ejecuta la acción seleccionada."""
+        if not getattr(self, "is_project_git", True):
+            if sector_idx == 1:
+                self.open_sector_view(sector_idx, sector_title)
+                return
+
         if sector_idx == 1:
             if action_title == "Ciclos de Trabajo":
                 self.open_sector_view(1, "Ciclos de Trabajo")
@@ -2113,11 +5675,65 @@ class LumenProjectWorkspaceView(QWidget):
                 self.open_branches_view()
             elif action_title == "Fusión de Ramas":
                 self.open_merge_view()
+            elif action_title == "Estado y Sincronización":
+                self.open_sync_view()
+            elif action_title == "Visibilidad GitHub":
+                self.open_visibility_dialog()
             else:
                 self.handle_action_click(action_title)
+        elif sector_idx == 2:
+            act_lower = action_title.lower()
+            if "editor" in act_lower:
+                self.open_sector2_editor_view()
+            elif "python" in act_lower or "venv" in act_lower:
+                self.open_sector2_venv_view()
+            elif "puerto" in act_lower and "docker" not in act_lower:
+                self.open_sector2_ports_view()
+            elif "docker" in act_lower or "puerto" in act_lower:
+                self.open_sector2_docker_view()
+            else:
+                self.open_sector_view(2, "Sector 2: Entornos & Run")
+        elif sector_idx == 3:
+            act_lower = action_title.lower()
+            if "gitignore" in act_lower or "env" in act_lower:
+                self.open_sector3_gitignore_view()
+            elif "documentaci" in act_lower or "lector" in act_lower or "readme" in act_lower:
+                self.open_sector3_docs_view()
+            elif "ia" in act_lower or "utilidad" in act_lower or "ollama" in act_lower:
+                self.open_sector3_ai_view()
+            else:
+                self.open_sector3_gitignore_view()
         else:
             self.open_sector_view(sector_idx, sector_title)
             self.handle_action_click(action_title)
+
+    def open_visibility_dialog(self):
+        """Abre el diálogo modal para gestionar la visibilidad (Público/Privado) o publicar en GitHub."""
+        path = self.project_data.get("path")
+        name = self.project_data.get("name")
+        if not path or not os.path.exists(path):
+            self.terminal_display.log_warn("GITHUB", "Ruta de proyecto no válida para gestionar visibilidad.")
+            return
+
+        dlg = LumenRepoVisibilityDialog(path, name, parent=self)
+        if dlg.exec():
+            res_msg = getattr(dlg, "result_message", "Operación de visibilidad completada.")
+            self.terminal_display.log("GITHUB", f"<b>Visibilidad en GitHub:</b> {res_msg}", tag_color="#34d399", prefix="🌐")
+            self.refresh_current_project(reset_terminal=False)
+
+    def open_sync_view(self):
+        """Abre la vista dedicada de Estado y Sincronización (Status / Fetch / Pull) en el Sector 1."""
+        self.sectors_stack.setCurrentIndex(1)
+        self.sector1_sub_stack.setCurrentWidget(self.page_sync)
+        self.terminal_display.log("NAV", "Accediendo al módulo <b>Estado y Sincronización (Status • Fetch • Pull)</b>...", tag_color="#34d399", prefix="⚡")
+        self.refresh_sync_view()
+        self.refresh_git_graph()
+        if hasattr(self, "btn_toggle_graph_terminal"):
+            self.btn_toggle_graph_terminal.setVisible(True)
+        if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 0:
+            self.toggle_terminal_graph_view()
+        self.sector1_sub_stack.updateGeometry()
+        self.sectors_stack.updateGeometry()
 
     def open_branches_view(self):
         """Abre la vista dedicada de Control de Ramas en el Sector 1."""
@@ -2470,6 +6086,27 @@ class LumenProjectWorkspaceView(QWidget):
         """)
         btn_to_branches.clicked.connect(self.open_branches_view)
         head.addWidget(btn_to_branches)
+
+        btn_to_sync = QPushButton("⚡  Estado y Sync")
+        btn_to_sync.setCursor(Qt.PointingHandCursor)
+        btn_to_sync.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border: 1px solid rgba(52, 211, 153, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.30);
+                border-color: #34d399;
+                color: #ffffff;
+            }
+        """)
+        btn_to_sync.clicked.connect(self.open_sync_view)
+        head.addWidget(btn_to_sync)
 
         lbl_title = QLabel("🔀  FUSIÓN DE RAMAS (GIT MERGE)")
         lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
@@ -3650,6 +7287,1103 @@ class LumenProjectWorkspaceView(QWidget):
         self.run_git_push()
         self.merge_inner_stack.setCurrentIndex(0)
 
+    # =================================================================
+    # MÓDULO 4 DEL SECTOR 1: ESTADO Y SINCRONIZACIÓN (STATUS • FETCH • PULL)
+    # =================================================================
+    def create_sector1_sync_view(self) -> QWidget:
+        """Crea la sub-página dedicada para el Estado y Sincronización Táctica de Red."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # 1. Cabecera de Navegación del Módulo 4
+        head = QHBoxLayout()
+        head.setSpacing(10)
+
+        btn_back_main = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back_main.setCursor(Qt.PointingHandCursor)
+        btn_back_main.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #bae6fd;
+                border: 1px solid rgba(56, 189, 248, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.30);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_back_main.clicked.connect(self.go_back_to_sectors_overview)
+        head.addWidget(btn_back_main)
+
+        btn_to_work = QPushButton("🔄  Ciclos de Trabajo")
+        btn_to_work.setCursor(Qt.PointingHandCursor)
+        btn_to_work.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.15);
+                color: #c7d2fe;
+                border: 1px solid rgba(99, 102, 241, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(99, 102, 241, 0.30);
+                border-color: #818cf8;
+                color: #ffffff;
+            }
+        """)
+        btn_to_work.clicked.connect(self.go_back_to_work_cycles)
+        head.addWidget(btn_to_work)
+
+        btn_to_branches = QPushButton("🌿  Control de Ramas")
+        btn_to_branches.setCursor(Qt.PointingHandCursor)
+        btn_to_branches.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border: 1px solid rgba(52, 211, 153, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.30);
+                border-color: #34d399;
+                color: #ffffff;
+            }
+        """)
+        btn_to_branches.clicked.connect(self.open_branches_view)
+        head.addWidget(btn_to_branches)
+
+        btn_to_merge = QPushButton("🔀  Fusión de Ramas")
+        btn_to_merge.setCursor(Qt.PointingHandCursor)
+        btn_to_merge.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #bae6fd;
+                border: 1px solid rgba(56, 189, 248, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.30);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_to_merge.clicked.connect(self.open_merge_view)
+        head.addWidget(btn_to_merge)
+
+        lbl_title = QLabel("⚡  ESTADO Y SINCRONIZACIÓN")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #34d399; letter-spacing: 0.5px;")
+        head.addWidget(lbl_title)
+        head.addStretch()
+
+        btn_toggle_graph = QPushButton("📊  Alternar Grafo / Terminal")
+        btn_toggle_graph.setCursor(Qt.PointingHandCursor)
+        btn_toggle_graph.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.12);
+                color: #6ee7b7;
+                border: 1px solid rgba(52, 211, 153, 0.35);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.25);
+                color: #ffffff;
+            }
+        """)
+        btn_toggle_graph.clicked.connect(self.toggle_terminal_graph_view)
+        head.addWidget(btn_toggle_graph)
+
+        lbl_pill = QLabel("[LUMEN • PROTOCOLO SYNC]")
+        lbl_pill.setFixedHeight(24)
+        lbl_pill.setAlignment(Qt.AlignCenter)
+        lbl_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #34d399; background-color: rgba(52, 211, 153, 0.12); border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 4px; padding: 2px 8px;")
+        head.addWidget(lbl_pill)
+        layout.addLayout(head)
+
+        # 2. Panel HUD de Telemetría Táctica (3 Columnas)
+        telemetry_frame = QFrame()
+        telemetry_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.02);
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 8px;
+            }
+        """)
+        t_lay = QHBoxLayout(telemetry_frame)
+        t_lay.setContentsMargins(12, 10, 12, 10)
+        t_lay.setSpacing(14)
+
+        # Columna 1: Rama Activa y Tracking Upstream
+        c1 = QFrame()
+        c1.setStyleSheet("background: transparent; border: none;")
+        v1 = QVBoxLayout(c1)
+        v1.setContentsMargins(0, 0, 0, 0)
+        v1.setSpacing(3)
+        lbl_t1 = QLabel("🌿 RAMA ACTIVA & UPSTREAM")
+        lbl_t1.setStyleSheet("font-size: 10px; font-weight: 800; color: #9ca3af; letter-spacing: 0.5px;")
+        v1.addWidget(lbl_t1)
+        r_b = QHBoxLayout()
+        r_b.setSpacing(8)
+        self.lbl_sync_branch = QLabel("HEAD")
+        self.lbl_sync_branch.setStyleSheet("font-size: 13px; font-weight: 900; color: #f3f4f6;")
+        r_b.addWidget(self.lbl_sync_branch)
+        self.lbl_sync_state_badge = QLabel("[Verificando]")
+        self.lbl_sync_state_badge.setStyleSheet("font-size: 10px; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 4px; padding: 1px 6px;")
+        r_b.addWidget(self.lbl_sync_state_badge)
+        r_b.addStretch()
+        v1.addLayout(r_b)
+        self.lbl_sync_upstream = QLabel("origin/...")
+        self.lbl_sync_upstream.setStyleSheet("font-family: monospace; font-size: 11px; color: #60a5fa;")
+        v1.addWidget(self.lbl_sync_upstream)
+        t_lay.addWidget(c1, 1)
+
+        # Separador vertical
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.VLine)
+        sep1.setStyleSheet("color: rgba(255, 255, 255, 0.08);")
+        t_lay.addWidget(sep1)
+
+        # Columna 2: Árbol Local y Líneas (+/-)
+        c2 = QFrame()
+        c2.setStyleSheet("background: transparent; border: none;")
+        v2 = QVBoxLayout(c2)
+        v2.setContentsMargins(0, 0, 0, 0)
+        v2.setSpacing(3)
+        lbl_t2 = QLabel("📁 ÁRBOL LOCAL & LÍNEAS (+/-)")
+        lbl_t2.setStyleSheet("font-size: 10px; font-weight: 800; color: #9ca3af; letter-spacing: 0.5px;")
+        v2.addWidget(lbl_t2)
+        r_w = QHBoxLayout()
+        r_w.setSpacing(8)
+        self.lbl_sync_worktree_badge = QLabel("0 modificaciones")
+        self.lbl_sync_worktree_badge.setStyleSheet("font-size: 12.5px; font-weight: 800; color: #fbbf24;")
+        r_w.addWidget(self.lbl_sync_worktree_badge)
+        self.lbl_sync_lines_badge = QLabel("+0 / -0")
+        self.lbl_sync_lines_badge.setStyleSheet("font-family: monospace; font-size: 11px; font-weight: 700; color: #9ca3af;")
+        r_w.addWidget(self.lbl_sync_lines_badge)
+        r_w.addStretch()
+        v2.addLayout(r_w)
+        self.lbl_sync_stash_info = QLabel("📦 0 stashes guardados")
+        self.lbl_sync_stash_info.setStyleSheet("font-size: 11px; color: #9ca3af;")
+        v2.addWidget(self.lbl_sync_stash_info)
+        t_lay.addWidget(c2, 1)
+
+        # Separador vertical
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.VLine)
+        sep2.setStyleSheet("color: rgba(255, 255, 255, 0.08);")
+        t_lay.addWidget(sep2)
+
+        # Columna 3: Pulso de Red & Seguridad Pre-Pull
+        c3 = QFrame()
+        c3.setStyleSheet("background: transparent; border: none;")
+        v3 = QVBoxLayout(c3)
+        v3.setContentsMargins(0, 0, 0, 0)
+        v3.setSpacing(3)
+        lbl_t3 = QLabel("🛰️ PULSO DE RED & SEGURIDAD")
+        lbl_t3.setStyleSheet("font-size: 10px; font-weight: 800; color: #9ca3af; letter-spacing: 0.5px;")
+        v3.addWidget(lbl_t3)
+        self.lbl_sync_last_fetch = QLabel("🕒 Último fetch: -")
+        self.lbl_sync_last_fetch.setStyleSheet("font-size: 11.5px; font-weight: 700; color: #e5e7eb;")
+        v3.addWidget(self.lbl_sync_last_fetch)
+        self.lbl_sync_safety_badge = QLabel("[🛡️ Diagnóstico Pre-Pull]")
+        self.lbl_sync_safety_badge.setStyleSheet("font-size: 10.5px; font-weight: 800; color: #34d399;")
+        v3.addWidget(self.lbl_sync_safety_badge)
+        t_lay.addWidget(c3, 1)
+
+        layout.addWidget(telemetry_frame)
+
+        # 3. Baraja de Acciones Tácticas (Status, Fetch, Pull)
+        deck_frame = QFrame()
+        deck_frame.setStyleSheet("background: transparent; border: none;")
+        d_lay = QHBoxLayout(deck_frame)
+        d_lay.setContentsMargins(0, 0, 0, 0)
+        d_lay.setSpacing(10)
+
+        self.btn_action_status = LumenCyberActionButton(
+            "📋", "Inspeccionar Árbol (Status)", 
+            "Audita archivos modificados, stage, deltas de líneas (+/-) y stashes", 
+            accent_color="#38bdf8"
+        )
+        self.btn_action_status.clicked.connect(lambda _: self.execute_status_inspect())
+        d_lay.addWidget(self.btn_action_status)
+
+        self.btn_action_fetch = LumenCyberActionButton(
+            "📡", "Descargar Metadatos (Fetch)", 
+            "Consulta commits y ramas del remoto con poda (--prune) sin alterar código", 
+            accent_color="#c084fc"
+        )
+        self.btn_action_fetch.clicked.connect(lambda _: self.execute_fetch_action())
+        d_lay.addWidget(self.btn_action_fetch)
+
+        self.btn_action_pull = LumenCyberActionButton(
+            "📥", "Sincronizar Cambios (Pull)", 
+            "Descarga e integra commits entrantes con Rebase + Autostash inteligente", 
+            accent_color="#34d399"
+        )
+        self.btn_action_pull.clicked.connect(lambda _: self.execute_pull_action())
+        d_lay.addWidget(self.btn_action_pull)
+
+        layout.addWidget(deck_frame)
+
+        # 4. Barra de Opciones de Pull y Controles Stash
+        opts_frame = QFrame()
+        opts_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.02);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 6px;
+                padding: 4px 10px;
+            }
+        """)
+        o_lay = QHBoxLayout(opts_frame)
+        o_lay.setContentsMargins(8, 4, 8, 4)
+        o_lay.setSpacing(12)
+
+        lbl_strat = QLabel("Estrategia Pull:")
+        lbl_strat.setStyleSheet("font-size: 11px; font-weight: 700; color: #9ca3af;")
+        o_lay.addWidget(lbl_strat)
+
+        self.cmb_pull_strategy = QComboBox()
+        self.cmb_pull_strategy.setItemDelegate(QStyledItemDelegate())
+        self.cmb_pull_strategy.setStyleSheet("""
+            QComboBox {
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                color: #f3f4f6;
+                padding: 3px 8px;
+                font-size: 11px;
+                min-width: 230px;
+            }
+        """)
+        self.cmb_pull_strategy.addItem("⚡ Rebase Seguro (Recomendado • Sin merge commits)", "rebase")
+        self.cmb_pull_strategy.addItem("🔀 Merge Estándar (git pull --no-rebase)", "merge")
+        self.cmb_pull_strategy.addItem("⏩ Fast-Forward Únicamente (--ff-only)", "ff-only")
+        o_lay.addWidget(self.cmb_pull_strategy)
+
+        self.chk_pull_autostash = QCheckBox("Autostash automático")
+        self.chk_pull_autostash.setChecked(True)
+        self.chk_pull_autostash.setToolTip("Guarda tus cambios locales en un stash temporal y los re-aplica automáticamente tras el pull")
+        self.chk_pull_autostash.setStyleSheet("QCheckBox { font-size: 11px; color: #9ca3af; font-weight: 600; } QCheckBox:hover { color: #f3f4f6; }")
+        o_lay.addWidget(self.chk_pull_autostash)
+
+        o_lay.addStretch()
+
+        self.btn_toggle_stash = QPushButton("📦 Guardar Stash")
+        self.btn_toggle_stash.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_stash.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.04);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover { color: #f3f4f6; border-color: rgba(255, 255, 255, 0.25); }
+        """)
+        self.btn_toggle_stash.clicked.connect(self.toggle_stash_drawer)
+        o_lay.addWidget(self.btn_toggle_stash)
+
+        self.btn_pop_stash = QPushButton("⚡ Pop Stash")
+        self.btn_pop_stash.setCursor(Qt.PointingHandCursor)
+        self.btn_pop_stash.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(251, 191, 36, 0.12);
+                color: #fde047;
+                border: 1px solid rgba(251, 191, 36, 0.35);
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover { background-color: rgba(251, 191, 36, 0.25); color: #ffffff; }
+        """)
+        self.btn_pop_stash.clicked.connect(self.execute_stash_pop_action)
+        o_lay.addWidget(self.btn_pop_stash)
+
+        layout.addWidget(opts_frame)
+
+        # Cajón Dinámico de Stash (Guardar)
+        self.drawer_stash_save = QFrame()
+        self.drawer_stash_save.setVisible(False)
+        self.drawer_stash_save.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(251, 191, 36, 0.35);
+                border-radius: 6px;
+                padding: 6px 12px;
+            }
+        """)
+        ds_lay = QHBoxLayout(self.drawer_stash_save)
+        ds_lay.setContentsMargins(6, 4, 6, 4)
+        ds_lay.setSpacing(10)
+
+        lbl_s_prompt = QLabel("Mensaje de Stash:")
+        lbl_s_prompt.setStyleSheet("font-size: 11px; font-weight: 700; color: #fde047;")
+        ds_lay.addWidget(lbl_s_prompt)
+
+        self.txt_stash_msg = QLineEdit()
+        self.txt_stash_msg.setPlaceholderText("Descripción del trabajo en pausa (ej. feat/auth en progreso)...")
+        self.txt_stash_msg.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+                color: #f3f4f6;
+                padding: 4px 8px;
+                font-size: 11.5px;
+            }
+            QLineEdit:focus { border-color: #fde047; }
+        """)
+        self.txt_stash_msg.returnPressed.connect(self.execute_stash_save_action)
+        ds_lay.addWidget(self.txt_stash_msg, 1)
+
+        btn_confirm_stash = QPushButton("Confirmar Stash")
+        btn_confirm_stash.setCursor(Qt.PointingHandCursor)
+        btn_confirm_stash.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(251, 191, 36, 0.20);
+                color: #fde047;
+                border: 1px solid #fbbf24;
+                border-radius: 4px;
+                padding: 4px 12px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: rgba(251, 191, 36, 0.35); color: #ffffff; }
+        """)
+        btn_confirm_stash.clicked.connect(self.execute_stash_save_action)
+        ds_lay.addWidget(btn_confirm_stash)
+
+        btn_cancel_stash = QPushButton("Cancelar")
+        btn_cancel_stash.setCursor(Qt.PointingHandCursor)
+        btn_cancel_stash.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.04);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 11px;
+            }
+        """)
+        btn_cancel_stash.clicked.connect(lambda: self.drawer_stash_save.setVisible(False))
+        ds_lay.addWidget(btn_cancel_stash)
+
+        layout.addWidget(self.drawer_stash_save)
+
+        # 5. Selector de Pestañas de Detalle
+        tabs_bar = QFrame()
+        tabs_bar.setStyleSheet("background: transparent; border: none;")
+        tb_lay = QHBoxLayout(tabs_bar)
+        tb_lay.setContentsMargins(0, 4, 0, 2)
+        tb_lay.setSpacing(8)
+
+        self.btn_sync_tab_tree = QPushButton("📁  Árbol Local & Líneas (+/-)")
+        self.btn_sync_tab_tree.setCursor(Qt.PointingHandCursor)
+        self.btn_sync_tab_tree.clicked.connect(lambda: self.switch_sync_tab(0))
+        tb_lay.addWidget(self.btn_sync_tab_tree)
+
+        self.btn_sync_tab_incoming = QPushButton("🛰️  Radar de Commits (Entrantes / Salientes)")
+        self.btn_sync_tab_incoming.setCursor(Qt.PointingHandCursor)
+        self.btn_sync_tab_incoming.clicked.connect(lambda: self.switch_sync_tab(1))
+        tb_lay.addWidget(self.btn_sync_tab_incoming)
+
+        tb_lay.addStretch()
+        layout.addWidget(tabs_bar)
+
+        # Sub-stack para los detalles
+        self.sync_details_stack = QStackedWidget()
+        self.sync_details_stack.setStyleSheet("background: transparent; border: none;")
+
+        # --- Sub-página 0: Árbol Local & Archivos ---
+        page_tree = QWidget()
+        pt_lay = QVBoxLayout(page_tree)
+        pt_lay.setContentsMargins(0, 0, 0, 0)
+        pt_lay.setSpacing(8)
+
+        # Filtros rápidos para el árbol
+        filter_bar = QHBoxLayout()
+        filter_bar.setSpacing(8)
+        self.sync_filter_buttons = {}
+        for f_key, f_lbl in [("ALL", "Todos"), ("UNSTAGED", "Modificados"), ("STAGED", "En Stage"), ("UNTRACKED", "Nuevos"), ("CONFLICT", "Conflictos")]:
+            f_btn = QPushButton(f_lbl)
+            f_btn.setCursor(Qt.PointingHandCursor)
+            f_btn.clicked.connect(lambda _, k=f_key: self.filter_sync_tree(k))
+            filter_bar.addWidget(f_btn)
+            self.sync_filter_buttons[f_key] = f_btn
+        filter_bar.addStretch()
+        pt_lay.addLayout(filter_bar)
+
+        # Scroll Area para la lista de archivos
+        tree_scroll = QScrollArea()
+        tree_scroll.setWidgetResizable(True)
+        tree_scroll.setMinimumHeight(180)
+        tree_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        tree_content = QWidget()
+        tree_content.setStyleSheet("background: transparent;")
+        self.sync_files_layout = QVBoxLayout(tree_content)
+        self.sync_files_layout.setContentsMargins(0, 0, 0, 0)
+        self.sync_files_layout.setSpacing(6)
+        self.sync_files_layout.addStretch()
+        tree_scroll.setWidget(tree_content)
+        pt_lay.addWidget(tree_scroll, 1)
+
+        self.sync_details_stack.addWidget(page_tree)
+
+        # --- Sub-página 1: Radar de Commits Entrantes / Salientes ---
+        page_radar = QWidget()
+        pr_lay = QVBoxLayout(page_radar)
+        pr_lay.setContentsMargins(0, 0, 0, 0)
+        pr_lay.setSpacing(8)
+
+        radar_scroll = QScrollArea()
+        radar_scroll.setWidgetResizable(True)
+        radar_scroll.setMinimumHeight(180)
+        radar_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        radar_content = QWidget()
+        radar_content.setStyleSheet("background: transparent;")
+        self.sync_radar_layout = QVBoxLayout(radar_content)
+        self.sync_radar_layout.setContentsMargins(0, 0, 0, 0)
+        self.sync_radar_layout.setSpacing(6)
+        self.sync_radar_layout.addStretch()
+        radar_scroll.setWidget(radar_content)
+        pr_lay.addWidget(radar_scroll, 1)
+
+        self.sync_details_stack.addWidget(page_radar)
+
+        layout.addWidget(self.sync_details_stack, 1)
+
+        # Variables internas de estado
+        self.current_sync_filter = "ALL"
+        self.last_sync_status = {}
+        self.switch_sync_tab(0)
+
+        return page
+
+    def switch_sync_tab(self, tab_idx: int):
+        """Alterna visualmente entre la pestaña del Árbol Local y el Radar de Commits."""
+        self.sync_details_stack.setCurrentIndex(tab_idx)
+        active_style = """
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.20);
+                color: #6ee7b7;
+                border: 1px solid #34d399;
+                border-radius: 6px;
+                padding: 5px 14px;
+                font-weight: 800;
+                font-size: 11.5px;
+            }
+        """
+        inactive_style = """
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.03);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 6px;
+                padding: 5px 14px;
+                font-weight: 600;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.07);
+                color: #f3f4f6;
+            }
+        """
+        if tab_idx == 0:
+            self.btn_sync_tab_tree.setStyleSheet(active_style)
+            self.btn_sync_tab_incoming.setStyleSheet(inactive_style)
+        else:
+            self.btn_sync_tab_tree.setStyleSheet(inactive_style)
+            self.btn_sync_tab_incoming.setStyleSheet(active_style)
+        if hasattr(self, "sector1_sub_stack"):
+            self.sector1_sub_stack.updateGeometry()
+
+    def filter_sync_tree(self, filter_key: str):
+        """Filtra los archivos del árbol de trabajo según su categoría."""
+        self.current_sync_filter = filter_key
+        self.update_filter_button_styles()
+        self.render_sync_local_tree(self.last_sync_status)
+
+    def update_filter_button_styles(self):
+        """Actualiza los estilos visuales de los chips de filtrado del árbol."""
+        status = self.last_sync_status
+        counts = {
+            "ALL": status.get("total_unstaged", 0) + status.get("total_staged", 0) + status.get("total_untracked", 0) + status.get("total_conflicts", 0),
+            "UNSTAGED": status.get("total_unstaged", 0),
+            "STAGED": status.get("total_staged", 0),
+            "UNTRACKED": status.get("total_untracked", 0),
+            "CONFLICT": status.get("total_conflicts", 0)
+        }
+        labels = {
+            "ALL": "Todos",
+            "UNSTAGED": "Modificados",
+            "STAGED": "En Stage",
+            "UNTRACKED": "Nuevos",
+            "CONFLICT": "Conflictos"
+        }
+        for k, btn in self.sync_filter_buttons.items():
+            cnt = counts.get(k, 0)
+            btn.setText(f"{labels[k]} ({cnt})")
+            if k == self.current_sync_filter:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(56, 189, 248, 0.20);
+                        color: #7dd3fc;
+                        border: 1px solid #38bdf8;
+                        border-radius: 4px;
+                        padding: 3px 10px;
+                        font-weight: 700;
+                        font-size: 11px;
+                    }
+                """)
+            else:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(255, 255, 255, 0.03);
+                        color: #9ca3af;
+                        border: 1px solid rgba(255, 255, 255, 0.08);
+                        border-radius: 4px;
+                        padding: 3px 10px;
+                        font-size: 11px;
+                    }
+                    QPushButton:hover { color: #f3f4f6; background-color: rgba(255, 255, 255, 0.06); }
+                """)
+
+    def refresh_sync_view(self):
+        """Consulta y renderiza en vivo el estado completo de sincronización y árbol."""
+        path = self.project_data.get("path")
+        if not path or not os.path.exists(path):
+            return
+
+        status = get_git_sync_deep_status(path)
+        self.last_sync_status = status
+
+        # 1. Telemetría - Rama y Upstream
+        branch = status.get("branch", "HEAD")
+        upstream = status.get("upstream", "")
+        self.lbl_sync_branch.setText(branch)
+        if upstream:
+            self.lbl_sync_upstream.setText(f"↳ {upstream}")
+        else:
+            self.lbl_sync_upstream.setText("↳ Sin tracking remoto")
+
+        ahead = status.get("ahead", 0)
+        behind = status.get("behind", 0)
+        if not status.get("has_remote"):
+            self.lbl_sync_state_badge.setText("Modo Local")
+            self.lbl_sync_state_badge.setStyleSheet("font-size: 10px; font-weight: 800; color: #9ca3af; background: rgba(156, 163, 175, 0.12); border: 1px solid rgba(156, 163, 175, 0.3); border-radius: 4px; padding: 1px 6px;")
+        elif not status.get("has_upstream"):
+            self.lbl_sync_state_badge.setText("Sin Upstream")
+            self.lbl_sync_state_badge.setStyleSheet("font-size: 10px; font-weight: 800; color: #fbbf24; background: rgba(251, 191, 36, 0.12); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 4px; padding: 1px 6px;")
+        elif status.get("diverged"):
+            self.lbl_sync_state_badge.setText(f"▲ Ahead +{ahead} / ▼ Behind -{behind}")
+            self.lbl_sync_state_badge.setStyleSheet("font-size: 10px; font-weight: 800; color: #f87171; background: rgba(248, 113, 113, 0.15); border: 1px solid rgba(248, 113, 113, 0.35); border-radius: 4px; padding: 1px 6px;")
+        elif behind > 0:
+            self.lbl_sync_state_badge.setText(f"▼ Behind -{behind} (Pull pendiente)")
+            self.lbl_sync_state_badge.setStyleSheet("font-size: 10px; font-weight: 800; color: #c084fc; background: rgba(192, 132, 252, 0.15); border: 1px solid rgba(192, 132, 252, 0.35); border-radius: 4px; padding: 1px 6px;")
+        elif ahead > 0:
+            self.lbl_sync_state_badge.setText(f"▲ Ahead +{ahead} (Push pendiente)")
+            self.lbl_sync_state_badge.setStyleSheet("font-size: 10px; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 4px; padding: 1px 6px;")
+        else:
+            self.lbl_sync_state_badge.setText("● Al Día (Sincronizado)")
+            self.lbl_sync_state_badge.setStyleSheet("font-size: 10px; font-weight: 800; color: #34d399; background: rgba(52, 211, 153, 0.15); border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 4px; padding: 1px 6px;")
+
+        # 2. Telemetría - Árbol Local & Líneas
+        staged_cnt = status.get("total_staged", 0)
+        unstaged_cnt = status.get("total_unstaged", 0)
+        untracked_cnt = status.get("total_untracked", 0)
+        conflicts_cnt = status.get("total_conflicts", 0)
+        tot_files = staged_cnt + unstaged_cnt + untracked_cnt + conflicts_cnt
+
+        if status.get("is_clean"):
+            self.lbl_sync_worktree_badge.setText("✨ Árbol Limpio")
+            self.lbl_sync_worktree_badge.setStyleSheet("font-size: 12.5px; font-weight: 800; color: #34d399;")
+        else:
+            self.lbl_sync_worktree_badge.setText(f"{tot_files} archivo(s) con cambios")
+            self.lbl_sync_worktree_badge.setStyleSheet("font-size: 12.5px; font-weight: 800; color: #fbbf24;")
+
+        adds = status.get("total_lines_added", 0)
+        dels = status.get("total_lines_deleted", 0)
+        self.lbl_sync_lines_badge.setText(f"+{adds} / -{dels} líneas")
+
+        scnt = status.get("stash_count", 0)
+        self.lbl_sync_stash_info.setText(f"📦 {scnt} stash(es) guardados")
+        self.btn_pop_stash.setEnabled(scnt > 0)
+        if scnt == 0:
+            self.btn_pop_stash.setStyleSheet("QPushButton { background-color: rgba(255, 255, 255, 0.03); color: #6b7280; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 4px; padding: 3px 10px; font-size: 11px; }")
+        else:
+            self.btn_pop_stash.setStyleSheet("QPushButton { background-color: rgba(251, 191, 36, 0.15); color: #fde047; border: 1px solid rgba(251, 191, 36, 0.40); border-radius: 4px; padding: 3px 10px; font-size: 11px; font-weight: 700; } QPushButton:hover { background-color: rgba(251, 191, 36, 0.30); color: #ffffff; }")
+
+        # 3. Telemetría - Pulso de Red & Seguridad
+        self.lbl_sync_last_fetch.setText(f"🕒 {status.get('last_fetch_str', 'Sin registro')}")
+        rec = status.get("recommended_action", "Al día")
+        self.lbl_sync_safety_badge.setText(f"[{rec}]")
+
+        # 4. Actualizar Listas de Detalle
+        self.update_filter_button_styles()
+        self.render_sync_local_tree(status)
+        self.render_sync_incoming_radar(status)
+
+        if hasattr(self, "sector1_sub_stack"):
+            self.sector1_sub_stack.updateGeometry()
+
+    def render_sync_local_tree(self, status: dict):
+        """Renderiza los archivos del árbol de trabajo con métricas de líneas y botones de acción rápida."""
+        while self.sync_files_layout.count():
+            item = self.sync_files_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        staged = status.get("staged_files", [])
+        unstaged = status.get("unstaged_files", [])
+        untracked = status.get("untracked_files", [])
+        conflicts = status.get("conflict_files", [])
+
+        items_to_show = []
+
+        if self.current_sync_filter in ("ALL", "CONFLICT"):
+            for cf in conflicts:
+                items_to_show.append(("CONFLICT", cf, 0, 0))
+
+        if self.current_sync_filter in ("ALL", "STAGED"):
+            for sf in staged:
+                items_to_show.append(("STAGED", sf["path"], sf.get("adds", 0), sf.get("dels", 0)))
+
+        if self.current_sync_filter in ("ALL", "UNSTAGED"):
+            for uf in unstaged:
+                items_to_show.append(("UNSTAGED", uf["path"], uf.get("adds", 0), uf.get("dels", 0)))
+
+        if self.current_sync_filter in ("ALL", "UNTRACKED"):
+            for ut in untracked:
+                items_to_show.append(("UNTRACKED", ut, 0, 0))
+
+        if not items_to_show:
+            empty_frame = QFrame()
+            empty_frame.setStyleSheet("""
+                QFrame {
+                    background-color: rgba(255, 255, 255, 0.02);
+                    border: 1px dashed rgba(255, 255, 255, 0.10);
+                    border-radius: 8px;
+                    padding: 24px;
+                }
+            """)
+            ef_lay = QVBoxLayout(empty_frame)
+            ef_lay.setAlignment(Qt.AlignCenter)
+            if status.get("is_clean", True):
+                msg_lbl = QLabel("✨ Árbol de trabajo 100% limpio. No hay modificaciones pendientes.")
+                msg_lbl.setStyleSheet("font-size: 12.5px; font-weight: 700; color: #34d399;")
+            else:
+                msg_lbl = QLabel("ℹ️ No hay archivos en esta categoría.")
+                msg_lbl.setStyleSheet("font-size: 12px; color: #9ca3af;")
+            ef_lay.addWidget(msg_lbl)
+            self.sync_files_layout.addWidget(empty_frame)
+            self.sync_files_layout.addStretch()
+            return
+
+        for kind, fpath, adds, dels in items_to_show:
+            row = QFrame()
+            row.setStyleSheet("""
+                QFrame {
+                    background-color: rgba(255, 255, 255, 0.02);
+                    border: 1px solid rgba(255, 255, 255, 0.06);
+                    border-radius: 6px;
+                    padding: 4px 8px;
+                }
+                QFrame:hover {
+                    background-color: rgba(255, 255, 255, 0.05);
+                    border-color: rgba(255, 255, 255, 0.12);
+                }
+            """)
+            r_lay = QHBoxLayout(row)
+            r_lay.setContentsMargins(8, 4, 8, 4)
+            r_lay.setSpacing(10)
+
+            badge = QLabel()
+            badge.setFixedHeight(20)
+            badge.setAlignment(Qt.AlignCenter)
+            if kind == "STAGED":
+                badge.setText("STAGE")
+                badge.setStyleSheet("font-size: 9.5px; font-weight: 800; color: #34d399; background: rgba(52, 211, 153, 0.15); border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 3px; padding: 1px 6px;")
+            elif kind == "UNSTAGED":
+                badge.setText("MOD")
+                badge.setStyleSheet("font-size: 9.5px; font-weight: 800; color: #fbbf24; background: rgba(251, 191, 36, 0.15); border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 3px; padding: 1px 6px;")
+            elif kind == "UNTRACKED":
+                badge.setText("NEW")
+                badge.setStyleSheet("font-size: 9.5px; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 3px; padding: 1px 6px;")
+            else:
+                badge.setText("CONFLICT")
+                badge.setStyleSheet("font-size: 9.5px; font-weight: 800; color: #f87171; background: rgba(248, 113, 113, 0.15); border: 1px solid rgba(248, 113, 113, 0.35); border-radius: 3px; padding: 1px 6px;")
+            r_lay.addWidget(badge)
+
+            lbl_fp = QLabel(fpath)
+            lbl_fp.setStyleSheet("font-family: monospace; font-size: 11.5px; color: #f3f4f6;")
+            lbl_fp.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            r_lay.addWidget(lbl_fp, 1)
+
+            if adds > 0 or dels > 0:
+                lbl_l = QLabel(f"<span style='color: #34d399; font-weight: 700;'>+{adds}</span>  <span style='color: #f87171; font-weight: 700;'>-{dels}</span>")
+                lbl_l.setStyleSheet("font-family: monospace; font-size: 11px;")
+                r_lay.addWidget(lbl_l)
+
+            if kind == "UNSTAGED":
+                btn_st = QPushButton("+ Stage")
+                btn_st.setCursor(Qt.PointingHandCursor)
+                btn_st.setStyleSheet("QPushButton { background-color: rgba(52, 211, 153, 0.15); color: #6ee7b7; border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 4px; padding: 2px 8px; font-size: 10.5px; font-weight: 700; } QPushButton:hover { background-color: rgba(52, 211, 153, 0.30); color: #fff; }")
+                btn_st.clicked.connect(lambda _, p=fpath: self.execute_stage_file(p))
+                r_lay.addWidget(btn_st)
+
+                btn_dc = QPushButton("↺ Descartar")
+                btn_dc.setCursor(Qt.PointingHandCursor)
+                btn_dc.setStyleSheet("QPushButton { background-color: rgba(248, 113, 113, 0.12); color: #fca5a5; border: 1px solid rgba(248, 113, 113, 0.35); border-radius: 4px; padding: 2px 8px; font-size: 10.5px; font-weight: 600; } QPushButton:hover { background-color: rgba(248, 113, 113, 0.25); color: #fff; }")
+                btn_dc.clicked.connect(lambda _, p=fpath: self.execute_discard_file(p))
+                r_lay.addWidget(btn_dc)
+            elif kind == "STAGED":
+                btn_unst = QPushButton("- Unstage")
+                btn_unst.setCursor(Qt.PointingHandCursor)
+                btn_unst.setStyleSheet("QPushButton { background-color: rgba(251, 191, 36, 0.15); color: #fde047; border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 4px; padding: 2px 8px; font-size: 10.5px; font-weight: 700; } QPushButton:hover { background-color: rgba(251, 191, 36, 0.30); color: #fff; }")
+                btn_unst.clicked.connect(lambda _, p=fpath: self.execute_unstage_file(p))
+                r_lay.addWidget(btn_unst)
+
+                btn_dc = QPushButton("↺ Descartar")
+                btn_dc.setCursor(Qt.PointingHandCursor)
+                btn_dc.setStyleSheet("QPushButton { background-color: rgba(248, 113, 113, 0.12); color: #fca5a5; border: 1px solid rgba(248, 113, 113, 0.35); border-radius: 4px; padding: 2px 8px; font-size: 10.5px; font-weight: 600; } QPushButton:hover { background-color: rgba(248, 113, 113, 0.25); color: #fff; }")
+                btn_dc.clicked.connect(lambda _, p=fpath: self.execute_discard_file(p))
+                r_lay.addWidget(btn_dc)
+            elif kind == "UNTRACKED":
+                btn_st = QPushButton("+ Stage")
+                btn_st.setCursor(Qt.PointingHandCursor)
+                btn_st.setStyleSheet("QPushButton { background-color: rgba(56, 189, 248, 0.15); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 4px; padding: 2px 8px; font-size: 10.5px; font-weight: 700; } QPushButton:hover { background-color: rgba(56, 189, 248, 0.30); color: #fff; }")
+                btn_st.clicked.connect(lambda _, p=fpath: self.execute_stage_file(p))
+                r_lay.addWidget(btn_st)
+
+                btn_del = QPushButton("🗑️ Eliminar")
+                btn_del.setCursor(Qt.PointingHandCursor)
+                btn_del.setStyleSheet("QPushButton { background-color: rgba(248, 113, 113, 0.12); color: #fca5a5; border: 1px solid rgba(248, 113, 113, 0.35); border-radius: 4px; padding: 2px 8px; font-size: 10.5px; font-weight: 600; } QPushButton:hover { background-color: rgba(248, 113, 113, 0.25); color: #fff; }")
+                btn_del.clicked.connect(lambda _, p=fpath: self.execute_discard_file(p))
+                r_lay.addWidget(btn_del)
+
+            self.sync_files_layout.addWidget(row)
+
+        self.sync_files_layout.addStretch()
+
+    def render_sync_incoming_radar(self, status: dict):
+        """Renderiza la telemetría de commits entrantes y salientes (Radar de Sincronización)."""
+        while self.sync_radar_layout.count():
+            item = self.sync_radar_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        behind_commits = status.get("behind_commits", [])
+        ahead_commits = status.get("ahead_commits", [])
+        incoming_stat = status.get("incoming_files_stat", "").strip()
+
+        has_data = False
+
+        # 1. Commits Entrantes (Behind)
+        if behind_commits:
+            has_data = True
+            lbl_bh_h = QLabel(f"📥  COMMITS ENTRANTES DESDE EL REMOTO ({len(behind_commits)} pendientes de pull):")
+            lbl_bh_h.setStyleSheet("font-size: 11.5px; font-weight: 800; color: #c084fc; letter-spacing: 0.5px;")
+            self.sync_radar_layout.addWidget(lbl_bh_h)
+
+            for c in behind_commits:
+                crow = QFrame()
+                crow.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(192, 132, 252, 0.05);
+                        border: 1px solid rgba(192, 132, 252, 0.15);
+                        border-radius: 6px;
+                        padding: 4px 8px;
+                    }
+                """)
+                c_lay = QHBoxLayout(crow)
+                c_lay.setContentsMargins(8, 4, 8, 4)
+                c_lay.setSpacing(10)
+
+                h_badge = QLabel(c.get("hash", ""))
+                h_badge.setStyleSheet("font-family: monospace; font-size: 11px; font-weight: 800; color: #c084fc; background: rgba(192, 132, 252, 0.15); border-radius: 3px; padding: 1px 6px;")
+                c_lay.addWidget(h_badge)
+
+                s_lbl = QLabel(c.get("subject", ""))
+                s_lbl.setStyleSheet("font-size: 12px; font-weight: 700; color: #f3f4f6;")
+                s_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                c_lay.addWidget(s_lbl, 1)
+
+                a_lbl = QLabel(f"{c.get('author', '')} • {c.get('time', '')}")
+                a_lbl.setStyleSheet("font-size: 10.5px; color: #9ca3af;")
+                c_lay.addWidget(a_lbl)
+
+                self.sync_radar_layout.addWidget(crow)
+
+            if incoming_stat:
+                stat_card = QFrame()
+                stat_card.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(0, 0, 0, 0.35);
+                        border: 1px solid rgba(255, 255, 255, 0.08);
+                        border-radius: 6px;
+                        padding: 8px;
+                    }
+                """)
+                sc_lay = QVBoxLayout(stat_card)
+                sc_lay.setContentsMargins(6, 4, 6, 4)
+                sc_lay.setSpacing(4)
+                lbl_st_title = QLabel("Resumen de archivos modificados en el remoto (Pre-pull diff):")
+                lbl_st_title.setStyleSheet("font-size: 10.5px; font-weight: 700; color: #9ca3af;")
+                sc_lay.addWidget(lbl_st_title)
+
+                txt_st = QTextEdit()
+                txt_st.setReadOnly(True)
+                txt_st.setMaximumHeight(110)
+                txt_st.setPlainText(incoming_stat)
+                txt_st.setStyleSheet("QTextEdit { background: transparent; border: none; font-family: monospace; font-size: 11px; color: #a5b4fc; }")
+                sc_lay.addWidget(txt_st)
+                self.sync_radar_layout.addWidget(stat_card)
+
+        # 2. Commits Salientes (Ahead)
+        if ahead_commits:
+            has_data = True
+            lbl_ah_h = QLabel(f"🚀  COMMITS SALIENTES LOCALES ({len(ahead_commits)} listos para push):")
+            lbl_ah_h.setStyleSheet("font-size: 11.5px; font-weight: 800; color: #38bdf8; letter-spacing: 0.5px; margin-top: 6px;")
+            self.sync_radar_layout.addWidget(lbl_ah_h)
+
+            for c in ahead_commits:
+                crow = QFrame()
+                crow.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(56, 189, 248, 0.05);
+                        border: 1px solid rgba(56, 189, 248, 0.15);
+                        border-radius: 6px;
+                        padding: 4px 8px;
+                    }
+                """)
+                c_lay = QHBoxLayout(crow)
+                c_lay.setContentsMargins(8, 4, 8, 4)
+                c_lay.setSpacing(10)
+
+                h_badge = QLabel(c.get("hash", ""))
+                h_badge.setStyleSheet("font-family: monospace; font-size: 11px; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.15); border-radius: 3px; padding: 1px 6px;")
+                c_lay.addWidget(h_badge)
+
+                s_lbl = QLabel(c.get("subject", ""))
+                s_lbl.setStyleSheet("font-size: 12px; font-weight: 700; color: #f3f4f6;")
+                s_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                c_lay.addWidget(s_lbl, 1)
+
+                a_lbl = QLabel(f"{c.get('author', '')} • {c.get('time', '')}")
+                a_lbl.setStyleSheet("font-size: 10.5px; color: #9ca3af;")
+                c_lay.addWidget(a_lbl)
+
+                self.sync_radar_layout.addWidget(crow)
+
+        # 3. Estado en Sincronía
+        if not has_data:
+            synced_frame = QFrame()
+            synced_frame.setStyleSheet("""
+                QFrame {
+                    background-color: rgba(52, 211, 153, 0.03);
+                    border: 1px dashed rgba(52, 211, 153, 0.25);
+                    border-radius: 8px;
+                    padding: 24px;
+                }
+            """)
+            sf_lay = QVBoxLayout(synced_frame)
+            sf_lay.setAlignment(Qt.AlignCenter)
+            lbl_ok = QLabel("✨  Repositorio 100% Sincronizado")
+            lbl_ok.setStyleSheet("font-size: 13px; font-weight: 800; color: #34d399;")
+            sf_lay.addWidget(lbl_ok)
+            up = status.get("upstream") or "origin"
+            lbl_ok_sub = QLabel(f"Tu rama local y la rama remota '{up}' están exactamente en paridad. No hay commits pendientes.")
+            lbl_ok_sub.setStyleSheet("font-size: 11.5px; color: #9ca3af;")
+            sf_lay.addWidget(lbl_ok_sub)
+            self.sync_radar_layout.addWidget(synced_frame)
+
+        self.sync_radar_layout.addStretch()
+
+    def execute_status_inspect(self):
+        """Audita en profundidad el estado del repositorio y emite telemetría detallada en la terminal."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        self.terminal_display.log("GIT-STATUS", "Ejecutando inspección táctica profunda del árbol de trabajo...", tag_color="#38bdf8", prefix="📋")
+        self.refresh_sync_view()
+        status = self.last_sync_status
+        branch = status.get("branch", "HEAD")
+        remote = status.get("remote", "origin")
+        upstream = status.get("upstream", "Sin tracking")
+        ahead = status.get("ahead", 0)
+        behind = status.get("behind", 0)
+        staged = status.get("total_staged", 0)
+        unstaged = status.get("total_unstaged", 0)
+        untracked = status.get("total_untracked", 0)
+        adds = status.get("total_lines_added", 0)
+        dels = status.get("total_lines_deleted", 0)
+        stashes = status.get("stash_count", 0)
+        rec = status.get("recommended_action", "Al día")
+
+        self.terminal_display.log("GIT-STATUS", f"Rama activa: <b>{branch}</b> • Remoto: <b>{remote}</b> (<code>{upstream}</code>)", tag_color="#60a5fa", prefix="🌿")
+        self.terminal_display.log("GIT-STATUS", f"Árbol local: <b>{unstaged}</b> modificado(s), <b>{staged}</b> en staging, <b>{untracked}</b> nuevo(s) • Deltas: <span style='color:#34d399;'>+{adds}</span> / <span style='color:#f87171;'>-{dels}</span> líneas", tag_color="#fbbf24", prefix="📁")
+        self.terminal_display.log("GIT-STATUS", f"Red: <b>+{ahead}</b> Ahead | <b>-{behind}</b> Behind • Stashes: <b>{stashes}</b> guardado(s)", tag_color="#c084fc", prefix="🛰️")
+        self.terminal_display.log_success("GIT-STATUS", f"Diagnóstico de sincronización: <b>{rec}</b>")
+
+    def execute_fetch_action(self):
+        """Inicia la descarga de metadatos remotos (fetch) en segundo plano."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        self.terminal_display.log("GIT-FETCH", "Contactando remotos y descargando metadatos con poda (git fetch --all --prune)...", tag_color="#c084fc", prefix="📡")
+        self.btn_action_fetch.set_subtitle("Conectando con remotos...")
+        self.fetch_thread = GitFetchThread(path, remote="", prune=True)
+        self.fetch_thread.finished_fetch.connect(self._on_fetch_finished)
+        self.fetch_thread.start()
+
+    def _on_fetch_finished(self, ok: bool, msg: str, status: dict):
+        """Callback cuando termina el hilo de fetch."""
+        self.btn_action_fetch.set_subtitle("Consulta commits y ramas del remoto con poda (--prune) sin alterar código")
+        if ok:
+            self.terminal_display.log_success("GIT-FETCH", f"Fetch completado exitosamente.")
+            behind = status.get("behind", 0)
+            if behind > 0:
+                self.terminal_display.log("GIT-FETCH", f"📥 Se detectaron <b>{behind}</b> commit(s) nuevos en el remoto. Pulsa <b>'Sincronizar Cambios (Pull)'</b> para integrarlos.", tag_color="#c084fc", prefix="⚡")
+            else:
+                self.terminal_display.log("GIT-FETCH", "✨ El repositorio local ya cuenta con los últimos commits del remoto.", tag_color="#34d399", prefix="✔")
+        else:
+            self.terminal_display.log_error("GIT-FETCH", f"Fallo al ejecutar git fetch:\n{msg}")
+
+        self.refresh_sync_view()
+        self.refresh_git_graph()
+
+    def execute_pull_action(self):
+        """Ejecuta git pull aplicando la estrategia táctica seleccionada."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+
+        strat = self.cmb_pull_strategy.currentData() or "rebase"
+        autostash = self.chk_pull_autostash.isChecked()
+        strat_lbl = "Rebase + Autostash" if strat == "rebase" else ("Fast-Forward Only" if strat == "ff-only" else "Merge Commit")
+
+        self.terminal_display.log("GIT-PULL", f"Iniciando sincronización mediante <b>{strat_lbl}</b>...", tag_color="#34d399", prefix="📥")
+        self.btn_action_pull.set_subtitle("Descargando e integrando commits...")
+
+        self.pull_thread = GitPullThread(path, strategy=strat, autostash=autostash)
+        self.pull_thread.finished_pull.connect(self._on_pull_finished)
+        self.pull_thread.start()
+
+    def _on_pull_finished(self, ok: bool, msg: str):
+        """Callback cuando finaliza git pull."""
+        self.btn_action_pull.set_subtitle("Descarga e integra commits entrantes con Rebase + Autostash inteligente")
+        if ok:
+            self.terminal_display.log_success("GIT-PULL", f"Git Pull completado con éxito:\n{msg}")
+        else:
+            self.terminal_display.log_error("GIT-PULL", f"Fallo durante la sincronización Git Pull:\n{msg}")
+
+        self.refresh_sync_view()
+        self.refresh_current_project(reset_terminal=False)
+        self.refresh_git_graph()
+
+    def execute_stage_file(self, file_path: str):
+        """Agrega un archivo individual al staging."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        ok, msg = execute_git_stage_path(path, file_path)
+        if ok:
+            self.terminal_display.log_git("STAGE", f"Archivo añadido a staging: <b>{file_path}</b>")
+            self.refresh_sync_view()
+            self.refresh_current_project(reset_terminal=False)
+        else:
+            self.terminal_display.log_error("STAGE", f"Error al añadir '{file_path}': {msg}")
+
+    def execute_unstage_file(self, file_path: str):
+        """Quita un archivo individual del staging."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        ok, msg = execute_git_unstage_path(path, file_path)
+        if ok:
+            self.terminal_display.log_git("UNSTAGE", f"Archivo retirado de staging: <b>{file_path}</b>")
+            self.refresh_sync_view()
+            self.refresh_current_project(reset_terminal=False)
+        else:
+            self.terminal_display.log_error("UNSTAGE", f"Error al retirar '{file_path}': {msg}")
+
+    def execute_discard_file(self, file_path: str):
+        """Descarta cambios locales en un archivo."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        self.terminal_display.log("DISCARD", f"Descartando modificaciones en <b>{file_path}</b>...", tag_color="#f87171", prefix="↺")
+        ok, msg = execute_git_discard_path(path, file_path)
+        if ok:
+            self.terminal_display.log_warn("DISCARD", f"Cambios descartados en <b>{file_path}</b>.")
+            self.refresh_sync_view()
+            self.refresh_current_project(reset_terminal=False)
+        else:
+            self.terminal_display.log_error("DISCARD", f"Error al descartar '{file_path}': {msg}")
+
+    def toggle_stash_drawer(self):
+        """Alterna el cajón para guardar un stash rápido."""
+        vis = not self.drawer_stash_save.isVisible()
+        self.drawer_stash_save.setVisible(vis)
+        if vis:
+            self.txt_stash_msg.setFocus()
+        if hasattr(self, "sector1_sub_stack"):
+            self.sector1_sub_stack.updateGeometry()
+
+    def execute_stash_save_action(self):
+        """Guarda un stash con el mensaje especificado."""
+        path = self.project_data.get("path")
+        msg = self.txt_stash_msg.text().strip()
+        if not path:
+            return
+        self.terminal_display.log("STASH", f"Guardando cambios en stash ('{msg or 'WIP'}')...", tag_color="#fde047", prefix="📦")
+        ok, res = execute_git_stash_save(path, msg)
+        if ok:
+            self.terminal_display.log_success("STASH", f"Cambios guardados en stash exitosamente.")
+            self.txt_stash_msg.clear()
+            self.drawer_stash_save.setVisible(False)
+            self.refresh_sync_view()
+            self.refresh_current_project(reset_terminal=False)
+        else:
+            self.terminal_display.log_error("STASH", f"Error al guardar stash: {res}")
+
+    def execute_stash_pop_action(self):
+        """Restaura el stash más reciente en el árbol de trabajo."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        self.terminal_display.log("STASH", "Restaurando último stash (git stash pop)...", tag_color="#fde047", prefix="⚡")
+        ok, res = execute_git_stash_pop(path)
+        if ok:
+            self.terminal_display.log_success("STASH", f"Stash restaurado en el árbol de trabajo exitosamente.")
+            self.refresh_sync_view()
+            self.refresh_current_project(reset_terminal=False)
+        else:
+            self.terminal_display.log_error("STASH", f"Error al restaurar stash:\n{res}")
+
     # -----------------------------------------------------------------
     # VISTA DE GRAFOS DE RAMAS (ESTILO GITHUB NETWORK GRAPH)
     # -----------------------------------------------------------------
@@ -3701,6 +8435,35 @@ class LumenProjectWorkspaceView(QWidget):
             """)
             self.lbl_t_title.setText("lumen-terminal@abraxas:~$")
             self.lbl_t_status.setText("⚡ VISOR DE SALIDA [READ-ONLY]")
+
+    def dock_terminal_in_docker(self):
+        """Acopla la terminal en vertical a la derecha exclusivamente en el módulo de Docker."""
+        if not hasattr(self, "docker_side_terminal_layout") or not hasattr(self, "bottom_terminal_container"):
+            return
+        self.bottom_terminal_container.setVisible(False)
+        self.docker_side_terminal_container.setVisible(True)
+        self.terminal_frame.setMinimumWidth(320)
+        self.terminal_frame.setMaximumWidth(600)
+        self.terminal_frame.setMinimumHeight(280)
+        self.terminal_frame.setMaximumHeight(16777215)
+        self.terminal_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.docker_side_terminal_layout.addWidget(self.terminal_frame)
+
+    def dock_terminal_at_bottom(self):
+        """Restaura la terminal en su posición estándar inferior horizontal aprovechando todo el espacio libre."""
+        if not hasattr(self, "bottom_terminal_layout") or not hasattr(self, "bottom_terminal_container"):
+            return
+        if hasattr(self, "docker_side_terminal_container"):
+            self.docker_side_terminal_container.setVisible(False)
+        self.bottom_terminal_container.setVisible(True)
+        self.bottom_terminal_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.terminal_stack.setVisible(True)
+        self.terminal_frame.setMinimumWidth(0)
+        self.terminal_frame.setMaximumWidth(16777215)
+        self.terminal_frame.setMinimumHeight(240)
+        self.terminal_frame.setMaximumHeight(16777215)
+        self.terminal_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.bottom_terminal_layout.addWidget(self.terminal_frame)
 
     def create_git_graph_view(self) -> QWidget:
         """Crea la vista de Grafo Horizontal de Ramas estilo VS Code Git Graph / GitHub Network."""
@@ -3784,10 +8547,98 @@ class LumenProjectWorkspaceView(QWidget):
 
         layout.addLayout(top_bar)
 
+        # -------------------------------------------------------------
+        # Barra de Control y Añadidor Dinámico de Ramas (3 ramas por defecto)
+        # -------------------------------------------------------------
+        branches_bar = QHBoxLayout()
+        branches_bar.setContentsMargins(4, 0, 4, 2)
+        branches_bar.setSpacing(8)
+
+        lbl_b_title = QLabel("🌿 RAMAS:")
+        lbl_b_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #9ca3af; letter-spacing: 0.5px;")
+        branches_bar.addWidget(lbl_b_title)
+
+        # Contenedor dinámico de chips de ramas visibles
+        self.branch_chips_widget = QWidget()
+        self.branch_chips_layout = QHBoxLayout(self.branch_chips_widget)
+        self.branch_chips_layout.setContentsMargins(0, 0, 0, 0)
+        self.branch_chips_layout.setSpacing(6)
+        branches_bar.addWidget(self.branch_chips_widget)
+
+        # Botón Añadir Rama (menú desplegable)
+        self.btn_add_branch = QPushButton("➕ Añadir Rama")
+        self.btn_add_branch.setCursor(Qt.PointingHandCursor)
+        self.btn_add_branch.setToolTip("Añadir otra rama al visor horizontal")
+        self.btn_add_branch.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(99, 102, 241, 0.16);
+                color: #c7d2fe;
+                border: 1px dashed rgba(99, 102, 241, 0.45);
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: rgba(99, 102, 241, 0.32);
+                border-color: #818cf8;
+                color: #ffffff;
+            }
+        """)
+        self.btn_add_branch.clicked.connect(self.show_add_branch_menu)
+        branches_bar.addWidget(self.btn_add_branch)
+
+        # Botones rápidos Más / Menos Ramas
+        btn_more = QPushButton("➕ Más")
+        btn_more.setCursor(Qt.PointingHandCursor)
+        btn_more.setToolTip("Añadir la siguiente rama disponible")
+        btn_more.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.04);
+                color: #e2e8f0;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.20);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_more.clicked.connect(lambda: self.git_graph_view.increase_branches() if hasattr(self, "git_graph_view") else None)
+        branches_bar.addWidget(btn_more)
+
+        btn_less = QPushButton("➖ Menos")
+        btn_less.setCursor(Qt.PointingHandCursor)
+        btn_less.setToolTip("Quitar la última rama añadida (mínimo 1)")
+        btn_less.setStyleSheet(btn_more.styleSheet())
+        btn_less.clicked.connect(lambda: self.git_graph_view.decrease_branches() if hasattr(self, "git_graph_view") else None)
+        branches_bar.addWidget(btn_less)
+
+        branches_bar.addStretch()
+
+        self.lbl_branch_count = QLabel("3 ramas")
+        self.lbl_branch_count.setStyleSheet("""
+            background-color: rgba(56, 189, 248, 0.12);
+            color: #38bdf8;
+            border: 1px solid rgba(56, 189, 248, 0.30);
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-size: 10.5px;
+            font-weight: 700;
+        """)
+        branches_bar.addWidget(self.lbl_branch_count)
+
+        layout.addLayout(branches_bar)
+
         # Lienzo horizontal interactivo de ramas
         self.git_graph_view = LumenHorizontalGitGraphView()
         self.git_graph_view.setMinimumHeight(260)
         self.git_graph_view.commit_selected.connect(self.on_graph_commit_selected)
+        self.git_graph_view.branches_updated.connect(self.update_branch_chips)
         layout.addWidget(self.git_graph_view, 1)
 
         # Pie de inspección rápida
@@ -3804,6 +8655,112 @@ class LumenProjectWorkspaceView(QWidget):
         layout.addWidget(self.lbl_graph_inspector)
 
         return widget
+
+    def update_branch_chips(self, selected_branches: list, available_branches: list):
+        """Actualiza los chips interactivos de ramas activas en la barra de control del grafo."""
+        if not hasattr(self, "branch_chips_layout"):
+            return
+
+        # Limpiar chips anteriores
+        while self.branch_chips_layout.count():
+            item = self.branch_chips_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        from gui.views.lumen.git_graph_canvas import LUMEN_BRANCH_PALETTE
+
+        for idx, b_name in enumerate(selected_branches):
+            color = LUMEN_BRANCH_PALETTE[idx % len(LUMEN_BRANCH_PALETTE)].name()
+            chip = QFrame()
+            chip.setStyleSheet(f"""
+                QFrame {{
+                    background-color: rgba(255, 255, 255, 0.07);
+                    border: 1px solid {color}99;
+                    border-radius: 4px;
+                    padding: 2px 8px;
+                }}
+            """)
+            c_lay = QHBoxLayout(chip)
+            c_lay.setContentsMargins(5, 2, 5, 2)
+            c_lay.setSpacing(6)
+
+            lbl_dot = QLabel("●")
+            lbl_dot.setStyleSheet(f"color: {color}; font-size: 11px; font-weight: bold;")
+            c_lay.addWidget(lbl_dot)
+
+            lbl_name = QLabel(b_name)
+            lbl_name.setStyleSheet("color: #ffffff; font-size: 11px; font-weight: 700;")
+            c_lay.addWidget(lbl_name)
+
+            if len(selected_branches) > 1:
+                btn_del = QPushButton("✕")
+                btn_del.setCursor(Qt.PointingHandCursor)
+                btn_del.setToolTip(f"Ocultar rama '{b_name}'")
+                btn_del.setStyleSheet("""
+                    QPushButton {
+                        background: transparent;
+                        border: none;
+                        color: #9ca3af;
+                        font-size: 10px;
+                        font-weight: bold;
+                        padding: 0px 2px;
+                    }
+                    QPushButton:hover {
+                        color: #ef4444;
+                    }
+                """)
+                btn_del.clicked.connect(lambda _, b=b_name: self.git_graph_view.remove_branch(b))
+                c_lay.addWidget(btn_del)
+
+            self.branch_chips_layout.addWidget(chip)
+
+        count_text = f"{len(selected_branches)} {'rama' if len(selected_branches) == 1 else 'ramas'}"
+        if hasattr(self, "lbl_branch_count"):
+            self.lbl_branch_count.setText(count_text)
+
+        remaining = [b for b in available_branches if b not in selected_branches]
+        if hasattr(self, "btn_add_branch"):
+            self.btn_add_branch.setEnabled(bool(remaining))
+            self.btn_add_branch.setToolTip(f"{len(remaining)} ramas disponibles para añadir" if remaining else "Todas las ramas están visibles")
+
+    def show_add_branch_menu(self):
+        """Muestra menú contextual con las ramas disponibles para añadir al grafo."""
+        if not hasattr(self, "git_graph_view") or not self.git_graph_view:
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #15161c;
+                border: 1px solid #22242e;
+                border-radius: 6px;
+                padding: 4px;
+                color: #f3f4f6;
+            }
+            QMenu::item {
+                padding: 6px 14px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: rgba(99, 102, 241, 0.25);
+                color: #ffffff;
+            }
+        """)
+
+        available = getattr(self.git_graph_view, "available_branches", [])
+        selected = getattr(self.git_graph_view, "selected_branches", [])
+        remaining = [b for b in available if b not in selected]
+
+        if not remaining:
+            act = menu.addAction("Todas las ramas están visibles")
+            act.setEnabled(False)
+        else:
+            for b in remaining:
+                act = menu.addAction(f"🌿 {b}")
+                act.triggered.connect(lambda _, b_name=b: self.git_graph_view.add_branch(b_name))
+
+        menu.exec(self.btn_add_branch.mapToGlobal(QPoint(0, self.btn_add_branch.height() + 2)))
 
     def refresh_git_graph(self, simulated_merge: Optional[Dict[str, Any]] = None):
         """Carga en vivo el grafo horizontal de ramas según el proyecto activo."""
@@ -3896,9 +8853,14 @@ class LumenProjectWorkspaceView(QWidget):
 
     def go_back_to_sectors_overview(self):
         """Regresa directamente al menú principal de los 3 sectores en un solo clic."""
+        self.dock_terminal_at_bottom()
         self.sectors_stack.setCurrentIndex(0)
         if hasattr(self, "sector1_sub_stack"):
             self.sector1_sub_stack.setCurrentIndex(0)
+        if hasattr(self, "sector2_sub_stack"):
+            self.sector2_sub_stack.setCurrentIndex(0)
+        if hasattr(self, "sector3_sub_stack"):
+            self.sector3_sub_stack.setCurrentIndex(0)
         if hasattr(self, "btn_toggle_graph_terminal"):
             self.btn_toggle_graph_terminal.setVisible(False)
         if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 1:
@@ -3908,6 +8870,8 @@ class LumenProjectWorkspaceView(QWidget):
             self.drawer_switch_dest.setVisible(False)
         if hasattr(self, "merge_inner_stack"):
             self.merge_inner_stack.setCurrentIndex(0)
+        if hasattr(self, "drawer_stash_save"):
+            self.drawer_stash_save.setVisible(False)
         self.terminal_display.log("NAV", "Regresando al menú principal de Sectores.", tag_color="#9ca3af", prefix="◀")
 
     # -----------------------------------------------------------------
@@ -4065,8 +9029,8 @@ class LumenProjectWorkspaceView(QWidget):
         self.btn_alpha.set_title(f"3. ALPHA (Major) ➔ {next_alpha}")
         self.btn_alpha.set_subtitle(f"Reestructuración masiva o cambio mayor • Siguiente versión: {next_alpha}")
 
-        self.btn_omit.set_title(f"4. Omitir bump ➔ {cur_ver}")
-        self.btn_omit.set_subtitle(f"Mantener versión actual {cur_ver} sin generar nuevo tag")
+        self.btn_omit.set_title(f"4. Continuar versión ➔ {cur_ver}")
+        self.btn_omit.set_subtitle(f"Continuar en la versión actual {cur_ver} (sin generar nuevo tag)")
 
         self.cur_semver_options = {
             "GAMMA": next_gamma,
@@ -4252,7 +9216,7 @@ class LumenProjectWorkspaceView(QWidget):
         next_alpha = bump_semver(cur_ver, "ALPHA")
 
         self.cmb_manual_semver.clear()
-        self.cmb_manual_semver.addItem(f"Omitir bump de versión (mantener {cur_ver}, sin tag)", ("OMIT", ""))
+        self.cmb_manual_semver.addItem(f"Continuar en versión actual ({cur_ver}, sin tag)", ("OMIT", cur_ver))
         self.cmb_manual_semver.addItem(f"GAMMA (Patch / Fix) ➔ {next_gamma}", ("GAMMA", next_gamma))
         self.cmb_manual_semver.addItem(f"BETA (Minor / Feat) ➔ {next_beta}", ("BETA", next_beta))
         self.cmb_manual_semver.addItem(f"ALPHA (Major / Breaking) ➔ {next_alpha}", ("ALPHA", next_alpha))
@@ -4285,7 +9249,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         next_id = get_next_commit_seq(path)
         header = f"MAN:{next_id}"
-        if target_ver and impact_type != "OMIT":
+        if target_ver:
             header = f"MAN:{next_id} [{target_ver}]"
 
         self.terminal_display.log("COMMIT", f"Registrando commit manual (<code>{header} | {raw_title}</code>)...", tag_color="#34d399", prefix="💾")
@@ -4367,11 +9331,112 @@ class LumenProjectWorkspaceView(QWidget):
         """Sincroniza y carga en tiempo real la información del proyecto seleccionado en el HUD y terminal coloreada."""
         self.project_data = folder_data
         sync = get_full_project_sync(folder_data)
+        is_git = sync.get("git_info", {}).get("is_git", False)
+        self.is_project_git = is_git
+
+        # 0. El panel superior SIEMPRE se muestra (contiene Proyecto, Entorno Python, Docker y Hora)
+        self.hud_card.setVisible(True)
+
+        # Ocultar exclusivamente los elementos dependientes de Git en el panel superior
+        if hasattr(self, "row1_git_widget"):
+            self.row1_git_widget.setVisible(is_git)
+        if hasattr(self, "hud_row3_widget"):
+            self.hud_row3_widget.setVisible(is_git)
+        if hasattr(self, "hud_history_widget"):
+            self.hud_history_widget.setVisible(is_git)
+
+        if hasattr(self, "lbl_status_pill"):
+            if is_git:
+                self.lbl_status_pill.setText("🟢 SISTEMA CONECTADO")
+                self.lbl_status_pill.setStyleSheet("""
+                    background-color: rgba(16, 185, 129, 0.12);
+                    color: #34d399;
+                    border: 1px solid rgba(16, 185, 129, 0.35);
+                    border-radius: 12px;
+                    padding: 4px 12px;
+                    font-size: 11px;
+                    font-weight: 800;
+                """)
+            else:
+                self.lbl_status_pill.setText("⚡ ENTORNOS ACTIVOS (SIN GIT)")
+                self.lbl_status_pill.setStyleSheet("""
+                    background-color: rgba(99, 102, 241, 0.15);
+                    color: #a5b4fc;
+                    border: 1px solid rgba(99, 102, 241, 0.35);
+                    border-radius: 12px;
+                    padding: 4px 12px;
+                    font-size: 11px;
+                    font-weight: 800;
+                """)
+
+        # Actualizar estado reactivo de los sectores 1 y 3
+        if hasattr(self, "card_s1") and hasattr(self.card_s1, "set_git_state"):
+            self.card_s1.set_git_state(is_git)
+        if hasattr(self, "card_s3") and hasattr(self.card_s3, "set_git_state"):
+            self.card_s3.set_git_state(is_git)
 
         # 1. Proyecto, Versión, Rama, Remoto
         self.lbl_proj_title.setText(f"{sync['name']} ({sync['version']})")
         self.lbl_proj_branch.setText(sync['git_info']['branch'])
         self.lbl_proj_remote.setText(sync['git_info']['remote'])
+
+        if hasattr(self, "btn_repo_vis"):
+            vis = sync.get('git_info', {}).get('visibility_info', {})
+            if vis.get('has_remote') and vis.get('is_github'):
+                is_priv = vis.get('is_private', True)
+                btn_txt = "🔒 Privado (Cambiar)" if is_priv else "🌐 Público (Cambiar)"
+                btn_color = "#f87171" if is_priv else "#34d399"
+                self.btn_repo_vis.setText(btn_txt)
+                self.btn_repo_vis.setToolTip("Click para cambiar la visibilidad entre Público y Privado en GitHub")
+                self.btn_repo_vis.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: rgba(255, 255, 255, 0.04);
+                        color: {btn_color};
+                        border: 1px solid {btn_color}66;
+                        border-radius: 5px;
+                        padding: 2px 8px;
+                        font-size: 11px;
+                        font-weight: 700;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {btn_color}22;
+                        border-color: {btn_color};
+                    }}
+                """)
+                self.btn_repo_vis.setVisible(True)
+            elif vis.get('has_remote'):
+                self.btn_repo_vis.setText("🌐 Remoto")
+                self.btn_repo_vis.setStyleSheet("""
+                    QPushButton {{
+                        background-color: rgba(255, 255, 255, 0.04);
+                        color: #c7d2fe;
+                        border: 1px solid rgba(199, 210, 254, 0.4);
+                        border-radius: 5px;
+                        padding: 2px 8px;
+                        font-size: 11px;
+                        font-weight: 700;
+                    }}
+                """)
+                self.btn_repo_vis.setVisible(True)
+            else:
+                self.btn_repo_vis.setText("☁️ Publicar en GitHub")
+                self.btn_repo_vis.setToolTip("Publicar este repositorio local en GitHub")
+                self.btn_repo_vis.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(56, 189, 248, 0.15);
+                        color: #38bdf8;
+                        border: 1px solid rgba(56, 189, 248, 0.4);
+                        border-radius: 5px;
+                        padding: 2px 8px;
+                        font-size: 11px;
+                        font-weight: 700;
+                    }
+                    QPushButton:hover {
+                        background-color: rgba(56, 189, 248, 0.3);
+                        color: #ffffff;
+                    }
+                """)
+                self.btn_repo_vis.setVisible(True)
 
         # 2. Entorno, Docker, Hora
         env_text = sync['env_info']['text']
@@ -4439,28 +9504,52 @@ class LumenProjectWorkspaceView(QWidget):
         self.lbl_t_title.setText(f"lumen-terminal@{p_name_clean}:~$")
 
         if reset_terminal:
-            # SIEMPRE resetear al panel general de los 4 sectores al abrir un proyecto desde cero
+            # SIEMPRE resetear al panel general de los sectores al abrir un proyecto desde cero
             if hasattr(self, "sectors_stack"):
                 self.sectors_stack.setCurrentIndex(0)
             if hasattr(self, "sector1_sub_stack"):
                 self.sector1_sub_stack.setCurrentIndex(0)
+            if hasattr(self, "sector2_sub_stack"):
+                self.sector2_sub_stack.setCurrentIndex(0)
 
             self.terminal_display.clear()
-            self.terminal_display.log(
-                "KERNEL", 
-                f"Conectado a <b style='color:#fbbf24;'>{sync['name']}</b> <span style='color:#a5b4fc;'>[{sync['version']}]</span> en rama <b style='color:#38bdf8;'>{sync['git_info']['branch']}</b>",
-                tag_color="#818cf8",
-                prefix="❖"
-            )
-            self.terminal_display.log(
-                "READY",
-                "Esperando acciones...",
-                tag_color="#34d399",
-                prefix="❯"
-            )
+            if is_git:
+                self.terminal_display.log(
+                    "KERNEL", 
+                    f"Conectado a <b style='color:#fbbf24;'>{sync['name']}</b> <span style='color:#a5b4fc;'>[{sync['version']}]</span> en rama <b style='color:#38bdf8;'>{sync['git_info']['branch']}</b>",
+                    tag_color="#818cf8",
+                    prefix="❖"
+                )
+                self.terminal_display.log(
+                    "READY",
+                    "Esperando acciones...",
+                    tag_color="#34d399",
+                    prefix="❯"
+                )
+            else:
+                self.terminal_display.log(
+                    "KERNEL", 
+                    f"Conectado a <b style='color:#fbbf24;'>{sync['name']}</b> <span style='color:#a5b4fc;'>[{sync['version']}]</span> • <span style='color:#f87171;'>Sin Repositorio Git</span>",
+                    tag_color="#f87171",
+                    prefix="⚠"
+                )
+                self.terminal_display.log_warn(
+                    "GIT",
+                    "Este proyecto no posee un repositorio Git inicializado. Los sectores 1 y 3 están restringidos. Pulsa <b>'Iniciar Proyecto Git'</b> en el Sector 1 para activarlo."
+                )
+
+        # 6. Sincronización y refresco automático del visor de grafo y terminal
+        self.refresh_git_graph()
+
+        if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 1:
+            self.lbl_t_title.setText(f"lumen-git-network@{p_name_clean}:~$")
+            self.lbl_t_status.setText("🌐 GRAFO DE RAMAS [GITHUB NETWORK]")
 
     def refresh_current_project(self, reset_terminal: bool = False):
         """Re-sincroniza el proyecto actual con el disco."""
         if self.project_data:
             self.set_project(self.project_data, reset_terminal=reset_terminal)
+            if hasattr(self, "sector1_sub_stack") and hasattr(self, "page_sync"):
+                if self.sector1_sub_stack.currentWidget() == self.page_sync:
+                    self.refresh_sync_view()
             self.terminal_display.log_success("SYNC", "HUD y estado del repositorio actualizados.")

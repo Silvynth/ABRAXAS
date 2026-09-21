@@ -14,8 +14,29 @@ from PySide6.QtCore import Qt, Signal, QThread
 from core.projects import get_projects_dir
 from core.github import (
     check_gh_cli_authenticated, fetch_repos_gh_cli, 
-    fetch_repos_api, clone_repository, pull_repository
+    fetch_repos_api, fetch_single_repo_api, parse_git_url_repo_data,
+    clone_repository, pull_repository
 )
+
+class GithubDetectWorker(QThread):
+    """Hilo para verificar autenticación y obtener repositorios vía gh CLI en segundo plano sin congelar la GUI."""
+    finished = Signal(bool, str, list, str) # is_auth, auth_msg, repos_data, error_msg
+
+    def run(self):
+        try:
+            is_auth, msg = check_gh_cli_authenticated()
+            if is_auth:
+                try:
+                    repos = fetch_repos_gh_cli()
+                    self.finished.emit(True, msg, repos, "")
+                    return
+                except Exception as e:
+                    self.finished.emit(True, msg, [], str(e))
+                    return
+            self.finished.emit(False, msg, [], "")
+        except Exception as e:
+            self.finished.emit(False, "", [], str(e))
+
 
 class GitActionWorker(QThread):
     """Hilo para clonar o hacer pull de repositorios en segundo plano sin congelar la GUI."""
@@ -142,6 +163,7 @@ class SyncProjectsView(QWidget):
         self.repos_data = []
         self.card_widgets = []
         self.worker = None
+        self.detect_worker = None
 
         self.init_ui()
         self.detect_and_load_github()
@@ -178,7 +200,7 @@ class SyncProjectsView(QWidget):
         # Fila de Entrada Manual (Usuario de GitHub o Token)
         r_manual = QHBoxLayout()
         self.txt_github_user = QLineEdit()
-        self.txt_github_user.setPlaceholderText("Usuario de GitHub o Token Personal (PAT) para repositorios privados...")
+        self.txt_github_user.setPlaceholderText("Usuario/Org, enlace git clone (https://... / git@...), 'owner/repo' o Token PAT...")
         self.txt_github_user.returnPressed.connect(self.load_from_input)
         
         btn_fetch = QPushButton("🔍 Explorar")
@@ -244,23 +266,30 @@ class SyncProjectsView(QWidget):
         root_layout.addWidget(self.scroll_area, 1)
 
     def detect_and_load_github(self):
-        """Intenta cargar primero vía GitHub CLI 'gh' si está autenticado; de lo contrario pide usuario/token."""
+        """Carga en segundo plano vía GitHub CLI 'gh' sin congelar la interfaz."""
         self.lbl_status.setVisible(False)
-        is_auth, msg = check_gh_cli_authenticated()
-        
-        if is_auth:
-            self.lbl_auth_status.setText(f"✅ Conectado a GitHub CLI ({msg})")
-            self.lbl_auth_status.setStyleSheet("font-weight: 600; font-size: 12px; color: #10b981;")
-            try:
-                self.repos_data = fetch_repos_gh_cli()
-                self.render_repos_list()
-                return
-            except Exception as e:
-                self.lbl_status.setText(f"⚠️ {e}")
-                self.lbl_status.setVisible(True)
+        self.lbl_auth_status.setText("🔍 Conectando con GitHub CLI...")
+        self.lbl_auth_status.setStyleSheet("font-weight: 600; font-size: 12px; color: #c084fc;")
 
-        self.lbl_auth_status.setText("ℹ Ingresa tu usuario o Token de GitHub para explorar tus repositorios:")
-        self.lbl_auth_status.setStyleSheet("font-weight: 600; font-size: 12px; color: #9ca3af;")
+        if self.detect_worker and self.detect_worker.isRunning():
+            return
+
+        self.detect_worker = GithubDetectWorker(self)
+        self.detect_worker.finished.connect(self._on_detect_finished)
+        self.detect_worker.start()
+
+    def _on_detect_finished(self, is_auth: bool, auth_msg: str, repos_data: list, err_msg: str):
+        if is_auth:
+            self.lbl_auth_status.setText(f"✅ Conectado a GitHub CLI ({auth_msg})")
+            self.lbl_auth_status.setStyleSheet("font-weight: 600; font-size: 12px; color: #10b981;")
+            if err_msg:
+                self.lbl_status.setText(f"⚠️ {err_msg}")
+                self.lbl_status.setVisible(True)
+            self.repos_data = repos_data
+            self.render_repos_list()
+        else:
+            self.lbl_auth_status.setText("ℹ Ingresa tu usuario o Token de GitHub para explorar tus repositorios:")
+            self.lbl_auth_status.setStyleSheet("font-weight: 600; font-size: 12px; color: #9ca3af;")
 
     def load_from_input(self):
         query = self.txt_github_user.text().strip()
@@ -268,13 +297,43 @@ class SyncProjectsView(QWidget):
             self.detect_and_load_github()
             return
 
-        self.lbl_status.setText("⏳ Consultando repositorios en GitHub...")
+        if query.startswith("git clone "):
+            query = query[10:].strip()
+
+        self.lbl_status.setText("⏳ Consultando repositorio(s)...")
         self.lbl_status.setStyleSheet("font-size: 12px; font-weight: 600; color: #a855f7;")
         self.lbl_status.setVisible(True)
 
         try:
-            if query.startswith("ghp_") or query.startswith("github_pat_"):
+            # 1. ¿Es una URL directa de Git? (ej. https://github.com/pallets/flask.git o git@...)
+            if query.startswith("http://") or query.startswith("https://") or query.startswith("git@"):
+                repo_data = None
+                if "github.com" in query:
+                    import re
+                    m = re.search(r"github\.com[/:]([^/]+)/([^/\.]+)", query)
+                    if m:
+                        owner_repo = f"{m.group(1)}/{m.group(2)}"
+                        try:
+                            repo_data = fetch_single_repo_api(owner_repo)
+                        except Exception:
+                            pass
+                if not repo_data:
+                    repo_data = parse_git_url_repo_data(query)
+                self.repos_data = [repo_data]
+
+            # 2. ¿Es formato 'owner/repo'? (ej. pallets/flask)
+            elif "/" in query and not query.startswith("ghp_") and not query.startswith("github_pat_"):
+                try:
+                    repo_data = fetch_single_repo_api(query)
+                    self.repos_data = [repo_data]
+                except Exception:
+                    self.repos_data = fetch_repos_api(username=query.split("/")[0])
+
+            # 3. Token Personal (PAT)
+            elif query.startswith("ghp_") or query.startswith("github_pat_"):
                 self.repos_data = fetch_repos_api(token=query)
+
+            # 4. Usuario u Organización
             else:
                 self.repos_data = fetch_repos_api(username=query)
 

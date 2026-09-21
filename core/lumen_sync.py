@@ -8,7 +8,7 @@ import re
 import json
 import subprocess
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Union
 
 try:
     import tomllib
@@ -18,38 +18,18 @@ except ImportError:
     except ImportError:
         tomllib = None
 
+from core.github import get_repo_visibility
+
 
 def get_project_version(project_path: str) -> str:
-    """Detecta la versión del proyecto a través de VERSION, git commit, pyproject, package.json o config."""
+    """Detecta la versión del proyecto a través de git tags, commits, archivos VERSION o manifests."""
     if not project_path or not os.path.isdir(project_path):
         return "v0.1.0"
 
-    # 1. Archivo VERSION explícito
-    v_file = os.path.join(project_path, "VERSION")
-    if os.path.exists(v_file):
-        try:
-            with open(v_file, "r", encoding="utf-8") as f:
-                v = f.read().strip()
-                if v:
-                    return f"v{v.lstrip('v')}"
-        except Exception:
-            pass
-
-    # 2. Tag en mensaje del último commit de Git [vX.Y.Z]
-    if os.path.exists(os.path.join(project_path, ".git")):
-        try:
-            msg = subprocess.check_output(
-                ["git", "log", "-1", "--pretty=%B"],
-                cwd=project_path,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=2
-            ).strip()
-            match = re.search(r"\[v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?)\]", msg)
-            if match:
-                return f"v{match.group(1)}"
-        except Exception:
-            pass
+    from core.git_workflow import get_project_semver
+    v = get_project_semver(project_path)
+    if v and v != "v0.1.0":
+        return v
 
     # 3. pyproject.toml
     pyproj = os.path.join(project_path, "pyproject.toml")
@@ -60,7 +40,7 @@ def get_project_version(project_path: str) -> str:
                 v = d.get("project", {}).get("version") or d.get("tool", {}).get("poetry", {}).get("version")
                 if v:
                     return f"v{v.lstrip('v')}"
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     # 4. package.json
@@ -72,7 +52,7 @@ def get_project_version(project_path: str) -> str:
                 v = d.get("version")
                 if v:
                     return f"v{v.lstrip('v')}"
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             pass
 
     # 5. config.toml
@@ -84,7 +64,7 @@ def get_project_version(project_path: str) -> str:
                 v = d.get("general", {}).get("version") or d.get("version")
                 if v:
                     return f"v{v.lstrip('v')}"
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     # 6. Cargo.toml (Rust)
@@ -97,7 +77,7 @@ def get_project_version(project_path: str) -> str:
                         v = line.split("=")[1].strip().strip('"\'')
                         if v:
                             return f"v{v.lstrip('v')}"
-        except Exception:
+        except OSError:
             pass
 
     return "v0.1.0"
@@ -137,41 +117,28 @@ def get_project_git_info(project_path: str) -> Dict[str, Any]:
             )
             if res_head.returncode == 0 and res_head.stdout.strip():
                 branch = f"HEAD ({res_head.stdout.strip()})"
-    except Exception:
+    except (subprocess.TimeoutExpired, OSError):
         pass
 
-    # Remoto
-    try:
-        res = subprocess.run(
-            ["git", "config", "--get", "remote.origin.url"],
-            cwd=project_path,
-            capture_output=True,
-            text=True,
-            timeout=3
-        )
-        if res.returncode == 0 and res.stdout.strip():
-            url = res.stdout.strip()
-            if "github.com" in url:
-                parts = url.split("github.com")[-1].strip(":/. ")
-                if parts.endswith(".git"):
-                    parts = parts[:-4]
-                remote = f"origin ({parts})"
-            elif "gitlab.com" in url:
-                parts = url.split("gitlab.com")[-1].strip(":/. ")
-                if parts.endswith(".git"):
-                    parts = parts[:-4]
-                remote = f"gitlab ({parts})"
-            else:
-                remote = url.split("/")[-1].replace(".git", "")
-        else:
-            remote = "origin/main"
-    except Exception:
-        pass
+    # Remoto y Visibilidad en GitHub (Público / Privado)
+    vis_data = get_repo_visibility(project_path)
+    if vis_data.get("has_remote"):
+        repo_display = vis_data.get("repo_name")
+        if not repo_display:
+            try:
+                res = subprocess.run(["git", "config", "--get", "remote.origin.url"], cwd=project_path, capture_output=True, text=True, timeout=2)
+                repo_display = res.stdout.strip().split("/")[-1].replace(".git", "") if res.returncode == 0 else "origin"
+            except Exception:
+                repo_display = "origin"
+        remote = f"{repo_display}  [{vis_data.get('badge', 'Remoto')}]"
+    else:
+        remote = "Solo Local  [🔒 Privado en máquina]"
 
     return {
         "is_git": True,
         "branch": branch,
-        "remote": remote
+        "remote": remote,
+        "visibility_info": vis_data
     }
 
 
@@ -229,7 +196,7 @@ def get_project_docker_info(project_path: str) -> Dict[str, Any]:
             else:
                 return {"count": 0, "text": "0 activos"}
         return {"count": 0, "text": "0 activos"}
-    except Exception:
+    except (subprocess.TimeoutExpired, OSError):
         return {"count": 0, "text": "Inactivo"}
 
 
@@ -288,7 +255,7 @@ def get_project_git_hud(project_path: str) -> Dict[str, Any]:
             "untracked_str": unt_str,
             "deleted_str": str(deleted)
         }
-    except Exception:
+    except (subprocess.TimeoutExpired, OSError):
         return {
             "mod": 0,
             "untracked": 0,
@@ -341,14 +308,21 @@ def get_project_recent_commits(project_path: str, limit: int = 4) -> List[Dict[s
                     "color": palette[idx % len(palette)]
                 })
         return commits
-    except Exception:
+    except (subprocess.TimeoutExpired, OSError):
         return []
 
 
-def get_full_project_sync(folder_data: dict) -> Dict[str, Any]:
+def get_full_project_sync(folder_data: Union[Dict[str, Any], str]) -> Dict[str, Any]:
     """Genera el diccionario de sincronización completo y en tiempo real para un proyecto."""
-    p_path = folder_data.get("path", "")
-    p_name = folder_data.get("name", "Proyecto")
+    if isinstance(folder_data, str):
+        p_path = folder_data
+        p_name = os.path.basename(folder_data) or "Proyecto"
+    elif isinstance(folder_data, dict):
+        p_path = folder_data.get("path", "")
+        p_name = folder_data.get("name", os.path.basename(p_path) if p_path else "Proyecto")
+    else:
+        p_path = ""
+        p_name = "Proyecto"
 
     version = get_project_version(p_path)
     git_info = get_project_git_info(p_path)

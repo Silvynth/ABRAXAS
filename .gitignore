@@ -4,13 +4,40 @@
 
 # Configuración y Secretos Locales del Usuario
 config.toml
+*.local.toml
+config.local.toml
 secrets.toml
+*secret*.toml
 keys.toml
+*key*.toml
+secrets/
+.env
+.env.*
 *.env
 *.state
 .test/
 .sandbox/
 docs/
+
+# Certificados, Tokens y Claves Criptográficas
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+id_rsa*
+id_ed25519*
+*.token
+credentials.json
+service_account*.json
+
+# Bases de Datos Locales y Volcados
+*.sqlite
+*.sqlite3
+*.db
+*.sql
+*.dump
 
 # Cachés y Archivos de Sesión
 cache/
@@ -52,15 +79,24 @@ dist/
 build/
 *.egg-info/
 
-# Editores y Entornos de Desarrollo (IDEs)
+# Editores y Entornos de Desarrollo (IDEs y Asistentes)
 .vscode/
 .idea/
+.gemini/
+.antigravity/
+.claude/
 *.swp
 *.swo
 *.bak
 *~
+*.orig
+*.rej
 
 # Archivos Temporales y Empaquetados
 .version
 *.tar.gz
 *.zip
+
+# --- Preset aplicado: PYTHON ---
+env/
+ENV/

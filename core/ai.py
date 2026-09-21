@@ -8,6 +8,7 @@ import json
 import urllib.request
 import urllib.error
 from core.engine import AbraxasConfig
+from core.paths import SKILLS_DIR
 
 
 def get_configured_model(model_type: str = "chat", config_path: str = None) -> str:
@@ -53,7 +54,7 @@ def resolve_model_name(target_model: str, endpoint: str) -> str:
             elif "hestia" in t_low:
                 for m in available:
                     if "llama3.1:8b" in m or "llama" in m: return m
-    except Exception:
+    except (urllib.error.URLError, json.JSONDecodeError, OSError):
         pass
     return target_model
 
@@ -138,7 +139,6 @@ def generate_with_chat_model(prompt: str, system_prompt: str = "", config_path: 
     return generate_with_model(prompt, model_type="chat", system_prompt=system_prompt, config_path=config_path)
 
 
-SKILLS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "skills")
 
 
 def get_model_skill(model_type: str = "chat", config_path: str = None) -> str:
@@ -162,7 +162,7 @@ def get_model_skill(model_type: str = "chat", config_path: str = None) -> str:
         try:
             with open(fpath, "r", encoding="utf-8") as f:
                 return f.read().strip()
-        except Exception:
+        except OSError:
             pass
 
     return ""
