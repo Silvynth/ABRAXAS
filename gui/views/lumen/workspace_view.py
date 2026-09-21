@@ -1344,30 +1344,20 @@ class LumenProjectWorkspaceView(QWidget):
 
         b_layout.addWidget(self.terminal_stack)
 
-        self.terminal_frame.setMinimumWidth(320)
-        self.terminal_frame.setMaximumWidth(600)
-        self.terminal_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.terminal_frame.setMinimumHeight(130)
+        self.terminal_frame.setMaximumHeight(220)
+        self.terminal_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        # Contenedor para terminal en posición inferior estándar (para toda la app)
+        self.bottom_terminal_container = QWidget()
+        self.bottom_terminal_layout = QVBoxLayout(self.bottom_terminal_container)
+        self.bottom_terminal_layout.setContentsMargins(0, 4, 0, 0)
+        self.bottom_terminal_layout.setSpacing(0)
+        self.bottom_terminal_layout.addWidget(self.terminal_frame)
+        content_layout.addWidget(self.bottom_terminal_container)
 
         scroll_area.setWidget(scroll_content)
-
-        # Splitter Horizontal: Columna Izquierda (Área de Trabajo) | Columna Derecha (Terminal)
-        self.body_splitter = QSplitter(Qt.Horizontal)
-        self.body_splitter.setStyleSheet("""
-            QSplitter::handle {
-                background-color: rgba(255, 255, 255, 0.07);
-                width: 4px;
-                border-radius: 2px;
-            }
-            QSplitter::handle:hover {
-                background-color: #6366f1;
-            }
-        """)
-        self.body_splitter.addWidget(scroll_area)
-        self.body_splitter.addWidget(self.terminal_frame)
-        self.body_splitter.setStretchFactor(0, 7)
-        self.body_splitter.setStretchFactor(1, 3)
-
-        root_layout.addWidget(self.body_splitter, 1)
+        root_layout.addWidget(scroll_area, 1)
 
     # -----------------------------------------------------------------
     # CREACIÓN DE VISTAS DE SECTORES (DISEÑO PRECISO & COMPACTO)
@@ -2947,6 +2937,7 @@ class LumenProjectWorkspaceView(QWidget):
 
     def open_sector2_editor_view(self):
         """Abre la sub-página del lanzador de editores y refresca los editores detectados."""
+        self.dock_terminal_at_bottom()
         self.sectors_stack.setCurrentIndex(2)
         if hasattr(self, "sector2_sub_stack"):
             self.sector2_sub_stack.setCurrentIndex(0)
@@ -3102,6 +3093,7 @@ class LumenProjectWorkspaceView(QWidget):
 
     def open_sector2_venv_view(self):
         """Abre la sub-página de gestión de entornos virtuales y refresca la telemetría."""
+        self.dock_terminal_at_bottom()
         self.sectors_stack.setCurrentIndex(2)
         if hasattr(self, "sector2_sub_stack"):
             self.sector2_sub_stack.setCurrentIndex(1)
@@ -3271,8 +3263,14 @@ class LumenProjectWorkspaceView(QWidget):
         page = QWidget()
         page.setMinimumHeight(440)
         page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(0)
+
+        # Contenedor Izquierdo: Controles, Telemetría y Contenedores
+        docker_left_widget = QWidget()
+        layout = QVBoxLayout(docker_left_widget)
+        layout.setContentsMargins(0, 0, 6, 0)
         layout.setSpacing(10)
 
         # Barra de navegación
@@ -3503,6 +3501,33 @@ class LumenProjectWorkspaceView(QWidget):
         scroll_docker.setWidget(self.docker_containers_widget)
 
         layout.addWidget(scroll_docker, 1)
+
+        # Contenedor Derecho: Panel Lateral Exclusivo para Terminal en Docker
+        self.docker_side_terminal_container = QWidget()
+        self.docker_side_terminal_layout = QVBoxLayout(self.docker_side_terminal_container)
+        self.docker_side_terminal_layout.setContentsMargins(0, 0, 0, 0)
+        self.docker_side_terminal_layout.setSpacing(0)
+        self.docker_side_terminal_container.setMinimumWidth(340)
+        self.docker_side_terminal_container.setVisible(False)
+
+        # Splitter Horizontal Interno de Docker
+        self.docker_splitter = QSplitter(Qt.Horizontal)
+        self.docker_splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: rgba(255, 255, 255, 0.08);
+                width: 4px;
+                border-radius: 2px;
+            }
+            QSplitter::handle:hover {
+                background-color: #38bdf8;
+            }
+        """)
+        self.docker_splitter.addWidget(docker_left_widget)
+        self.docker_splitter.addWidget(self.docker_side_terminal_container)
+        self.docker_splitter.setStretchFactor(0, 6)
+        self.docker_splitter.setStretchFactor(1, 4)
+
+        page_layout.addWidget(self.docker_splitter, 1)
         return page
 
     # =================================================================
@@ -3680,6 +3705,7 @@ class LumenProjectWorkspaceView(QWidget):
     # =================================================================
     def open_sector2_docker_view(self):
         """Abre la sub-página de control de Docker y refresca contenedores."""
+        self.dock_terminal_in_docker()
         self.sectors_stack.setCurrentIndex(2)
         if hasattr(self, "sector2_sub_stack"):
             self.sector2_sub_stack.setCurrentIndex(2)
@@ -3692,6 +3718,7 @@ class LumenProjectWorkspaceView(QWidget):
 
     def open_sector2_ports_view(self):
         """Abre la sub-página de auditoría de puertos TCP."""
+        self.dock_terminal_at_bottom()
         self.sectors_stack.setCurrentIndex(2)
         if hasattr(self, "sector2_sub_stack"):
             self.sector2_sub_stack.setCurrentIndex(3)
@@ -4259,6 +4286,7 @@ class LumenProjectWorkspaceView(QWidget):
 
     def open_sector_view(self, sector_idx: int, sector_title: str):
         """Abre la ventana limpia dedicada del sector seleccionado."""
+        self.dock_terminal_at_bottom()
         if not getattr(self, "is_project_git", True):
             if sector_idx == 1:
                 self.terminal_display.log_warn("SECTOR-1", "El <b>Sector 1 (Protocolo Git)</b> no está disponible. Inicia el repositorio Git primero.")
@@ -7079,6 +7107,39 @@ class LumenProjectWorkspaceView(QWidget):
                 }
             """)
 
+    def dock_terminal_in_docker(self):
+        """Acopla la terminal en vertical a la derecha exclusivamente en el módulo de Docker."""
+        if not hasattr(self, "docker_side_terminal_layout") or not hasattr(self, "bottom_terminal_container"):
+            return
+        self.bottom_terminal_container.setVisible(False)
+        self.docker_side_terminal_container.setVisible(True)
+        self.terminal_frame.setMinimumWidth(320)
+        self.terminal_frame.setMaximumWidth(600)
+        self.terminal_frame.setMinimumHeight(280)
+        self.terminal_frame.setMaximumHeight(16777215)
+        self.terminal_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        if hasattr(self, "btn_collapse_terminal"):
+            self.btn_collapse_terminal.setText("▶")
+            self.btn_collapse_terminal.setToolTip("Ocultar panel lateral de terminal")
+        self.docker_side_terminal_layout.addWidget(self.terminal_frame)
+
+    def dock_terminal_at_bottom(self):
+        """Restaura la terminal en su posición estándar inferior horizontal para el resto de la aplicación."""
+        if not hasattr(self, "bottom_terminal_layout") or not hasattr(self, "bottom_terminal_container"):
+            return
+        if hasattr(self, "docker_side_terminal_container"):
+            self.docker_side_terminal_container.setVisible(False)
+        self.bottom_terminal_container.setVisible(True)
+        self.terminal_frame.setMinimumWidth(0)
+        self.terminal_frame.setMaximumWidth(16777215)
+        self.terminal_frame.setMinimumHeight(130)
+        self.terminal_frame.setMaximumHeight(220)
+        self.terminal_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        if hasattr(self, "btn_collapse_terminal"):
+            self.btn_collapse_terminal.setText("▼")
+            self.btn_collapse_terminal.setToolTip("Minimizar o expandir terminal")
+        self.bottom_terminal_layout.addWidget(self.terminal_frame)
+
     def create_git_graph_view(self) -> QWidget:
         """Crea la vista de Grafo Horizontal de Ramas estilo VS Code Git Graph / GitHub Network."""
         widget = QWidget()
@@ -7467,6 +7528,7 @@ class LumenProjectWorkspaceView(QWidget):
 
     def go_back_to_sectors_overview(self):
         """Regresa directamente al menú principal de los 3 sectores en un solo clic."""
+        self.dock_terminal_at_bottom()
         self.sectors_stack.setCurrentIndex(0)
         if hasattr(self, "sector1_sub_stack"):
             self.sector1_sub_stack.setCurrentIndex(0)
