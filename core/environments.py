@@ -318,3 +318,242 @@ def delete_python_venv(venv_path: str) -> Tuple[bool, str]:
         return True, f"Entorno virtual '{os.path.basename(venv_path)}' eliminado correctamente."
     except Exception as e:
         return False, f"Error al eliminar el entorno virtual: {str(e)}"
+
+
+# =====================================================================
+# GESTIÓN DE DOCKER & AUDITORÍA DE PUERTOS
+# =====================================================================
+
+def inspect_docker_status(project_path: str = None) -> Dict[str, Any]:
+    """
+    Inspecciona si el binario de docker está instalado, si el demonio está activo
+    y si el proyecto actual contiene definiciones de docker / docker-compose.
+    """
+    docker_bin = shutil.which("docker")
+    if not docker_bin:
+        return {
+            "installed": False,
+            "daemon_running": False,
+            "has_compose": False,
+            "compose_files": [],
+            "message": "Docker CLI no está instalado en el sistema."
+        }
+
+    # Verificar si el demonio responde
+    daemon_running = False
+    try:
+        proc = subprocess.run([docker_bin, "info"], capture_output=True, text=True, timeout=4)
+        daemon_running = (proc.returncode == 0)
+    except Exception:
+        daemon_running = False
+
+    # Verificar si el proyecto tiene Dockerfile o compose
+    has_compose = False
+    compose_files = []
+    has_dockerfile = False
+    if project_path and os.path.exists(project_path):
+        for cf in ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]:
+            if os.path.isfile(os.path.join(project_path, cf)):
+                has_compose = True
+                compose_files.append(cf)
+        if os.path.isfile(os.path.join(project_path, "Dockerfile")):
+            has_dockerfile = True
+
+    return {
+        "installed": True,
+        "daemon_running": daemon_running,
+        "has_compose": has_compose,
+        "compose_files": compose_files,
+        "has_dockerfile": has_dockerfile,
+        "message": "Demonio activo y disponible" if daemon_running else "El servicio Docker (daemon) está inactivo o requiere permisos."
+    }
+
+def list_docker_containers() -> List[Dict[str, str]]:
+    """
+    Lista todos los contenedores Docker locales (activos e inactivos).
+    Retorna id, name, image, state, status, ports.
+    """
+    docker_bin = shutil.which("docker")
+    if not docker_bin:
+        return []
+
+    try:
+        fmt = "{{.ID}}||{{.Names}}||{{.Image}}||{{.State}}||{{.Status}}||{{.Ports}}"
+        proc = subprocess.run([docker_bin, "ps", "-a", "--format", fmt], capture_output=True, text=True, timeout=6)
+        if proc.returncode != 0:
+            return []
+
+        containers = []
+        for line in proc.stdout.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("||")
+            if len(parts) >= 6:
+                cid, name, img, state, status, ports = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
+                containers.append({
+                    "id": cid,
+                    "name": name,
+                    "image": img,
+                    "state": state.lower(),
+                    "status": status,
+                    "ports": ports if ports else "Sin puertos expuestos"
+                })
+        return containers
+    except Exception:
+        return []
+
+def execute_docker_container_action(action: str, container_name_or_id: str) -> Tuple[bool, str]:
+    """
+    Ejecuta una acción sobre un contenedor: start, stop, restart, delete.
+    """
+    docker_bin = shutil.which("docker")
+    if not docker_bin:
+        return False, "Docker no está instalado."
+
+    action = action.lower()
+    if action not in ["start", "stop", "restart", "rm"]:
+        return False, f"Acción '{action}' no permitida."
+
+    try:
+        cmd = [docker_bin, action]
+        if action == "rm":
+            cmd.append("-f")
+        cmd.append(container_name_or_id)
+        
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+        if proc.returncode == 0:
+            act_names = {
+                "start": "iniciado",
+                "stop": "detenido",
+                "restart": "reiniciado",
+                "rm": "eliminado"
+            }
+            return True, f"Contenedor '{container_name_or_id}' {act_names.get(action, 'procesado')} correctamente."
+        return False, proc.stderr.strip() or f"Error al ejecutar {action} en '{container_name_or_id}'"
+    except Exception as e:
+        return False, f"Error al ejecutar acción Docker: {str(e)}"
+
+def get_docker_container_logs(container_name_or_id: str, tail_lines: int = 80) -> Tuple[bool, str]:
+    """Obtiene las últimas líneas de logs de un contenedor."""
+    docker_bin = shutil.which("docker")
+    if not docker_bin:
+        return False, "Docker no está instalado."
+    try:
+        proc = subprocess.run([docker_bin, "logs", "--tail", str(tail_lines), container_name_or_id], capture_output=True, text=True, timeout=10)
+        logs = proc.stdout if proc.stdout else proc.stderr
+        return True, logs.strip() if logs else "No hay logs disponibles."
+    except Exception as e:
+        return False, str(e)
+
+def execute_docker_prune() -> Tuple[bool, str]:
+    """Ejecuta docker system prune -f para liberar recursos no utilizados."""
+    docker_bin = shutil.which("docker")
+    if not docker_bin:
+        return False, "Docker no está instalado."
+    try:
+        proc = subprocess.run([docker_bin, "system", "prune", "-f"], capture_output=True, text=True, timeout=30)
+        if proc.returncode == 0:
+            return True, proc.stdout.strip() or "Limpieza de sistema Docker completada."
+        return False, proc.stderr.strip() or "Error al ejecutar docker system prune."
+    except Exception as e:
+        return False, f"Excepción al ejecutar prune: {str(e)}"
+
+def inspect_network_ports() -> List[Dict[str, Any]]:
+    """
+    Escanea puertos TCP en estado LISTEN en el sistema.
+    Utiliza lsof como método primario y ss como fallback.
+    Retorna lista con port, pid, command, address, protocol.
+    """
+    results = []
+    seen_ports = set()
+
+    # Intento 1: lsof -i -P -n -sTCP:LISTEN -F pcn
+    if shutil.which("lsof"):
+        try:
+            proc = subprocess.run(["lsof", "-i", "-P", "-n", "-sTCP:LISTEN", "-F", "pcn"], capture_output=True, text=True, timeout=5)
+            if proc.returncode == 0 and proc.stdout:
+                current_pid = ""
+                current_cmd = ""
+                for line in proc.stdout.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("p"):
+                        current_pid = line[1:]
+                    elif line.startswith("c"):
+                        current_cmd = line[1:]
+                    elif line.startswith("n"):
+                        node = line[1:]
+                        if ":" in node:
+                            addr, port_str = node.rsplit(":", 1)
+                            key = f"{port_str}:{current_pid}"
+                            if key not in seen_ports and port_str.isdigit():
+                                seen_ports.add(key)
+                                results.append({
+                                    "port": int(port_str),
+                                    "pid": current_pid,
+                                    "command": current_cmd,
+                                    "address": addr if addr else "*",
+                                    "protocol": "TCP"
+                                })
+                if results:
+                    results.sort(key=lambda x: x["port"])
+                    return results
+        except Exception:
+            pass
+
+    # Intento 2: ss -tulpn
+    if shutil.which("ss"):
+        try:
+            proc = subprocess.run(["ss", "-tlpn", "-H"], capture_output=True, text=True, timeout=5)
+            if proc.returncode == 0 and proc.stdout:
+                import re
+                for line in proc.stdout.splitlines():
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        local_addr = parts[3]
+                        if ":" in local_addr:
+                            addr, port_str = local_addr.rsplit(":", 1)
+                            proc_info = parts[5] if len(parts) >= 6 else ""
+                            pid_match = re.search(r"pid=(\d+)", proc_info)
+                            cmd_match = re.search(r'"([^"]+)"', proc_info)
+                            pid = pid_match.group(1) if pid_match else "?"
+                            cmd = cmd_match.group(1) if cmd_match else "?"
+                            key = f"{port_str}:{pid}"
+                            if key not in seen_ports and port_str.isdigit():
+                                seen_ports.add(key)
+                                results.append({
+                                    "port": int(port_str),
+                                    "pid": pid,
+                                    "command": cmd,
+                                    "address": addr,
+                                    "protocol": "TCP"
+                                })
+                results.sort(key=lambda x: x["port"])
+                return results
+        except Exception:
+            pass
+
+    return results
+
+def kill_process_by_pid(pid: str) -> Tuple[bool, str]:
+    """Aniquila de manera segura un proceso por su PID (SIGKILL / 9)."""
+    if not pid or pid == "?":
+        return False, "PID no válido para terminar."
+    try:
+        target_pid = int(pid)
+        # Evitar matar init o root de forma accidental
+        if target_pid <= 1:
+            return False, "Prohibido aniquilar proceso de sistema fundamental (PID <= 1)."
+
+        import signal
+        os.kill(target_pid, signal.SIGKILL)
+        return True, f"Proceso con PID {pid} aniquilado exitosamente."
+    except ProcessLookupError:
+        return False, f"El proceso con PID {pid} ya no existe."
+    except PermissionError:
+        return False, f"Permiso denegado al intentar matar PID {pid}. Requiere privilegios elevados."
+    except Exception as e:
+        return False, f"Error al aniquilar PID {pid}: {str(e)}"
+

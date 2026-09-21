@@ -38,9 +38,12 @@ from core.environments import (
     detect_installed_editors, get_preferred_editor, set_preferred_editor,
     launch_project_in_editor, inspect_python_venv, create_python_venv,
     install_project_dependencies, install_custom_packages,
-    freeze_dependencies_to_file, list_installed_packages, delete_python_venv
+    freeze_dependencies_to_file, list_installed_packages, delete_python_venv,
+    inspect_docker_status, list_docker_containers, execute_docker_container_action,
+    get_docker_container_logs, execute_docker_prune, inspect_network_ports, kill_process_by_pid
 )
 from gui.views.lumen.git_graph_canvas import LumenHorizontalGitGraphView
+
 
 
 class GitPushThread(QThread):
@@ -287,6 +290,27 @@ class PythonVenvWorkerThread(QThread):
                 self.finished_task.emit(ok, "DELETE-VENV", msg)
         except Exception as e:
             self.finished_task.emit(False, self.task_type.upper(), f"Excepción en hilo de venv: {str(e)}")
+
+
+class DockerWorkerThread(QThread):
+    """Hilo no bloqueante para ejecutar operaciones de Docker (start, stop, prune, etc.)."""
+    finished_task = Signal(bool, str, str)
+
+    def __init__(self, task_type: str, target: str = ""):
+        super().__init__()
+        self.task_type = task_type
+        self.target = target
+
+    def run(self):
+        try:
+            if self.task_type == "prune":
+                ok, msg = execute_docker_prune()
+                self.finished_task.emit(ok, "DOCKER-PRUNE", msg)
+            elif self.task_type in ["start", "stop", "restart", "rm"]:
+                ok, msg = execute_docker_container_action(self.task_type, self.target)
+                self.finished_task.emit(ok, f"DOCKER-{self.task_type.upper()}", msg)
+        except Exception as e:
+            self.finished_task.emit(False, self.task_type.upper(), f"Excepción en hilo de Docker: {str(e)}")
 
 
 class LumenRepoVisibilityDialog(QDialog):
@@ -2491,6 +2515,14 @@ class LumenProjectWorkspaceView(QWidget):
         self.page_s2_venv = self.create_sector2_venv_view()
         self.sector2_sub_stack.addWidget(self.page_s2_venv)
 
+        # Página 2: Control de Docker y Compose
+        self.page_s2_docker = self.create_sector2_docker_view()
+        self.sector2_sub_stack.addWidget(self.page_s2_docker)
+
+        # Página 3: Auditoría y Monitor de Puertos TCP
+        self.page_s2_ports = self.create_sector2_ports_view()
+        self.sector2_sub_stack.addWidget(self.page_s2_ports)
+
         layout.addWidget(self.sector2_sub_stack)
         return card
 
@@ -2567,6 +2599,48 @@ class LumenProjectWorkspaceView(QWidget):
         """)
         btn_tab_venv.clicked.connect(self.open_sector2_venv_view)
         nav.addWidget(btn_tab_venv)
+
+        btn_tab_docker = QPushButton("🐳  Docker")
+        btn_tab_docker.setCursor(Qt.PointingHandCursor)
+        btn_tab_docker.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #38bdf8;
+                border-color: #38bdf8;
+            }
+        """)
+        btn_tab_docker.clicked.connect(self.open_sector2_docker_view)
+        nav.addWidget(btn_tab_docker)
+
+        btn_tab_ports = QPushButton("🔌  Puertos TCP")
+        btn_tab_ports.setCursor(Qt.PointingHandCursor)
+        btn_tab_ports.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(251, 191, 36, 0.15);
+                color: #fbbf24;
+                border-color: #fbbf24;
+            }
+        """)
+        btn_tab_ports.clicked.connect(self.open_sector2_ports_view)
+        nav.addWidget(btn_tab_ports)
 
         nav.addStretch()
 
@@ -2694,6 +2768,48 @@ class LumenProjectWorkspaceView(QWidget):
             }
         """)
         nav.addWidget(btn_tab_venv)
+
+        btn_tab_docker = QPushButton("🐳  Docker")
+        btn_tab_docker.setCursor(Qt.PointingHandCursor)
+        btn_tab_docker.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #38bdf8;
+                border-color: #38bdf8;
+            }
+        """)
+        btn_tab_docker.clicked.connect(self.open_sector2_docker_view)
+        nav.addWidget(btn_tab_docker)
+
+        btn_tab_ports = QPushButton("🔌  Puertos TCP")
+        btn_tab_ports.setCursor(Qt.PointingHandCursor)
+        btn_tab_ports.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(251, 191, 36, 0.15);
+                color: #fbbf24;
+                border-color: #fbbf24;
+            }
+        """)
+        btn_tab_ports.clicked.connect(self.open_sector2_ports_view)
+        nav.addWidget(btn_tab_ports)
 
         nav.addStretch()
 
@@ -3073,6 +3189,687 @@ class LumenProjectWorkspaceView(QWidget):
             self.terminal_display.log_error(task_name, message)
         self.refresh_sector2_venv_view()
 
+    # =================================================================
+    # SUB-PÁGINA 2: CONTROL DE DOCKER Y COMPOSE
+    # =================================================================
+    def create_sector2_docker_view(self) -> QWidget:
+        """Sub-página interactiva para gestionar Docker, contenedores y Compose."""
+        page = QWidget()
+        page.setMinimumHeight(350)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # Barra de navegación
+        nav = QHBoxLayout()
+        nav.setSpacing(10)
+
+        btn_back = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #bae6fd;
+                border: 1px solid rgba(56, 189, 248, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.30);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        btn_back.clicked.connect(self.go_back_to_sectors_overview)
+        nav.addWidget(btn_back)
+
+        lbl_title = QLabel("🚀  SECTOR 2 : ENTORNOS & RUN")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #10b981; letter-spacing: 0.5px;")
+        nav.addWidget(lbl_title)
+
+        # Pestañas de Navegación Sector 2
+        btn_tab_editor = QPushButton("💻  Selector de Editor")
+        btn_tab_editor.setCursor(Qt.PointingHandCursor)
+        btn_tab_editor.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(16, 185, 129, 0.15);
+                color: #6ee7b7;
+                border-color: #10b981;
+            }
+        """)
+        btn_tab_editor.clicked.connect(self.open_sector2_editor_view)
+        nav.addWidget(btn_tab_editor)
+
+        btn_tab_venv = QPushButton("🐍  Entorno Python")
+        btn_tab_venv.setCursor(Qt.PointingHandCursor)
+        btn_tab_venv.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border-color: #34d399;
+            }
+        """)
+        btn_tab_venv.clicked.connect(self.open_sector2_venv_view)
+        nav.addWidget(btn_tab_venv)
+
+        btn_tab_docker = QPushButton("🐳  Docker")
+        btn_tab_docker.setCursor(Qt.PointingHandCursor)
+        btn_tab_docker.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(56, 189, 248, 0.25);
+                color: #ffffff;
+                border: 1px solid #38bdf8;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 800;
+                font-size: 11px;
+            }
+        """)
+        nav.addWidget(btn_tab_docker)
+
+        btn_tab_ports = QPushButton("🔌  Puertos TCP")
+        btn_tab_ports.setCursor(Qt.PointingHandCursor)
+        btn_tab_ports.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(251, 191, 36, 0.15);
+                color: #fbbf24;
+                border-color: #fbbf24;
+            }
+        """)
+        btn_tab_ports.clicked.connect(self.open_sector2_ports_view)
+        nav.addWidget(btn_tab_ports)
+
+        nav.addStretch()
+
+        btn_refresh = QPushButton("🔄  Refrescar")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
+        btn_refresh.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                padding: 5px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
+            }
+        """)
+        btn_refresh.clicked.connect(self.refresh_sector2_docker_view)
+        nav.addWidget(btn_refresh)
+        layout.addLayout(nav)
+
+        # Panel de Telemetría Docker
+        self.frame_docker_telemetry = QFrame()
+        self.frame_docker_telemetry.setStyleSheet("""
+            QFrame {
+                background-color: rgba(0, 0, 0, 0.25);
+                border: 1px solid rgba(56, 189, 248, 0.25);
+                border-radius: 8px;
+                padding: 8px 12px;
+            }
+        """)
+        d_lay = QVBoxLayout(self.frame_docker_telemetry)
+        d_lay.setContentsMargins(10, 8, 10, 8)
+        d_lay.setSpacing(4)
+
+        self.lbl_s2_docker_status = QLabel("Docker: Inspeccionando estado...")
+        self.lbl_s2_docker_status.setStyleSheet("font-size: 12px; font-weight: 800; color: #f3f4f6;")
+        d_lay.addWidget(self.lbl_s2_docker_status)
+
+        self.lbl_s2_docker_details = QLabel("Demonio: Desconocido | Archivos Compose: Ninguno")
+        self.lbl_s2_docker_details.setStyleSheet("font-size: 11px; color: #9ca3af;")
+        d_lay.addWidget(self.lbl_s2_docker_details)
+
+        layout.addWidget(self.frame_docker_telemetry)
+
+        # Barra de Acciones Globales Docker (Prune, etc.)
+        docker_acts = QHBoxLayout()
+        docker_acts.setSpacing(8)
+
+        btn_prune = QPushButton("🧹 Purgar Recursos Inactivos (Prune)")
+        btn_prune.setCursor(Qt.PointingHandCursor)
+        btn_prune.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(239, 68, 68, 0.12);
+                color: #fca5a5;
+                border: 1px solid rgba(239, 68, 68, 0.30);
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(239, 68, 68, 0.25);
+                color: #ffffff;
+            }
+        """)
+        btn_prune.clicked.connect(self.execute_docker_system_prune)
+        docker_acts.addWidget(btn_prune)
+        docker_acts.addStretch()
+        layout.addLayout(docker_acts)
+
+        # ScrollArea con Contenedores
+        scroll_docker = QScrollArea()
+        scroll_docker.setWidgetResizable(True)
+        scroll_docker.setMinimumHeight(160)
+        scroll_docker.setMaximumHeight(260)
+        scroll_docker.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        scroll_docker.setStyleSheet("""
+            QScrollArea {
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+                background-color: rgba(0, 0, 0, 0.20);
+            }
+        """)
+
+        self.docker_containers_widget = QWidget()
+        self.docker_containers_layout = QVBoxLayout(self.docker_containers_widget)
+        self.docker_containers_layout.setContentsMargins(6, 6, 6, 6)
+        self.docker_containers_layout.setSpacing(6)
+        scroll_docker.setWidget(self.docker_containers_widget)
+
+        layout.addWidget(scroll_docker, 1)
+        return page
+
+    # =================================================================
+    # SUB-PÁGINA 3: AUDITORÍA Y MONITOR DE PUERTOS TCP
+    # =================================================================
+    def create_sector2_ports_view(self) -> QWidget:
+        """Sub-página interactiva para auditar puertos TCP en escucha y matar procesos."""
+        page = QWidget()
+        page.setMinimumHeight(350)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # Barra de navegación
+        nav = QHBoxLayout()
+        nav.setSpacing(10)
+
+        btn_back = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(251, 191, 36, 0.15);
+                color: #fde68a;
+                border: 1px solid rgba(251, 191, 36, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(251, 191, 36, 0.30);
+                border-color: #fbbf24;
+                color: #ffffff;
+            }
+        """)
+        btn_back.clicked.connect(self.go_back_to_sectors_overview)
+        nav.addWidget(btn_back)
+
+        lbl_title = QLabel("🚀  SECTOR 2 : ENTORNOS & RUN")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #10b981; letter-spacing: 0.5px;")
+        nav.addWidget(lbl_title)
+
+        # Pestañas de Navegación Sector 2
+        btn_tab_editor = QPushButton("💻  Selector de Editor")
+        btn_tab_editor.setCursor(Qt.PointingHandCursor)
+        btn_tab_editor.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(16, 185, 129, 0.15);
+                color: #6ee7b7;
+                border-color: #10b981;
+            }
+        """)
+        btn_tab_editor.clicked.connect(self.open_sector2_editor_view)
+        nav.addWidget(btn_tab_editor)
+
+        btn_tab_venv = QPushButton("🐍  Entorno Python")
+        btn_tab_venv.setCursor(Qt.PointingHandCursor)
+        btn_tab_venv.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border-color: #34d399;
+            }
+        """)
+        btn_tab_venv.clicked.connect(self.open_sector2_venv_view)
+        nav.addWidget(btn_tab_venv)
+
+        btn_tab_docker = QPushButton("🐳  Docker")
+        btn_tab_docker.setCursor(Qt.PointingHandCursor)
+        btn_tab_docker.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(56, 189, 248, 0.15);
+                color: #38bdf8;
+                border-color: #38bdf8;
+            }
+        """)
+        btn_tab_docker.clicked.connect(self.open_sector2_docker_view)
+        nav.addWidget(btn_tab_docker)
+
+        btn_tab_ports = QPushButton("🔌  Puertos TCP")
+        btn_tab_ports.setCursor(Qt.PointingHandCursor)
+        btn_tab_ports.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(251, 191, 36, 0.25);
+                color: #ffffff;
+                border: 1px solid #fbbf24;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 800;
+                font-size: 11px;
+            }
+        """)
+        nav.addWidget(btn_tab_ports)
+
+        nav.addStretch()
+
+        btn_refresh = QPushButton("🔄  Escanear Puertos")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
+        btn_refresh.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                padding: 5px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
+            }
+        """)
+        btn_refresh.clicked.connect(self.refresh_sector2_ports_view)
+        nav.addWidget(btn_refresh)
+        layout.addLayout(nav)
+
+        # Panel de Resumen de Puertos
+        self.lbl_s2_ports_summary = QLabel("Puertos TCP Activos: Escaneando...")
+        self.lbl_s2_ports_summary.setStyleSheet("font-size: 11.5px; font-weight: 700; color: #fbbf24; padding: 4px 0;")
+        layout.addWidget(self.lbl_s2_ports_summary)
+
+        # ScrollArea con Lista de Puertos
+        scroll_ports = QScrollArea()
+        scroll_ports.setWidgetResizable(True)
+        scroll_ports.setMinimumHeight(180)
+        scroll_ports.setMaximumHeight(260)
+        scroll_ports.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        scroll_ports.setStyleSheet("""
+            QScrollArea {
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+                background-color: rgba(0, 0, 0, 0.20);
+            }
+        """)
+
+        self.ports_list_widget = QWidget()
+        self.ports_list_layout = QVBoxLayout(self.ports_list_widget)
+        self.ports_list_layout.setContentsMargins(6, 6, 6, 6)
+        self.ports_list_layout.setSpacing(6)
+        scroll_ports.setWidget(self.ports_list_widget)
+
+        layout.addWidget(scroll_ports, 1)
+        return page
+
+    # =================================================================
+    # MÉTODOS DE ACCIÓN Y APERTURA DE DOCKER Y PUERTOS
+    # =================================================================
+    def open_sector2_docker_view(self):
+        """Abre la sub-página de control de Docker y refresca contenedores."""
+        self.sectors_stack.setCurrentIndex(2)
+        if hasattr(self, "sector2_sub_stack"):
+            self.sector2_sub_stack.setCurrentIndex(2)
+            self.sector2_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.refresh_sector2_docker_view()
+        p_name = self.project_data.get("name", "Proyecto")
+        self.terminal_display.log("DOCKER", f"Panel de Control Docker & Compose abierto para <b>{p_name}</b>.", tag_color="#38bdf8", prefix="🐳")
+
+    def open_sector2_ports_view(self):
+        """Abre la sub-página de auditoría de puertos TCP."""
+        self.sectors_stack.setCurrentIndex(2)
+        if hasattr(self, "sector2_sub_stack"):
+            self.sector2_sub_stack.setCurrentIndex(3)
+            self.sector2_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.refresh_sector2_ports_view()
+        self.terminal_display.log("PORTS", "Monitor de Puertos TCP y Procesos en Escucha abierto.", tag_color="#fbbf24", prefix="🔌")
+
+    def refresh_sector2_docker_view(self):
+        """Inspecciona el demonio de Docker y lista contenedores."""
+        path = self.project_data.get("path", "")
+        status = inspect_docker_status(path)
+
+        if not status["installed"]:
+            self.lbl_s2_docker_status.setText("Docker: ❌ No instalado en el sistema")
+            self.lbl_s2_docker_details.setText("Instala 'docker' o 'docker.io' para habilitar la orquestación de contenedores.")
+        elif not status["daemon_running"]:
+            self.lbl_s2_docker_status.setText("Docker: 🔴 Demonio Inactivo / Sin Permisos")
+            self.lbl_s2_docker_details.setText("Ejecuta 'sudo systemctl start docker' o añade tu usuario al grupo docker.")
+        else:
+            self.lbl_s2_docker_status.setText("Docker: 🟢 Demonio Activo y Operativo")
+            comp_str = ", ".join(status["compose_files"]) if status["compose_files"] else "Ninguno detectado"
+            self.lbl_s2_docker_details.setText(f"Stack Compose: <b>{comp_str}</b>  |  Dockerfile: {'Sí' if status['has_dockerfile'] else 'No'}")
+
+        # Limpiar lista previa
+        while self.docker_containers_layout.count():
+            item = self.docker_containers_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not status["daemon_running"]:
+            lbl_warn = QLabel("⚠️ El servicio Docker no está respondiendo. Inicia el demonio para visualizar contenedores.")
+            lbl_warn.setStyleSheet("color: #f87171; font-weight: 700; padding: 12px;")
+            self.docker_containers_layout.addWidget(lbl_warn)
+            return
+
+        containers = list_docker_containers()
+        if not containers:
+            lbl_empty = QLabel("ℹ️ No hay contenedores registrados en el sistema (activos o detenidos).")
+            lbl_empty.setStyleSheet("color: #9ca3af; font-style: italic; padding: 12px;")
+            self.docker_containers_layout.addWidget(lbl_empty)
+            return
+
+        for c in containers:
+            card = QFrame()
+            card.setStyleSheet("""
+                QFrame {
+                    background-color: rgba(255, 255, 255, 0.03);
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 8px;
+                }
+                QFrame:hover {
+                    background-color: rgba(255, 255, 255, 0.06);
+                    border-color: rgba(56, 189, 248, 0.35);
+                }
+            """)
+            c_lay = QHBoxLayout(card)
+            c_lay.setContentsMargins(12, 8, 12, 8)
+            c_lay.setSpacing(10)
+
+            is_running = (c["state"] == "running")
+            icon = "🟢" if is_running else "🔴"
+            lbl_ic = QLabel(icon)
+            lbl_ic.setStyleSheet("font-size: 14px;")
+            c_lay.addWidget(lbl_ic)
+
+            info_lay = QVBoxLayout()
+            info_lay.setSpacing(1)
+            lbl_cname = QLabel(f"{c['name']}  <span style='color: #9ca3af; font-size: 11px;'>({c['image']})</span>")
+            lbl_cname.setStyleSheet("font-size: 12px; font-weight: 800; color: #f3f4f6;")
+            info_lay.addWidget(lbl_cname)
+
+            lbl_csub = QLabel(f"Estado: {c['status']}  •  Puertos: {c['ports']}")
+            lbl_csub.setStyleSheet("font-size: 10.5px; color: #38bdf8;" if is_running else "font-size: 10.5px; color: #9ca3af;")
+            info_lay.addWidget(lbl_csub)
+            c_lay.addLayout(info_lay, 1)
+
+            # Botones de Acción de Contenedor
+            if is_running:
+                btn_stop = QPushButton("🛑 Detener")
+                btn_stop.setCursor(Qt.PointingHandCursor)
+                btn_stop.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(239, 68, 68, 0.15);
+                        color: #fca5a5;
+                        border: 1px solid rgba(239, 68, 68, 0.35);
+                        border-radius: 5px;
+                        padding: 4px 8px;
+                        font-weight: 700;
+                        font-size: 10.5px;
+                    }
+                    QPushButton:hover { background-color: #ef4444; color: #ffffff; }
+                """)
+                btn_stop.clicked.connect(lambda _, cid=c["name"]: self.execute_docker_container_action("stop", cid))
+                c_lay.addWidget(btn_stop)
+
+                btn_restart = QPushButton("🔄 Reiniciar")
+                btn_restart.setCursor(Qt.PointingHandCursor)
+                btn_restart.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(56, 189, 248, 0.15);
+                        color: #7dd3fc;
+                        border: 1px solid rgba(56, 189, 248, 0.35);
+                        border-radius: 5px;
+                        padding: 4px 8px;
+                        font-weight: 700;
+                        font-size: 10.5px;
+                    }
+                    QPushButton:hover { background-color: #0284c7; color: #ffffff; }
+                """)
+                btn_restart.clicked.connect(lambda _, cid=c["name"]: self.execute_docker_container_action("restart", cid))
+                c_lay.addWidget(btn_restart)
+            else:
+                btn_start = QPushButton("⚡ Iniciar")
+                btn_start.setCursor(Qt.PointingHandCursor)
+                btn_start.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(16, 185, 129, 0.15);
+                        color: #6ee7b7;
+                        border: 1px solid rgba(16, 185, 129, 0.35);
+                        border-radius: 5px;
+                        padding: 4px 8px;
+                        font-weight: 700;
+                        font-size: 10.5px;
+                    }
+                    QPushButton:hover { background-color: #10b981; color: #ffffff; }
+                """)
+                btn_start.clicked.connect(lambda _, cid=c["name"]: self.execute_docker_container_action("start", cid))
+                c_lay.addWidget(btn_start)
+
+            # Ver Logs
+            btn_logs = QPushButton("📋 Logs")
+            btn_logs.setCursor(Qt.PointingHandCursor)
+            btn_logs.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(255, 255, 255, 0.05);
+                    color: #d1d5db;
+                    border: 1px solid rgba(255, 255, 255, 0.15);
+                    border-radius: 5px;
+                    padding: 4px 8px;
+                    font-weight: 600;
+                    font-size: 10.5px;
+                }
+                QPushButton:hover { background-color: rgba(255, 255, 255, 0.12); color: #ffffff; }
+            """)
+            btn_logs.clicked.connect(lambda _, cid=c["name"]: self.show_docker_logs_dialog(cid))
+            c_lay.addWidget(btn_logs)
+
+            self.docker_containers_layout.addWidget(card)
+
+        self.docker_containers_layout.addStretch()
+
+    def refresh_sector2_ports_view(self):
+        """Escanea los puertos TCP en escucha y actualiza la lista interactiva."""
+        ports = inspect_network_ports()
+        self.lbl_s2_ports_summary.setText(f"Puertos TCP en escucha detectados ({len(ports)} servicios activos):")
+
+        while self.ports_list_layout.count():
+            item = self.ports_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not ports:
+            lbl_none = QLabel("ℹ️ No se detectaron puertos TCP en estado LISTEN en este momento.")
+            lbl_none.setStyleSheet("color: #9ca3af; font-style: italic; padding: 12px;")
+            self.ports_list_layout.addWidget(lbl_none)
+            return
+
+        for p in ports:
+            card = QFrame()
+            card.setStyleSheet("""
+                QFrame {
+                    background-color: rgba(255, 255, 255, 0.03);
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 8px;
+                }
+                QFrame:hover {
+                    background-color: rgba(255, 255, 255, 0.06);
+                    border-color: rgba(251, 191, 36, 0.35);
+                }
+            """)
+            p_lay = QHBoxLayout(card)
+            p_lay.setContentsMargins(12, 7, 12, 7)
+            p_lay.setSpacing(10)
+
+            lbl_ic = QLabel("🔌")
+            lbl_ic.setStyleSheet("font-size: 15px;")
+            p_lay.addWidget(lbl_ic)
+
+            info_lay = QVBoxLayout()
+            info_lay.setSpacing(1)
+            lbl_p_info = QLabel(f"<b style='color: #fbbf24; font-size: 12.5px;'>Puerto {p['port']}</b>  ➔  <span style='color: #f3f4f6;'>{p['command']}</span>  <span style='color: #9ca3af; font-size: 11px;'>(PID: {p['pid']})</span>")
+            info_lay.addWidget(lbl_p_info)
+
+            lbl_p_addr = QLabel(f"Dirección: {p['address']}  •  Protocolo: {p['protocol']}")
+            lbl_p_addr.setStyleSheet("font-size: 10.5px; color: #9ca3af;")
+            info_lay.addWidget(lbl_p_addr)
+            p_lay.addLayout(info_lay, 1)
+
+            btn_kill = QPushButton("💀 Matar Proceso")
+            btn_kill.setCursor(Qt.PointingHandCursor)
+            btn_kill.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(239, 68, 68, 0.15);
+                    color: #fca5a5;
+                    border: 1px solid rgba(239, 68, 68, 0.35);
+                    border-radius: 5px;
+                    padding: 4px 10px;
+                    font-weight: 700;
+                    font-size: 11px;
+                }
+                QPushButton:hover {
+                    background-color: #ef4444;
+                    color: #ffffff;
+                }
+            """)
+            btn_kill.clicked.connect(lambda _, pid=str(p["pid"]), cmd=p["command"], port=p["port"]: self.execute_kill_port_process(pid, cmd, port))
+            p_lay.addWidget(btn_kill)
+
+            self.ports_list_layout.addWidget(card)
+
+        self.ports_list_layout.addStretch()
+
+    def execute_docker_container_action(self, action: str, container_name: str):
+        """Ejecuta una acción de contenedor en segundo plano."""
+        act_labels = {"start": "Iniciando", "stop": "Deteniendo", "restart": "Reiniciando", "rm": "Eliminando"}
+        self.terminal_display.log("DOCKER", f"{act_labels.get(action, 'Procesando')} contenedor <b>{container_name}</b>...", tag_color="#38bdf8", prefix="⚡")
+        self.docker_worker = DockerWorkerThread(action, target=container_name)
+        self.docker_worker.finished_task.connect(self.on_docker_worker_finished)
+        self.docker_worker.start()
+
+    def execute_docker_system_prune(self):
+        """Ejecuta docker system prune en segundo plano con confirmación previa."""
+        reply = QMessageBox.question(
+            self, "Confirmar Limpieza Docker",
+            "¿Deseas purgar contenedores detenidos, redes no usadas e imágenes huérfanas (docker system prune)?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self.terminal_display.log_warn("DOCKER", "Ejecutando limpieza de recursos Docker en segundo plano...")
+            self.docker_worker = DockerWorkerThread("prune")
+            self.docker_worker.finished_task.connect(self.on_docker_worker_finished)
+            self.docker_worker.start()
+
+    def show_docker_logs_dialog(self, container_name: str):
+        """Muestra los logs del contenedor en la terminal inferior."""
+        self.terminal_display.log("DOCKER", f"Obteniendo últimos logs de <b>{container_name}</b>...", tag_color="#38bdf8", prefix="📋")
+        ok, logs = get_docker_container_logs(container_name, tail_lines=100)
+        if ok:
+            for line in logs.splitlines():
+                self.terminal_display.log("LOG", line, tag_color="#9ca3af", prefix="•")
+        else:
+            self.terminal_display.log_error("DOCKER", f"Error al obtener logs: {logs}")
+
+    def execute_kill_port_process(self, pid: str, cmd: str, port: int):
+        """Aniquila un proceso ocupando un puerto tras confirmación."""
+        reply = QMessageBox.question(
+            self, "Confirmar Aniquilación de Proceso",
+            f"¿Estás seguro de que deseas aniquilar el proceso '{cmd}' (PID: {pid}) en el puerto {port}?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self.terminal_display.log_warn("PORTS", f"Aniquilando proceso <b>{cmd}</b> (PID: {pid}) en puerto {port}...")
+            ok, msg = kill_process_by_pid(pid)
+            if ok:
+                self.terminal_display.log_success("PORTS", msg)
+            else:
+                self.terminal_display.log_error("PORTS", msg)
+            self.refresh_sector2_ports_view()
+
+    def on_docker_worker_finished(self, success: bool, task_name: str, message: str):
+        """Callback al terminar una operación de Docker en segundo plano."""
+        if success:
+            self.terminal_display.log_success(task_name, message)
+        else:
+            self.terminal_display.log_error(task_name, message)
+        self.refresh_sector2_docker_view()
+
     def create_simple_sector_view(self, title: str, accent_color: str, actions: list) -> QFrame:
         """Crea una ventana dedicada y limpia para un sector específico con diseño consistente."""
         card = QFrame()
@@ -3198,9 +3995,10 @@ class LumenProjectWorkspaceView(QWidget):
                 self.open_sector2_editor_view()
             elif "python" in action_title.lower() or "venv" in action_title.lower():
                 self.open_sector2_venv_view()
+            elif "docker" in action_title.lower() or "puerto" in action_title.lower():
+                self.open_sector2_docker_view()
             else:
                 self.open_sector_view(2, "Sector 2: Entornos & Run")
-                self.terminal_display.log_info("DOCKER", "Módulo Docker en espera. Prioridad táctica activa: Lanzador de Editores y Entornos Python.")
         else:
             self.open_sector_view(sector_idx, sector_title)
             self.handle_action_click(action_title)
