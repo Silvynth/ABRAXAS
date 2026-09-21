@@ -26,6 +26,10 @@ C_WARN = '\x1b[38;2;240;138;155m'
 BOLD = '\x1b[1m'
 RESET = '\x1b[0m'
 
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 from core.paths import ROOT_DIR, TEMPLATE_PATH, SKILLS_DIR
 
 def get_target_config_path():
@@ -277,8 +281,37 @@ def run_interactive_wizard(is_preview=False):
         sync_global_gitconfig(git_name, git_email)
     print("")
 
-    # 3. Hardware Profile
-    print(f"  {C_CYAN}⚡ [3/5] PERFIL DE RENDIMIENTO Y HARDWARE:{RESET}")
+    # 3. Editor Preferido (LUMEN Sector 2)
+    print(f"  {C_CYAN}💻 [3/6] EDITOR DE CÓDIGO PREFERIDO (LUMEN):{RESET}")
+    from core.environments import detect_installed_editors, get_preferred_editor, set_preferred_editor
+    eds = detect_installed_editors()
+    current_pref = get_preferred_editor()
+    if eds:
+        print("     Editores detectados en el sistema:")
+        for idx, ed in enumerate(eds, 1):
+            is_def = " (Actual)" if ed['id'] == current_pref else ""
+            print(f"       {idx}) {ed['icon']} {ed['name']}{is_def}")
+        print(f"       {len(eds)+1}) Otro / Comando personalizado")
+        ed_choice = prompt_input(f"Selecciona un editor (1-{len(eds)+1}) [1]:", "1")
+        try:
+            ch_idx = int(ed_choice) - 1
+            if 0 <= ch_idx < len(eds):
+                chosen_ed = eds[ch_idx]['id']
+            else:
+                chosen_ed = prompt_input("Comando de tu editor:", "code")
+        except ValueError:
+            chosen_ed = prompt_input("Comando de tu editor:", "code")
+    else:
+        chosen_ed = prompt_input("Comando de tu editor preferido (ej. code, cursor, nvim):", "code")
+
+    if "environments" not in base_cfg: base_cfg["environments"] = {}
+    base_cfg["environments"]["preferred_editor"] = chosen_ed
+    if not is_preview:
+        set_preferred_editor(chosen_ed)
+    print(f"  {C_GREEN}✔ Editor preferido fijado en: {chosen_ed}{RESET}\n")
+
+    # 4. Hardware Profile
+    print(f"  {C_CYAN}⚡ [4/6] PERFIL DE RENDIMIENTO Y HARDWARE:{RESET}")
     print(f"     1) Auto (Recomendado)")
     print(f"     2) Alto Rendimiento (Priorizar GPU / VRAM)")
     print(f"     3) Bajo Consumo (Optimizado para batería)")
@@ -288,8 +321,8 @@ def run_interactive_wizard(is_preview=False):
     base_cfg["hardware"]["profile"] = h_map.get(h_choice, "auto")
     print("")
 
-    # 4. Inteligencia Artificial (Ollama)
-    print(f"  {C_GOLD}🧠 [4/5] CONFIGURACIÓN DE IA LOCAL & MODELOS (OLLAMA):{RESET}")
+    # 5. Inteligencia Artificial (Ollama)
+    print(f"  {C_GOLD}🧠 [5/6] CONFIGURACIÓN DE IA LOCAL & MODELOS (OLLAMA):{RESET}")
     ai_choice = prompt_input("¿Deseas habilitar la asistencia con IA Local? (s/n):", "s")
     is_ai = ai_choice.lower().startswith("s") or ai_choice.lower().startswith("y")
     
@@ -304,18 +337,19 @@ def run_interactive_wizard(is_preview=False):
             with urllib.request.urlopen(req, timeout=1.2) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
                 models = [m.get('name') for m in data.get('models', [])]
-                if models:
-                    print(f"     {C_GREEN}✔ Modelos locales detectados en Ollama:{RESET} {', '.join(models)}")
         except (urllib.error.URLError, json.JSONDecodeError, OSError):
             pass
 
-        if not models:
-            print(f"     {C_DIM}ℹ No hay modelos instalados en Ollama actualmente.{RESET}")
-            print(f"     {C_DIM}  (Podrás descargarlos más tarde con: ollama pull <modelo>){RESET}")
-
-        chat_m = prompt_input("1. Modelo Conversacional (Chatbox & Obsidian):", chat_m if chat_m else (models[0] if models else ""))
-        heavy_m = prompt_input("2. Modelo Pesado Dev (Refactor & Auditoría Profunda):", heavy_m if heavy_m else (models[0] if models else ""))
-        light_m = prompt_input("3. Modelo Ligero Dev (Git Rápido & IA Commit):", light_m if light_m else (models[0] if models else ""))
+        if models:
+            print(f"     {C_DIM}Modelos detectados en Ollama local:{RESET} {C_TEXT}{', '.join(models)}{RESET}")
+            def_model = models[0]
+            chat_m = prompt_input(f"Modelo para Asistente/Chat [{def_model}]:", def_model)
+            heavy_m = prompt_input(f"Modelo Pesado (Auditoría/Refactor) [{def_model}]:", def_model)
+            light_m = prompt_input(f"Modelo Ligero (Commits/Quick) [{def_model}]:", def_model)
+        else:
+            chat_m = prompt_input("Modelo para Asistente/Chat [llama3.1:8b]:", "llama3.1:8b")
+            heavy_m = prompt_input("Modelo Pesado (Auditoría/Refactor) [deepseek-coder:6.7b]:", "deepseek-coder:6.7b")
+            light_m = prompt_input("Modelo Ligero (Commits/Quick) [qwen2.5-coder:7b]:", "qwen2.5-coder:7b")
 
     if "ai" not in base_cfg: base_cfg["ai"] = {}
     base_cfg["ai"]["enabled"] = is_ai
@@ -333,8 +367,8 @@ def run_interactive_wizard(is_preview=False):
         print(f"     {C_GREEN}✔ Directivas genéricas de Skills inicializadas en 'skills/'.{RESET}")
     print("")
 
-    # 5. Tema Visual
-    print(f"  {C_ACCENT}🎨 [5/5] TEMA VISUAL:{RESET}")
+    # 6. Tema Visual
+    print(f"  {C_ACCENT}🎨 [6/6] TEMA VISUAL:{RESET}")
     print(f"     1) Noctalia (Sincronizado con el sistema Wayland/Hyprland)")
     print(f"     2) Dark Cyberpunk")
     print(f"     3) Monocromo Minimalista")
