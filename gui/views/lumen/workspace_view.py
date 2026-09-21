@@ -1426,11 +1426,6 @@ class LumenProjectWorkspaceView(QWidget):
         btn_push.clicked.connect(self.run_git_push)
         w_lay.addWidget(btn_push)
 
-        # Botón 6: Volver
-        btn_volver = LumenCyberActionButton("◀", "Volver", "Regresar al menú principal de Sectores", accent_color="#9ca3af")
-        btn_volver.clicked.connect(self.go_back_to_sectors_overview)
-        w_lay.addWidget(btn_volver)
-
         w_lay.addStretch()
         self.sector1_sub_stack.addWidget(page_work)
 
