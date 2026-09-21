@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (
     QPushButton, QFrame, QScrollArea, QGridLayout,
     QTextEdit, QApplication, QStackedWidget, QSizePolicy,
     QProgressBar, QLineEdit, QComboBox, QStyledItemDelegate,
-    QCheckBox, QMenu, QDialog, QRadioButton, QButtonGroup, QMessageBox
+    QCheckBox, QMenu, QDialog, QRadioButton, QButtonGroup, QMessageBox,
+    QInputDialog
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread, QPoint
 
@@ -32,6 +33,12 @@ from core.git_workflow import (
     get_git_sync_deep_status, execute_git_fetch, execute_git_pull,
     execute_git_stage_path, execute_git_unstage_path, execute_git_discard_path,
     execute_git_stash_pop, execute_git_stash_save, execute_git_init
+)
+from core.environments import (
+    detect_installed_editors, get_preferred_editor, set_preferred_editor,
+    launch_project_in_editor, inspect_python_venv, create_python_venv,
+    install_project_dependencies, install_custom_packages,
+    freeze_dependencies_to_file, list_installed_packages, delete_python_venv
 )
 from gui.views.lumen.git_graph_canvas import LumenHorizontalGitGraphView
 
@@ -246,6 +253,40 @@ class IAMergeThread(QThread):
             self.finished_merge.emit(True, "", res)
         except Exception as e:
             self.finished_merge.emit(False, str(e), {})
+
+
+class PythonVenvWorkerThread(QThread):
+    """Hilo no bloqueante para ejecutar operaciones pesadas de entorno virtual Python."""
+    finished_task = Signal(bool, str, str)
+
+    def __init__(self, task_type: str, project_path: str, venv_path: str = "", extra_args=None):
+        super().__init__()
+        self.task_type = task_type
+        self.project_path = project_path
+        self.venv_path = venv_path
+        self.extra_args = extra_args
+
+    def run(self):
+        try:
+            if self.task_type == "create_venv":
+                use_uv = bool(self.extra_args)
+                ok, msg = create_python_venv(self.project_path, use_uv=use_uv)
+                self.finished_task.emit(ok, "CREAR-VENV", msg)
+            elif self.task_type == "install_deps":
+                ok, msg = install_project_dependencies(self.project_path, self.venv_path)
+                self.finished_task.emit(ok, "DEPS", msg)
+            elif self.task_type == "install_custom":
+                pkgs = self.extra_args or []
+                ok, msg = install_custom_packages(self.project_path, self.venv_path, pkgs)
+                self.finished_task.emit(ok, "INSTALL-PKG", msg)
+            elif self.task_type == "freeze":
+                ok, msg = freeze_dependencies_to_file(self.project_path, self.venv_path)
+                self.finished_task.emit(ok, "FREEZE", msg)
+            elif self.task_type == "delete_venv":
+                ok, msg = delete_python_venv(self.venv_path)
+                self.finished_task.emit(ok, "DELETE-VENV", msg)
+        except Exception as e:
+            self.finished_task.emit(False, self.task_type.upper(), f"Excepción en hilo de venv: {str(e)}")
 
 
 class LumenRepoVisibilityDialog(QDialog):
@@ -1076,15 +1117,7 @@ class LumenProjectWorkspaceView(QWidget):
         # =============================================================
         # PÁGINA 2: VENTANA DEDICADA DEL SECTOR 2 (ENTORNOS Y EJECUCIÓN)
         # =============================================================
-        self.page_sector2_view = self.create_simple_sector_view(
-            title="🚀  SEGUNDO SECTOR : ENTORNOS Y EJECUCIÓN",
-            accent_color="#10b981",
-            actions=[
-                ("💻", "Ejecutar proyecto en editor", "Lanzar espacio de trabajo en VS Code / IDE"),
-                ("🐍", "Entornos python", "Gestor de paquetes, dependencias y virtualenv"),
-                ("🐳", "Docker y puertos", "Control de contenedores, compose y mapeos")
-            ]
-        )
+        self.page_sector2_view = self.create_sector2_dedicated_view()
         self.sectors_stack.addWidget(self.page_sector2_view)
 
         # =============================================================
@@ -1233,7 +1266,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         b_layout.addWidget(self.terminal_stack)
 
-        self.terminal_frame.setMinimumHeight(320)
+        self.terminal_frame.setMinimumHeight(240)
         content_layout.addWidget(self.terminal_frame, 1)
 
         scroll_area.setWidget(scroll_content)
@@ -2427,6 +2460,619 @@ class LumenProjectWorkspaceView(QWidget):
 
         return page
 
+    # =================================================================
+    # SEGUNDO SECTOR : ENTORNOS Y EJECUCIÓN (VENV & EDITOR LAUNCHER)
+    # =================================================================
+    def create_sector2_dedicated_view(self) -> QFrame:
+        """Crea la ventana interactiva dedicada del Sector 2 (Entornos y Ejecución)."""
+        card = QFrame()
+        card.setProperty("class", "surface")
+        card.setStyleSheet("""
+            QFrame.surface {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(22, 24, 34, 0.95), stop:1 rgba(16, 18, 25, 0.95));
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-top: 3px solid #10b981;
+                border-radius: 10px;
+            }
+        """)
+        card.setMinimumHeight(350)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        self.sector2_sub_stack = LumenDynamicStackedWidget()
+
+        # Página 0: Lanzador y Selector de Editores
+        self.page_s2_editor = self.create_sector2_editor_view()
+        self.sector2_sub_stack.addWidget(self.page_s2_editor)
+
+        # Página 1: Gestor de Entornos Virtuales Python
+        self.page_s2_venv = self.create_sector2_venv_view()
+        self.sector2_sub_stack.addWidget(self.page_s2_venv)
+
+        layout.addWidget(self.sector2_sub_stack)
+        return card
+
+    def create_sector2_editor_view(self) -> QWidget:
+        """Sub-página interactiva para seleccionar y lanzar editores de código."""
+        page = QWidget()
+        page.setMinimumHeight(340)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # Barra de navegación con botón único de volver al menú global y pestañas
+        nav = QHBoxLayout()
+        nav.setSpacing(10)
+
+        btn_back = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(16, 185, 129, 0.15);
+                color: #6ee7b7;
+                border: 1px solid rgba(16, 185, 129, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(16, 185, 129, 0.30);
+                border-color: #10b981;
+                color: #ffffff;
+            }
+        """)
+        btn_back.clicked.connect(self.go_back_to_sectors_overview)
+        nav.addWidget(btn_back)
+
+        lbl_title = QLabel("🚀  SECTOR 2 : ENTORNOS & RUN")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #10b981; letter-spacing: 0.5px;")
+        nav.addWidget(lbl_title)
+
+        # Pestañas de Navegación Sector 2
+        btn_tab_editor = QPushButton("💻  Selector de Editor")
+        btn_tab_editor.setCursor(Qt.PointingHandCursor)
+        btn_tab_editor.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(16, 185, 129, 0.25);
+                color: #ffffff;
+                border: 1px solid #10b981;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 800;
+                font-size: 11px;
+            }
+        """)
+        nav.addWidget(btn_tab_editor)
+
+        btn_tab_venv = QPushButton("🐍  Entorno Python")
+        btn_tab_venv.setCursor(Qt.PointingHandCursor)
+        btn_tab_venv.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border-color: #34d399;
+            }
+        """)
+        btn_tab_venv.clicked.connect(self.open_sector2_venv_view)
+        nav.addWidget(btn_tab_venv)
+
+        nav.addStretch()
+
+        self.lbl_s2_pref_editor_pill = QLabel("PREFERIDO: DETECTANDO...")
+        self.lbl_s2_pref_editor_pill.setFixedHeight(24)
+        self.lbl_s2_pref_editor_pill.setAlignment(Qt.AlignCenter)
+        self.lbl_s2_pref_editor_pill.setStyleSheet("font-size: 10px; font-weight: 800; color: #34d399; background-color: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 4px; padding: 2px 8px;")
+        nav.addWidget(self.lbl_s2_pref_editor_pill)
+        layout.addLayout(nav)
+
+        # Botón de apertura rápida con el editor predeterminado
+        self.btn_s2_quick_launch = QPushButton("🚀  Abrir Proyecto con Editor Predeterminado")
+        self.btn_s2_quick_launch.setCursor(Qt.PointingHandCursor)
+        self.btn_s2_quick_launch.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #059669, stop:1 #10b981);
+                color: #ffffff;
+                font-size: 12.5px;
+                font-weight: 800;
+                border-radius: 8px;
+                padding: 8px 14px;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #10b981, stop:1 #34d399);
+                border-color: #6ee7b7;
+            }
+        """)
+        self.btn_s2_quick_launch.clicked.connect(self.quick_launch_preferred_editor)
+        layout.addWidget(self.btn_s2_quick_launch)
+
+        # Panel de lista de editores detectados con ScrollArea con altura mínima asegurada
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(180)
+        scroll.setMaximumHeight(260)
+        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+                background-color: rgba(0, 0, 0, 0.20);
+            }
+        """)
+
+        self.editor_list_widget = QWidget()
+        self.editor_list_layout = QVBoxLayout(self.editor_list_widget)
+        self.editor_list_layout.setContentsMargins(6, 6, 6, 6)
+        self.editor_list_layout.setSpacing(6)
+        scroll.setWidget(self.editor_list_widget)
+
+        layout.addWidget(scroll, 1)
+        return page
+
+    def create_sector2_venv_view(self) -> QWidget:
+        """Sub-página interactiva para gestionar entornos virtuales Python y dependencias."""
+        page = QWidget()
+        page.setMinimumHeight(340)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # Barra de navegación
+        nav = QHBoxLayout()
+        nav.setSpacing(10)
+
+        btn_back = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.15);
+                color: #6ee7b7;
+                border: 1px solid rgba(52, 211, 153, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 211, 153, 0.30);
+                border-color: #34d399;
+                color: #ffffff;
+            }
+        """)
+        btn_back.clicked.connect(self.go_back_to_sectors_overview)
+        nav.addWidget(btn_back)
+
+        lbl_title = QLabel("🚀  SECTOR 2 : ENTORNOS & RUN")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #10b981; letter-spacing: 0.5px;")
+        nav.addWidget(lbl_title)
+
+        # Pestañas de Navegación Sector 2
+        btn_tab_editor = QPushButton("💻  Selector de Editor")
+        btn_tab_editor.setCursor(Qt.PointingHandCursor)
+        btn_tab_editor.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(16, 185, 129, 0.15);
+                color: #6ee7b7;
+                border-color: #10b981;
+            }
+        """)
+        btn_tab_editor.clicked.connect(self.open_sector2_editor_view)
+        nav.addWidget(btn_tab_editor)
+
+        btn_tab_venv = QPushButton("🐍  Entorno Python")
+        btn_tab_venv.setCursor(Qt.PointingHandCursor)
+        btn_tab_venv.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 211, 153, 0.25);
+                color: #ffffff;
+                border: 1px solid #34d399;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-weight: 800;
+                font-size: 11px;
+            }
+        """)
+        nav.addWidget(btn_tab_venv)
+
+        nav.addStretch()
+
+        btn_refresh = QPushButton("🔄  Refrescar Estado")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
+        btn_refresh.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: #e5e7eb;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                padding: 5px 10px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.12);
+                color: #ffffff;
+            }
+        """)
+        btn_refresh.clicked.connect(self.refresh_sector2_venv_view)
+        nav.addWidget(btn_refresh)
+        layout.addLayout(nav)
+
+        # Panel de Telemetría del Venv
+        self.frame_venv_telemetry = QFrame()
+        self.frame_venv_telemetry.setStyleSheet("""
+            QFrame {
+                background-color: rgba(0, 0, 0, 0.25);
+                border: 1px solid rgba(52, 211, 153, 0.25);
+                border-radius: 8px;
+                padding: 8px 12px;
+            }
+        """)
+        t_lay = QVBoxLayout(self.frame_venv_telemetry)
+        t_lay.setContentsMargins(10, 8, 10, 8)
+        t_lay.setSpacing(4)
+
+        self.lbl_s2_venv_status = QLabel("Estado: Inspeccionando...")
+        self.lbl_s2_venv_status.setStyleSheet("font-size: 12px; font-weight: 800; color: #f3f4f6;")
+        t_lay.addWidget(self.lbl_s2_venv_status)
+
+        self.lbl_s2_venv_details = QLabel("Intérprete: Desconocido | Paquetes: 0")
+        self.lbl_s2_venv_details.setStyleSheet("font-size: 11px; color: #9ca3af;")
+        t_lay.addWidget(self.lbl_s2_venv_details)
+
+        self.lbl_s2_venv_deps = QLabel("Dependencias detectadas: Ninguna")
+        self.lbl_s2_venv_deps.setStyleSheet("font-size: 11px; color: #34d399;")
+        t_lay.addWidget(self.lbl_s2_venv_deps)
+
+        layout.addWidget(self.frame_venv_telemetry)
+
+        # Contenedor dinámico de acciones de Venv
+        self.venv_actions_container = QWidget()
+        self.venv_actions_layout = QVBoxLayout(self.venv_actions_container)
+        self.venv_actions_layout.setContentsMargins(0, 4, 0, 4)
+        self.venv_actions_layout.setSpacing(8)
+
+        layout.addWidget(self.venv_actions_container, 1)
+        return page
+
+    def open_sector2_editor_view(self):
+        """Abre la sub-página del lanzador de editores y refresca los editores detectados."""
+        self.sectors_stack.setCurrentIndex(2)
+        if hasattr(self, "sector2_sub_stack"):
+            self.sector2_sub_stack.setCurrentIndex(0)
+            self.sector2_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.refresh_sector2_editor_view()
+        p_name = self.project_data.get("name", "Proyecto")
+        self.terminal_display.log("IDE", f"Panel de Lanzador de Editor abierto para <b>{p_name}</b>.", tag_color="#10b981", prefix="💻")
+
+    def refresh_sector2_editor_view(self):
+        """Detecta editores en el sistema y reconstruye la lista."""
+        while self.editor_list_layout.count():
+            item = self.editor_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        pref = get_preferred_editor()
+        detected = detect_installed_editors()
+
+        pref_name = pref
+        for e in detected:
+            if e["id"] == pref:
+                pref_name = e["name"]
+                break
+
+        self.lbl_s2_pref_editor_pill.setText(f"PREFERIDO: {pref_name.upper()}")
+        self.btn_s2_quick_launch.setText(f"🚀  Abrir Proyecto Ahora con {pref_name}")
+
+        if not detected:
+            lbl_none = QLabel("⚠️ No se detectaron editores conocidos en el sistema (VS Code, Cursor, Neovim, etc.).")
+            lbl_none.setStyleSheet("color: #f87171; font-weight: 700; padding: 12px;")
+            self.editor_list_layout.addWidget(lbl_none)
+            self.btn_s2_quick_launch.setEnabled(False)
+            return
+
+        self.btn_s2_quick_launch.setEnabled(True)
+
+        for ed in detected:
+            card = QFrame()
+            card.setStyleSheet("""
+                QFrame {
+                    background-color: rgba(255, 255, 255, 0.03);
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 8px;
+                }
+                QFrame:hover {
+                    background-color: rgba(255, 255, 255, 0.06);
+                    border-color: rgba(16, 185, 129, 0.35);
+                }
+            """)
+            c_lay = QHBoxLayout(card)
+            c_lay.setContentsMargins(12, 8, 12, 8)
+            c_lay.setSpacing(10)
+
+            lbl_ic = QLabel(ed["icon"])
+            lbl_ic.setStyleSheet("font-size: 18px;")
+            c_lay.addWidget(lbl_ic)
+
+            info_lay = QVBoxLayout()
+            info_lay.setSpacing(1)
+            lbl_name = QLabel(ed["name"])
+            lbl_name.setStyleSheet("font-size: 12.5px; font-weight: 800; color: #f3f4f6;")
+            info_lay.addWidget(lbl_name)
+
+            type_label = "Aplicación Gráfica (GUI)" if ed["type"] == "gui" else "Editor de Consola (Terminal)"
+            is_pref = (ed["id"] == pref)
+            if is_pref:
+                type_label += "  •  ⭐ Predeterminado"
+
+            lbl_sub = QLabel(type_label)
+            lbl_sub.setStyleSheet("font-size: 10.5px; color: #34d399;" if is_pref else "font-size: 10.5px; color: #9ca3af;")
+            info_lay.addWidget(lbl_sub)
+            c_lay.addLayout(info_lay, 1)
+
+            if not is_pref:
+                btn_set_pref = QPushButton("⭐ Establecer por Defecto")
+                btn_set_pref.setCursor(Qt.PointingHandCursor)
+                btn_set_pref.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(255, 255, 255, 0.05);
+                        color: #d1d5db;
+                        border: 1px solid rgba(255, 255, 255, 0.15);
+                        border-radius: 6px;
+                        padding: 5px 10px;
+                        font-weight: 600;
+                        font-size: 11px;
+                    }
+                    QPushButton:hover {
+                        background-color: rgba(255, 255, 255, 0.12);
+                        color: #ffffff;
+                    }
+                """)
+                btn_set_pref.clicked.connect(lambda _, eid=ed["id"], ename=ed["name"]: self.execute_set_preferred_editor(eid, ename))
+                c_lay.addWidget(btn_set_pref)
+
+            btn_open = QPushButton(f"🚀 Abrir ({ed['id']})")
+            btn_open.setCursor(Qt.PointingHandCursor)
+            btn_open.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(16, 185, 129, 0.20);
+                    color: #6ee7b7;
+                    border: 1px solid rgba(16, 185, 129, 0.45);
+                    border-radius: 6px;
+                    padding: 5px 12px;
+                    font-weight: 700;
+                    font-size: 11.5px;
+                }
+                QPushButton:hover {
+                    background-color: #10b981;
+                    color: #064e3b;
+                }
+            """)
+            btn_open.clicked.connect(lambda _, eid=ed["id"], ename=ed["name"]: self.execute_launch_editor(eid, ename))
+            c_lay.addWidget(btn_open)
+
+            self.editor_list_layout.addWidget(card)
+
+        self.editor_list_layout.addStretch()
+
+    def quick_launch_preferred_editor(self):
+        """Lanza rápidamente el proyecto con el editor predeterminado."""
+        pref = get_preferred_editor()
+        detected = detect_installed_editors()
+        name = pref
+        for e in detected:
+            if e["id"] == pref:
+                name = e["name"]
+                break
+        self.execute_launch_editor(pref, name)
+
+    def execute_set_preferred_editor(self, editor_id: str, editor_name: str):
+        """Guarda la preferencia del editor y refresca la vista."""
+        if set_preferred_editor(editor_id):
+            self.terminal_display.log_success("IDE", f"Editor predeterminado actualizado a: <b>{editor_name}</b> (<code>{editor_id}</code>).")
+            self.refresh_sector2_editor_view()
+        else:
+            self.terminal_display.log_error("IDE", "No se pudo guardar la preferencia del editor en disco.")
+
+    def execute_launch_editor(self, editor_id: str, editor_name: str):
+        """Lanza el editor apuntando a la carpeta del proyecto activo."""
+        path = self.project_data.get("path")
+        if not path or not os.path.exists(path):
+            self.terminal_display.log_error("IDE", "Ruta de proyecto no válida.")
+            return
+
+        self.terminal_display.log("IDE", f"Lanzando <b>{editor_name}</b> en <code>{path}</code>...", tag_color="#10b981", prefix="🚀")
+        ok, msg = launch_project_in_editor(editor_id, path)
+        if ok:
+            self.terminal_display.log_success("IDE", f"<b>{editor_name}</b> iniciado exitosamente: {msg}")
+        else:
+            self.terminal_display.log_error("IDE", f"Error al lanzar {editor_name}: {msg}")
+
+    def open_sector2_venv_view(self):
+        """Abre la sub-página de gestión de entornos virtuales y refresca la telemetría."""
+        self.sectors_stack.setCurrentIndex(2)
+        if hasattr(self, "sector2_sub_stack"):
+            self.sector2_sub_stack.setCurrentIndex(1)
+            self.sector2_sub_stack.updateGeometry()
+        if hasattr(self, "sectors_stack"):
+            self.sectors_stack.updateGeometry()
+        self.refresh_sector2_venv_view()
+        p_name = self.project_data.get("name", "Proyecto")
+        self.terminal_display.log("VENV", f"Gestor de Entorno Virtual cargado para <b>{p_name}</b>.", tag_color="#34d399", prefix="🐍")
+
+    def refresh_sector2_venv_view(self):
+        """Inspecciona el entorno virtual del proyecto y actualiza los widgets dinámicos."""
+        path = self.project_data.get("path")
+        if not path or not os.path.exists(path):
+            return
+
+        venv_info = inspect_python_venv(path)
+        self.current_venv_info = venv_info
+
+        if venv_info["has_venv"]:
+            status_text = f"🟢 ACTIVO / VINCULADO ({venv_info['venv_name']})"
+            self.lbl_s2_venv_status.setText(f"Entorno Virtual: <b>{venv_info['venv_name']}</b>  |  Estado: {status_text}")
+            self.lbl_s2_venv_details.setText(f"Intérprete: {venv_info['python_version']}  |  Paquetes instalados: {venv_info['package_count']}")
+        else:
+            self.lbl_s2_venv_status.setText("Entorno Virtual: ⚠️ NO DETECTADO EN EL PROYECTO")
+            self.lbl_s2_venv_details.setText("No se encontró ninguna carpeta .venv / venv / env con intérprete de Python.")
+
+        deps_str = ", ".join(venv_info["dependency_files"]) if venv_info["dependency_files"] else "Ninguno detectado"
+        self.lbl_s2_venv_deps.setText(f"Archivos de especificación: <b>{deps_str}</b>")
+
+        while self.venv_actions_layout.count():
+            item = self.venv_actions_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not venv_info["has_venv"]:
+            btn_uv = LumenCyberActionButton("⚡", "Crear Entorno Rápido con uv (.venv)", "Aislamiento ultra veloz utilizando motor uv", accent_color="#10b981")
+            btn_uv.clicked.connect(lambda: self.execute_create_venv(use_uv=True))
+            self.venv_actions_layout.addWidget(btn_uv)
+
+            btn_std = LumenCyberActionButton("🐍", "Crear Entorno Estándar con python venv (.venv)", "Creación nativa con módulo python3 -m venv", accent_color="#34d399")
+            btn_std.clicked.connect(lambda: self.execute_create_venv(use_uv=False))
+            self.venv_actions_layout.addWidget(btn_std)
+        else:
+            btn_sync_deps = LumenCyberActionButton("📦", "Sincronizar / Instalar Dependencias del Proyecto", "Instalar paquetes desde requirements.txt o pyproject.toml", accent_color="#10b981")
+            btn_sync_deps.clicked.connect(self.execute_install_venv_dependencies)
+            self.venv_actions_layout.addWidget(btn_sync_deps)
+
+            btn_custom_pkg = LumenCyberActionButton("➕", "Instalar Paquete Individual", "Instalar librerías específicas (ej: fastapi requests numpy)", accent_color="#38bdf8")
+            btn_custom_pkg.clicked.connect(self.execute_install_custom_package)
+            self.venv_actions_layout.addWidget(btn_custom_pkg)
+
+            btn_freeze = LumenCyberActionButton("📄", "Congelar Dependencias (pip freeze)", "Actualizar o generar requirements.txt con las versiones exactas", accent_color="#fbbf24")
+            btn_freeze.clicked.connect(self.execute_freeze_venv_dependencies)
+            self.venv_actions_layout.addWidget(btn_freeze)
+
+            btn_list = LumenCyberActionButton("📋", "Listar Paquetes Instalados", "Mostrar en la terminal la lista de librerías y versiones instaladas", accent_color="#818cf8")
+            btn_list.clicked.connect(self.execute_list_venv_packages)
+            self.venv_actions_layout.addWidget(btn_list)
+
+            btn_delete = LumenCyberActionButton("🗑️", f"Eliminar Entorno Virtual ({venv_info['venv_name']})", "Borrar permanentemente el entorno virtual del disco", accent_color="#ef4444")
+            btn_delete.clicked.connect(self.execute_delete_venv)
+            self.venv_actions_layout.addWidget(btn_delete)
+
+        self.venv_actions_layout.addStretch()
+
+    def execute_create_venv(self, use_uv: bool = False):
+        """Crea el entorno virtual en segundo plano."""
+        path = self.project_data.get("path")
+        if not path:
+            return
+        engine = "uv" if use_uv else "python venv"
+        self.terminal_display.log("VENV", f"Creando entorno virtual <code>.venv</code> usando <b>{engine}</b>...", tag_color="#10b981", prefix="⚡")
+        self.venv_worker = PythonVenvWorkerThread("create_venv", path, extra_args=use_uv)
+        self.venv_worker.finished_task.connect(self.on_venv_worker_finished)
+        self.venv_worker.start()
+
+    def execute_install_venv_dependencies(self):
+        """Instala las dependencias del proyecto."""
+        path = self.project_data.get("path")
+        venv_path = getattr(self, "current_venv_info", {}).get("venv_path", "")
+        if not path or not venv_path:
+            self.terminal_display.log_error("VENV", "No se detectó la ruta del entorno virtual.")
+            return
+
+        self.terminal_display.log("VENV", "Instalando dependencias del proyecto en el entorno virtual...", tag_color="#10b981", prefix="📦")
+        self.venv_worker = PythonVenvWorkerThread("install_deps", path, venv_path=venv_path)
+        self.venv_worker.finished_task.connect(self.on_venv_worker_finished)
+        self.venv_worker.start()
+
+    def execute_install_custom_package(self):
+        """Solicita paquetes al usuario e instala en el venv."""
+        path = self.project_data.get("path")
+        venv_path = getattr(self, "current_venv_info", {}).get("venv_path", "")
+        if not path or not venv_path:
+            return
+
+        pkgs_str, ok = QInputDialog.getText(
+            self, "Instalar Paquetes Python", 
+            "Escribe los nombres de los paquetes a instalar (separados por espacio):",
+            text="fastapi uvicorn"
+        )
+        if ok and pkgs_str.strip():
+            pkgs = pkgs_str.strip().split()
+            self.terminal_display.log("VENV", f"Instalando paquete(s): <b>{' '.join(pkgs)}</b>...", tag_color="#38bdf8", prefix="➕")
+            self.venv_worker = PythonVenvWorkerThread("install_custom", path, venv_path=venv_path, extra_args=pkgs)
+            self.venv_worker.finished_task.connect(self.on_venv_worker_finished)
+            self.venv_worker.start()
+
+    def execute_freeze_venv_dependencies(self):
+        """Congela las dependencias del entorno."""
+        path = self.project_data.get("path")
+        venv_path = getattr(self, "current_venv_info", {}).get("venv_path", "")
+        if not path or not venv_path:
+            return
+
+        self.terminal_display.log("VENV", "Congelando dependencias a <code>requirements.txt</code>...", tag_color="#fbbf24", prefix="📄")
+        self.venv_worker = PythonVenvWorkerThread("freeze", path, venv_path=venv_path)
+        self.venv_worker.finished_task.connect(self.on_venv_worker_finished)
+        self.venv_worker.start()
+
+    def execute_list_venv_packages(self):
+        """Lista los paquetes instalados en la terminal."""
+        venv_path = getattr(self, "current_venv_info", {}).get("venv_path", "")
+        if not venv_path:
+            return
+        pkgs = list_installed_packages(venv_path)
+        if not pkgs:
+            self.terminal_display.log_info("VENV", "No se detectaron paquetes instalados en el venv.")
+            return
+
+        self.terminal_display.log("VENV", f"Lista de paquetes instalados en <code>{os.path.basename(venv_path)}</code> ({len(pkgs)} librerías):", tag_color="#818cf8", prefix="📋")
+        for name, ver in pkgs:
+            self.terminal_display.log("PKG", f"{name} == {ver}", tag_color="#9ca3af", prefix="•")
+
+    def execute_delete_venv(self):
+        """Elimina el entorno virtual con confirmación."""
+        venv_path = getattr(self, "current_venv_info", {}).get("venv_path", "")
+        if not venv_path:
+            return
+
+        reply = QMessageBox.question(
+            self, "Confirmar Eliminación",
+            f"¿Estás seguro de que deseas eliminar permanentemente la carpeta '{os.path.basename(venv_path)}'?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            path = self.project_data.get("path", "")
+            self.terminal_display.log_warn("VENV", f"Eliminando entorno virtual: <code>{venv_path}</code>...")
+            self.venv_worker = PythonVenvWorkerThread("delete_venv", path, venv_path=venv_path)
+            self.venv_worker.finished_task.connect(self.on_venv_worker_finished)
+            self.venv_worker.start()
+
+    def on_venv_worker_finished(self, success: bool, task_name: str, message: str):
+        """Callback al finalizar tareas de venv en segundo plano."""
+        if success:
+            self.terminal_display.log_success(task_name, message)
+        else:
+            self.terminal_display.log_error(task_name, message)
+        self.refresh_sector2_venv_view()
+
     def create_simple_sector_view(self, title: str, accent_color: str, actions: list) -> QFrame:
         """Crea una ventana dedicada y limpia para un sector específico con diseño consistente."""
         card = QFrame()
@@ -2519,6 +3165,8 @@ class LumenProjectWorkspaceView(QWidget):
         self.sectors_stack.setCurrentIndex(sector_idx)
         if sector_idx == 1 and hasattr(self, "sector1_sub_stack"):
             self.sector1_sub_stack.setCurrentIndex(0)
+        if sector_idx == 2 and hasattr(self, "sector2_sub_stack"):
+            self.sector2_sub_stack.setCurrentIndex(0)
         if hasattr(self, "btn_toggle_graph_terminal"):
             self.btn_toggle_graph_terminal.setVisible(False)
         if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 1:
@@ -2545,6 +3193,14 @@ class LumenProjectWorkspaceView(QWidget):
                 self.open_visibility_dialog()
             else:
                 self.handle_action_click(action_title)
+        elif sector_idx == 2:
+            if "editor" in action_title.lower():
+                self.open_sector2_editor_view()
+            elif "python" in action_title.lower() or "venv" in action_title.lower():
+                self.open_sector2_venv_view()
+            else:
+                self.open_sector_view(2, "Sector 2: Entornos & Run")
+                self.terminal_display.log_info("DOCKER", "Módulo Docker en espera. Prioridad táctica activa: Lanzador de Editores y Entornos Python.")
         else:
             self.open_sector_view(sector_idx, sector_title)
             self.handle_action_click(action_title)
@@ -5669,6 +6325,8 @@ class LumenProjectWorkspaceView(QWidget):
         self.sectors_stack.setCurrentIndex(0)
         if hasattr(self, "sector1_sub_stack"):
             self.sector1_sub_stack.setCurrentIndex(0)
+        if hasattr(self, "sector2_sub_stack"):
+            self.sector2_sub_stack.setCurrentIndex(0)
         if hasattr(self, "btn_toggle_graph_terminal"):
             self.btn_toggle_graph_terminal.setVisible(False)
         if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 1:
@@ -6317,6 +6975,8 @@ class LumenProjectWorkspaceView(QWidget):
                 self.sectors_stack.setCurrentIndex(0)
             if hasattr(self, "sector1_sub_stack"):
                 self.sector1_sub_stack.setCurrentIndex(0)
+            if hasattr(self, "sector2_sub_stack"):
+                self.sector2_sub_stack.setCurrentIndex(0)
 
             self.terminal_display.clear()
             if is_git:
