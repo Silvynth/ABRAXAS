@@ -624,7 +624,11 @@ class LumenView(QWidget):
             self.selected_project = target_folder
             self.selected_path = target_folder["path"]
             if hasattr(self, "workspace_page") and self.main_stack.currentIndex() == 1:
-                self.workspace_page.set_project(target_folder, reset_terminal=True)
+                curr_path = getattr(self.workspace_page, "project_data", {}).get("path")
+                if curr_path == target_folder["path"]:
+                    self.workspace_page.refresh_current_project(reset_terminal=False)
+                else:
+                    self.workspace_page.set_project(target_folder, reset_terminal=True)
             self.project_selected.emit(target_folder)
 
         if hasattr(self, "txt_filter") and self.txt_filter.text().strip():

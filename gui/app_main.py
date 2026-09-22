@@ -154,7 +154,10 @@ class NeosMainApp(QWidget):
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
         if index == 1 and hasattr(self, "page_lumen"):
-            self.page_lumen.load_projects()
+            # Si el usuario está en el selector (pág 0), refrescamos la lista.
+            # Si está dentro de un espacio de trabajo (pág 1), preservamos hilos, terminal y estado.
+            if hasattr(self.page_lumen, "main_stack") and self.page_lumen.main_stack.currentIndex() == 0:
+                self.page_lumen.load_projects()
         elif index == 2 and hasattr(self, "page_proyectos"):
             self.page_proyectos.load_projects()
         elif index == 3 and hasattr(self, "page_actualizacion"):
