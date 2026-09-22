@@ -118,6 +118,65 @@ def launch_project_in_editor(editor_bin: str, project_path: str) -> Tuple[bool, 
 # GESTOR DE ENTORNOS VIRTUALES PYTHON
 # ---------------------------------------------------------------------
 
+def is_python_venv_active(venv_path: str) -> bool:
+    """Determina si el entorno virtual especificado está actualmente activo en os.environ."""
+    if not venv_path:
+        return False
+    active_env = os.environ.get("VIRTUAL_ENV", "")
+    if not active_env:
+        return False
+    try:
+        return os.path.samefile(active_env, venv_path)
+    except Exception:
+        return os.path.abspath(active_env) == os.path.abspath(venv_path)
+
+def activate_python_venv(venv_path: str) -> Tuple[bool, str]:
+    """
+    Activa el entorno virtual en el proceso actual de Abraxas.
+    Inyecta VIRTUAL_ENV y antepone bin/ a PATH, permitiendo que cualquier
+    subproceso, terminal integrada o comando ejecutado herede este entorno.
+    """
+    if not venv_path or not os.path.isdir(venv_path):
+        return False, "La carpeta del entorno virtual no existe."
+
+    bin_dir = os.path.join(venv_path, "bin")
+    if not os.path.exists(bin_dir):
+        return False, f"No se encontró el directorio bin en '{venv_path}'."
+
+    # Guardar PATH original si no se ha respaldado
+    if "_ABRAXAS_ORIGINAL_PATH" not in os.environ:
+        os.environ["_ABRAXAS_ORIGINAL_PATH"] = os.environ.get("PATH", "")
+
+    abs_venv = os.path.abspath(venv_path)
+    os.environ["VIRTUAL_ENV"] = abs_venv
+
+    # Actualizar PATH evitando duplicados
+    current_paths = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    if bin_dir in current_paths:
+        current_paths.remove(bin_dir)
+    os.environ["PATH"] = bin_dir + os.pathsep + os.pathsep.join(current_paths)
+
+    venv_name = os.path.basename(abs_venv)
+    return True, f"Entorno virtual '{venv_name}' activado correctamente en la sesión."
+
+def deactivate_python_venv() -> Tuple[bool, str]:
+    """
+    Desactiva el entorno virtual en la sesión de Abraxas,
+    restaurando PATH y eliminando la variable VIRTUAL_ENV.
+    """
+    old_env = os.environ.pop("VIRTUAL_ENV", None)
+    orig_path = os.environ.pop("_ABRAXAS_ORIGINAL_PATH", None)
+
+    if orig_path is not None:
+        os.environ["PATH"] = orig_path
+    elif old_env:
+        bin_dir = os.path.join(old_env, "bin")
+        paths = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p and p != bin_dir]
+        os.environ["PATH"] = os.pathsep.join(paths)
+
+    name = os.path.basename(old_env) if old_env else "entorno virtual"
+    return True, f"Entorno virtual '{name}' desactivado. Sesión restaurada al intérprete base."
+
 def inspect_python_venv(project_path: str) -> Dict[str, Any]:
     """Inspecciona a fondo el estado de entornos virtuales y dependencias de un proyecto."""
     data = {
@@ -168,10 +227,10 @@ def inspect_python_venv(project_path: str) -> Dict[str, Any]:
         venv_full_path = os.path.join(project_path, chosen)
         data["venv_path"] = venv_full_path
 
-        # Si el entorno virtual existe y cuenta con el binario de python, está 100% activo y operativo
+        # Si el entorno virtual existe y cuenta con el binario de python, inspeccionamos versión y si está activo en la sesión
         py_bin = os.path.join(venv_full_path, "bin", "python")
         if os.path.exists(py_bin):
-            data["is_active"] = True
+            data["is_active"] = is_python_venv_active(venv_full_path)
             try:
                 res = subprocess.run([py_bin, "--version"], capture_output=True, text=True, timeout=3)
                 data["python_version"] = res.stdout.strip() or res.stderr.strip()
@@ -315,6 +374,8 @@ def delete_python_venv(venv_path: str) -> Tuple[bool, str]:
     if not os.path.exists(act):
         return False, "Por seguridad, la carpeta no parece ser un entorno virtual (falta bin/activate)."
     try:
+        if is_python_venv_active(venv_path):
+            deactivate_python_venv()
         shutil.rmtree(venv_path)
         return True, f"Entorno virtual '{os.path.basename(venv_path)}' eliminado correctamente."
     except Exception as e:
