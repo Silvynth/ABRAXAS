@@ -18,6 +18,7 @@ secrets/
 .test/
 .sandbox/
 docs/
+scratch/
 
 # Certificados, Tokens y Claves Criptográficas
 *.pem

@@ -12,6 +12,7 @@ from gui.views.umbra.top_telemetry_hud import UmbraTopTelemetryHUD
 from gui.views.umbra.status_ribbon import UmbraStatusRibbon
 from gui.views.umbra.workers import UmbraTelemetryWorker
 from gui.views.umbra.drawer_terminal import UmbraDrawerTerminal
+from gui.views.umbra.sectors_view import UmbraSectorsDeck
 
 class UmbraView(QWidget):
     """
@@ -77,29 +78,9 @@ class UmbraView(QWidget):
         work_layout.setContentsMargins(0, 0, 0, 0)
         work_layout.setSpacing(8)
 
-        # Contenedor de Sectores Operativos
-        self.sectors_frame = QFrame()
-        self.sectors_frame.setProperty("class", "surface")
-        s_layout = QVBoxLayout(self.sectors_frame)
-        s_layout.setContentsMargins(20, 20, 20, 20)
-        s_layout.setSpacing(14)
-
-        lbl_sec_title = QLabel("<b>🛡️ SECTORES OPERATIVOS DE UMBRA</b>")
-        lbl_sec_title.setStyleSheet("font-size: 14px; color: #ffffff;")
-        s_layout.addWidget(lbl_sec_title)
-
-        lbl_desc = QLabel(
-            "El panel superior muestra la telemetría viva de alta precisión de tu estación (CPU, GPU, RAM, NVMe y Enlace). "
-            "En esta zona inferior se desplegarán los 3 sectores de mando en columnas contiguas: "
-            "<b>Sector 1:</b> Instantáneas Atómicas Btrfs & Snapper, "
-            "<b>Sector 2:</b> Gestor de Kernels y Evaluación Preventiva de Actualizaciones, y "
-            "<b>Sector 3:</b> Purgador de Sistema, Caché y Daemons Vitales."
-        )
-        lbl_desc.setStyleSheet("font-size: 12px; color: rgba(255, 255, 255, 0.65); line-height: 1.4;")
-        lbl_desc.setWordWrap(True)
-        s_layout.addWidget(lbl_desc)
-
-        work_layout.addWidget(self.sectors_frame, 1)
+        # 3 Columnas Operativas de Sectores
+        self.sectors_deck = UmbraSectorsDeck(self.work_deck)
+        work_layout.addWidget(self.sectors_deck, 1)
 
         # Terminal Táctica Desplegable (Sliding Drawer con Manija _)
         self.drawer_terminal = UmbraDrawerTerminal(self.work_deck)
@@ -111,9 +92,9 @@ class UmbraView(QWidget):
     def _on_terminal_state_changed(self, is_expanded: bool):
         """Oculta o muestra los sectores según el estado de la terminal sin mover la cubierta superior."""
         if is_expanded:
-            self.sectors_frame.setVisible(False)
+            self.sectors_deck.setVisible(False)
         else:
-            self.sectors_frame.setVisible(True)
+            self.sectors_deck.setVisible(True)
 
     def init_worker(self):
         """Inicia el worker de telemetría en segundo plano."""
