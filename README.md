@@ -106,27 +106,32 @@ cd ~/Development/Abraxas
 chmod +x install.sh
 ./install.sh
 
-# 3. Lanzar la suite
-abraxas
-# O mediante su alias táctico:
+# 3. Lanzar la aplicación
 abx
 ```
 
 ---
 
-## ⌨️ Comandos y CLI Integrado
+## 🖥️ Lanzamiento e Integración con el Sistema de Escritorio
 
-La suite provee el comando `abx` para interactuar rápidamente desde cualquier terminal:
+Tras ejecutar `./install.sh`, ABRAXAS se integra automáticamente como aplicación nativa en tu entorno Linux:
 
-| Comando | Función |
-| :--- | :--- |
-| `abx` | Lanza la aplicación interactiva de ABRAXAS. |
-| `abx lumen` | Abre directamente el panel de Desarrollo y Git Ops. |
-| `abx umbra` | Abre el HUD de Telemetría y Resiliencia del Sistema. |
-| `abx neos` | Abre el Workspace Hub y sincronizador de repositorios. |
-| `abx nous` | Abre la consola interactiva de IA local. |
-| `abx doctor` | Ejecuta un diagnóstico integral de dependencias, kernel y servicios. |
-| `abx --version` | Muestra la versión y estado del entorno. |
+* **Lanzador de Aplicaciones (`.desktop`):**
+  * Instalado en `~/.local/share/applications/abraxas.desktop` con icono vectorial SVG.
+  * Buscable al instante en tu menú o lanzador de aplicaciones del sistema (**Rofi, Wofi, Fuzzel, GNOME, KDE**) escribiendo **ABRAXAS**.
+
+* **Lanzamiento Rápido por Terminal:**
+  * El instalador genera un ejecutable ligero en `~/.local/bin/abx`.
+  ```bash
+  abx
+  ```
+  * Inicia la interfaz gráfica de alto rendimiento registrando los diagnósticos en caché (`~/.cache/abraxas/abraxas.log`).
+
+* **Espacios de Mando Visuales (Navegación Interna):**
+  * **Proyectos (NEOS):** Explorador central de repositorios con ordenación por arrastre (`drag & drop`) y sincronización asíncrona con GitHub.
+  * **Lumen (Dev Ops):** Espacio de trabajo interactivo con grafo de ramas horizontal, commits asistidos por IA y entornos virtuales aislados.
+  * **Umbra (Telemetría & Btrfs):** HUD de hardware de bajo nivel en tiempo real y cinta de resiliencia del sistema.
+  * **Ajustes:** Configuración transparente de temas, directorios y asignación de modelos locales en Ollama.
 
 ---
 
