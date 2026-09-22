@@ -43,6 +43,7 @@ from core.git_workflow import (
 from core.environments import (
     detect_installed_editors, get_preferred_editor, set_preferred_editor,
     launch_project_in_editor, inspect_python_venv, create_python_venv,
+    is_python_venv_active, activate_python_venv, deactivate_python_venv,
     install_project_dependencies, install_custom_packages,
     freeze_dependencies_to_file, list_installed_packages, delete_python_venv,
     inspect_docker_status, list_docker_containers, execute_docker_container_action,
@@ -3115,12 +3116,25 @@ class LumenProjectWorkspaceView(QWidget):
         self.current_venv_info = venv_info
 
         if venv_info["has_venv"]:
-            status_text = f"🟢 ACTIVO / VINCULADO ({venv_info['venv_name']})"
+            if venv_info["is_active"]:
+                status_text = f"🟢 ACTIVO EN SESIÓN ({venv_info['venv_name']})"
+            else:
+                status_text = f"⚪ INACTIVO / VINCULADO ({venv_info['venv_name']})"
             self.lbl_s2_venv_status.setText(f"Entorno Virtual: <b>{venv_info['venv_name']}</b>  |  Estado: {status_text}")
             self.lbl_s2_venv_details.setText(f"Intérprete: {venv_info['python_version']}  |  Paquetes instalados: {venv_info['package_count']}")
+            if hasattr(self, "lbl_env_status"):
+                if venv_info["is_active"]:
+                    self.lbl_env_status.setText(f"🟢 Activo ({venv_info['venv_name']})")
+                    self.lbl_env_status.setStyleSheet("font-weight: 800; color: #34d399; font-size: 13px;")
+                else:
+                    self.lbl_env_status.setText(f"⚪ Inactivo ({venv_info['venv_name']})")
+                    self.lbl_env_status.setStyleSheet("font-weight: 700; color: #9ca3af; font-size: 13px;")
         else:
             self.lbl_s2_venv_status.setText("Entorno Virtual: ⚠️ NO DETECTADO EN EL PROYECTO")
             self.lbl_s2_venv_details.setText("No se encontró ninguna carpeta .venv / venv / env con intérprete de Python.")
+            if hasattr(self, "lbl_env_status"):
+                self.lbl_env_status.setText("Sin Entorno")
+                self.lbl_env_status.setStyleSheet("font-weight: 700; color: #9ca3af; font-size: 13px;")
 
         deps_str = ", ".join(venv_info["dependency_files"]) if venv_info["dependency_files"] else "Ninguno detectado"
         self.lbl_s2_venv_deps.setText(f"Archivos de especificación: <b>{deps_str}</b>")
@@ -3139,6 +3153,15 @@ class LumenProjectWorkspaceView(QWidget):
             btn_std.clicked.connect(lambda: self.execute_create_venv(use_uv=False))
             self.venv_actions_layout.addWidget(btn_std)
         else:
+            if venv_info["is_active"]:
+                btn_toggle = LumenCyberActionButton("⏹️", f"Desactivar Entorno Virtual ({venv_info['venv_name']})", "Restaurar variables de entorno y PATH de la sesión al sistema base", accent_color="#f59e0b")
+                btn_toggle.clicked.connect(self.execute_deactivate_venv)
+                self.venv_actions_layout.addWidget(btn_toggle)
+            else:
+                btn_toggle = LumenCyberActionButton("🚀", f"Activar Entorno Virtual ({venv_info['venv_name']})", "Inyectar VIRTUAL_ENV y binarios en el PATH de la sesión de Abraxas", accent_color="#10b981")
+                btn_toggle.clicked.connect(self.execute_activate_venv)
+                self.venv_actions_layout.addWidget(btn_toggle)
+
             btn_sync_deps = LumenCyberActionButton("📦", "Sincronizar / Instalar Dependencias del Proyecto", "Instalar paquetes desde requirements.txt o pyproject.toml", accent_color="#10b981")
             btn_sync_deps.clicked.connect(self.execute_install_venv_dependencies)
             self.venv_actions_layout.addWidget(btn_sync_deps)
@@ -3171,6 +3194,29 @@ class LumenProjectWorkspaceView(QWidget):
         self.venv_worker = PythonVenvWorkerThread("create_venv", path, extra_args=use_uv)
         self.venv_worker.finished_task.connect(self.on_venv_worker_finished)
         self.venv_worker.start()
+
+    def execute_activate_venv(self):
+        """Activa el entorno virtual en la sesión actual de Abraxas."""
+        venv_path = getattr(self, "current_venv_info", {}).get("venv_path", "")
+        if not venv_path:
+            self.terminal_display.log_error("VENV", "No se detectó la ruta del entorno virtual para activar.")
+            return
+
+        success, msg = activate_python_venv(venv_path)
+        if success:
+            self.terminal_display.log("VENV", f"<b>{msg}</b> (PATH y VIRTUAL_ENV inyectados en la sesión).", tag_color="#10b981", prefix="🚀")
+        else:
+            self.terminal_display.log_error("VENV", msg)
+        self.refresh_sector2_venv_view()
+
+    def execute_deactivate_venv(self):
+        """Desactiva el entorno virtual activo en la sesión."""
+        success, msg = deactivate_python_venv()
+        if success:
+            self.terminal_display.log("VENV", f"<b>{msg}</b>", tag_color="#f59e0b", prefix="⏹️")
+        else:
+            self.terminal_display.log_error("VENV", msg)
+        self.refresh_sector2_venv_view()
 
     def execute_install_venv_dependencies(self):
         """Instala las dependencias del proyecto."""
@@ -9330,6 +9376,17 @@ class LumenProjectWorkspaceView(QWidget):
     def set_project(self, folder_data: dict, reset_terminal: bool = True):
         """Sincroniza y carga en tiempo real la información del proyecto seleccionado en el HUD y terminal coloreada."""
         self.project_data = folder_data
+
+        # Desactivar de forma segura entornos de otros proyectos si se cambia de carpeta
+        active_env = os.environ.get("VIRTUAL_ENV", "")
+        p_path = folder_data.get("path", "") if isinstance(folder_data, dict) else str(folder_data)
+        if active_env and p_path:
+            try:
+                if not os.path.abspath(active_env).startswith(os.path.abspath(p_path)):
+                    deactivate_python_venv()
+            except Exception:
+                pass
+
         sync = get_full_project_sync(folder_data)
         is_git = sync.get("git_info", {}).get("is_git", False)
         self.is_project_git = is_git

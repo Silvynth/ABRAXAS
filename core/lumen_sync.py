@@ -143,31 +143,43 @@ def get_project_git_info(project_path: str) -> Dict[str, Any]:
 
 
 def get_project_env_info(project_path: str) -> Dict[str, Any]:
-    """Detecta si el proyecto posee un entorno virtual Python activo o configurado."""
+    """Detecta si el proyecto posee un entorno virtual Python y si está realmente activo en la sesión."""
     if not project_path or not os.path.isdir(project_path):
-        return {"is_active": False, "text": "Desactivado"}
+        return {"is_active": False, "text": "Sin Entorno"}
 
     venv_names = [".venv", "venv", "env", ".env_py"]
+    detected_venv = None
     for vname in venv_names:
         cand = os.path.join(project_path, vname)
         if os.path.isdir(cand):
             bin_py = os.path.join(cand, "bin", "python")
             win_py = os.path.join(cand, "Scripts", "python.exe")
             if os.path.exists(bin_py) or os.path.exists(win_py):
-                return {
-                    "is_active": True,
-                    "text": f"Activado ({vname})"
-                }
+                detected_venv = (cand, vname)
+                break
 
-    # Verificar si está activo en el entorno actual del proceso
+    if not detected_venv:
+        return {"is_active": False, "text": "Sin Entorno"}
+
+    cand_path, vname = detected_venv
     active_env = os.environ.get("VIRTUAL_ENV", "")
-    if active_env and (active_env.startswith(project_path) or os.path.basename(active_env) in venv_names):
+    is_active = False
+    if active_env:
+        try:
+            is_active = os.path.samefile(active_env, cand_path)
+        except Exception:
+            is_active = os.path.abspath(active_env) == os.path.abspath(cand_path)
+
+    if is_active:
         return {
             "is_active": True,
-            "text": f"Activado ({os.path.basename(active_env)})"
+            "text": f"🟢 Activo ({vname})"
         }
-
-    return {"is_active": False, "text": "Desactivado"}
+    else:
+        return {
+            "is_active": False,
+            "text": f"⚪ Inactivo ({vname})"
+        }
 
 
 def get_project_docker_info(project_path: str) -> Dict[str, Any]:
