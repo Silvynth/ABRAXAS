@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt, Signal, QVariantAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QCursor, QFont
 
 class UmbraTerminalDisplay(QTextEdit):
-    """Visor de consola con formato HTML, timestamps precisos y estilo ciber-operador."""
+    """Visor de consola con formato HTML, timestamps precisos y estilo ciber-operador idéntico a Lumen."""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -21,27 +21,27 @@ class UmbraTerminalDisplay(QTextEdit):
         self.setLineWrapMode(QTextEdit.WidgetWidth)
         self.setStyleSheet("""
             QTextEdit {
-                background-color: rgba(12, 13, 18, 0.96);
-                color: #e2e8f0;
+                background-color: transparent;
+                color: #e5e7eb;
                 font-family: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', 'Consolas', monospace;
-                font-size: 12px;
+                font-size: 12.5px;
                 line-height: 1.5;
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 8px;
-                padding: 12px 16px;
-                selection-background-color: rgba(99, 102, 241, 0.45);
+                border: none;
+                padding: 14px 18px;
+                selection-background-color: rgba(99, 102, 241, 0.40);
                 selection-color: #ffffff;
             }
             QScrollBar:vertical {
                 background: rgba(255, 255, 255, 0.02);
-                width: 6px;
+                width: 8px;
                 margin: 0px;
-                border-radius: 3px;
+                border-radius: 4px;
             }
             QScrollBar::handle:vertical {
-                background: rgba(255, 255, 255, 0.15);
+                background: rgba(255, 255, 255, 0.12);
                 min-height: 24px;
-                border-radius: 3px;
+                border-radius: 4px;
+                border: none;
             }
             QScrollBar::handle:vertical:hover {
                 background: #6366f1;
@@ -51,12 +51,12 @@ class UmbraTerminalDisplay(QTextEdit):
             }
         """)
 
-    def log(self, tag: str, message: str, tag_color: str = "#818cf8", text_color: str = "#e2e8f0", prefix: str = "◈"):
+    def log(self, tag: str, message: str, tag_color: str = "#818cf8", text_color: str = "#e5e7eb", prefix: str = "◈"):
         """Inserta una línea estilizada con timestamp en la consola."""
         now = datetime.datetime.now().strftime("%H:%M:%S")
         html = (
-            f"<div style='margin-bottom: 3px; font-family: monospace;'>"
-            f"<span style='color: #64748b; font-weight: 500;'>[{now}]</span> "
+            f"<div style='margin-bottom: 4px; font-family: monospace;'>"
+            f"<span style='color: #6b7280; font-weight: 500;'>[{now}]</span> "
             f"<span style='color: {tag_color}; font-weight: 800;'>{prefix} [{tag}]</span> "
             f"<span style='color: {text_color};'>{message}</span>"
             f"</div>"
@@ -65,7 +65,7 @@ class UmbraTerminalDisplay(QTextEdit):
         self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
 
     def log_success(self, tag: str, message: str):
-        self.log(tag, message, tag_color="#10b981", text_color="#d1fae5", prefix="✔")
+        self.log(tag, message, tag_color="#34d399", text_color="#a7f3d0", prefix="✔")
 
     def log_info(self, tag: str, message: str):
         self.log(tag, message, tag_color="#38bdf8", text_color="#e0e7ff", prefix="ℹ")
@@ -80,10 +80,10 @@ class UmbraTerminalDisplay(QTextEdit):
         self.log(tag, message, tag_color="#fbbf24", text_color="#fef3c7", prefix="🧹")
 
     def log_warn(self, tag: str, message: str):
-        self.log(tag, message, tag_color="#f59e0b", text_color="#fde68a", prefix="⚠️")
+        self.log(tag, message, tag_color="#f59e0b", text_color="#fed7aa", prefix="⚠")
 
     def log_error(self, tag: str, message: str):
-        self.log(tag, message, tag_color="#ef4444", text_color="#fecaca", prefix="❌")
+        self.log(tag, message, tag_color="#f87171", text_color="#fecaca", prefix="✖")
 
 
 class HandleBarPill(QFrame):
@@ -160,8 +160,9 @@ class UmbraDrawerTerminal(QFrame):
         self.setObjectName("umbra_drawer_terminal")
         self.setStyleSheet("""
             QFrame#umbra_drawer_terminal {
-                background-color: rgba(18, 19, 26, 0.98);
-                border: 1px solid rgba(255, 255, 255, 0.09);
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(20, 23, 33, 0.95), stop:1 rgba(14, 16, 23, 0.95));
+                border: 1px solid rgba(99, 102, 241, 0.28);
                 border-radius: 12px 12px 0px 0px;
             }
         """)
@@ -174,36 +175,41 @@ class UmbraDrawerTerminal(QFrame):
         self.setGraphicsEffect(shadow)
 
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(14, 6, 14, 10)
-        self.main_layout.setSpacing(6)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
 
         # -------------------------------------------------------------
-        # CABECERA SUPERIOR: Prompt Izquierda, Manija Centro, Acciones Derecha
+        # CABECERA SUPERIOR: Prompt Izquierda, Manija Centro, Acciones Derecha (Estilo Lumen)
         # -------------------------------------------------------------
         self.header_bar = QWidget()
-        self.header_bar.setFixedHeight(30)
+        self.header_bar.setObjectName("umbra_terminal_header")
+        self.header_bar.setFixedHeight(38)
+        self.header_bar.setStyleSheet("""
+            QWidget#umbra_terminal_header {
+                background-color: rgba(255, 255, 255, 0.03);
+                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                border-top-left-radius: 12px;
+                border-top-right-radius: 12px;
+                padding: 4px 10px;
+            }
+        """)
         h_layout = QHBoxLayout(self.header_bar)
-        h_layout.setContentsMargins(4, 0, 4, 0)
+        h_layout.setContentsMargins(12, 6, 12, 6)
         h_layout.setSpacing(10)
 
-        # Left: Prompt & Estado
-        left_box = QHBoxLayout()
-        left_box.setSpacing(6)
-        
-        dot_live = QLabel("●")
-        dot_live.setStyleSheet("color: #10b981; font-size: 11px;")
-        left_box.addWidget(dot_live)
+        # Left: Dots Unix + Prompt & Estado
+        lbl_dots = QLabel("🔴  🟡  🟢")
+        lbl_dots.setStyleSheet("font-size: 9px;")
+        h_layout.addWidget(lbl_dots)
 
-        self.lbl_prompt = QLabel("umbra-console@cachyos:~$")
+        self.lbl_prompt = QLabel("umbra-terminal@cachyos:~$")
         self.lbl_prompt.setStyleSheet("""
-            color: #ffffff;
-            font-size: 11px;
+            color: #a5b4fc;
+            font-size: 12px;
             font-weight: 700;
-            font-family: 'JetBrains Mono', 'Fira Code', monospace;
-            letter-spacing: 0.5px;
+            font-family: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', monospace;
         """)
-        left_box.addWidget(self.lbl_prompt)
-        h_layout.addLayout(left_box)
+        h_layout.addWidget(self.lbl_prompt)
 
         # Center: Manija central superior interactiva (_)
         h_layout.addStretch()
@@ -212,19 +218,49 @@ class UmbraDrawerTerminal(QFrame):
         h_layout.addWidget(self.handle_pill)
         h_layout.addStretch()
 
-        # Right: Acciones y Botón de Toggle
+        # Right: Acciones idénticas a Lumen + Toggle Drawer
         right_box = QHBoxLayout()
         right_box.setSpacing(6)
 
         btn_copy = QPushButton("📋 Copiar")
         btn_copy.setCursor(QCursor(Qt.PointingHandCursor))
-        btn_copy.setStyleSheet(self._btn_style())
+        btn_copy.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.04);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 4px;
+                padding: 3px 9px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                color: #ffffff;
+                border-color: #6366f1;
+                background-color: rgba(99, 102, 241, 0.20);
+            }
+        """)
         btn_copy.clicked.connect(self.copy_output)
         right_box.addWidget(btn_copy)
 
-        btn_clear = QPushButton("🗑️ Limpiar")
+        btn_clear = QPushButton("🧹 Limpiar")
         btn_clear.setCursor(QCursor(Qt.PointingHandCursor))
-        btn_clear.setStyleSheet(self._btn_style())
+        btn_clear.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.04);
+                color: #9ca3af;
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 4px;
+                padding: 3px 9px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                color: #f87171;
+                border-color: #ef4444;
+                background-color: rgba(239, 68, 68, 0.15);
+            }
+        """)
         btn_clear.clicked.connect(self.clear_output)
         right_box.addWidget(btn_clear)
 
@@ -232,11 +268,11 @@ class UmbraDrawerTerminal(QFrame):
         self.btn_toggle.setCursor(QCursor(Qt.PointingHandCursor))
         self.btn_toggle.setStyleSheet("""
             QPushButton {
-                background: rgba(99, 102, 241, 0.20);
+                background: rgba(99, 102, 241, 0.18);
                 border: 1px solid rgba(99, 102, 241, 0.40);
-                border-radius: 5px;
+                border-radius: 4px;
                 color: #c7d2fe;
-                font-size: 10px;
+                font-size: 11px;
                 font-weight: 700;
                 padding: 3px 10px;
             }
@@ -249,11 +285,24 @@ class UmbraDrawerTerminal(QFrame):
         self.btn_toggle.clicked.connect(self.toggle_drawer)
         right_box.addWidget(self.btn_toggle)
 
+        self.lbl_t_status = QLabel("⚡ VISOR DE SALIDA [READ-ONLY]")
+        self.lbl_t_status.setStyleSheet("""
+            font-size: 10px;
+            font-weight: 800;
+            color: #38bdf8;
+            background-color: rgba(6, 182, 212, 0.12);
+            border: 1px solid rgba(6, 182, 212, 0.35);
+            border-radius: 4px;
+            padding: 2px 8px;
+            letter-spacing: 0.5px;
+        """)
+        right_box.addWidget(self.lbl_t_status)
+
         h_layout.addLayout(right_box)
         self.main_layout.addWidget(self.header_bar)
 
         # -------------------------------------------------------------
-        # CUERPO DE LA TERMINAL: Visor de texto enriquecido
+        # CUERPO DE LA TERMINAL: Visor de texto enriquecido idéntico a Lumen
         # -------------------------------------------------------------
         self.display = UmbraTerminalDisplay(self)
         self.main_layout.addWidget(self.display, 1)
@@ -265,24 +314,6 @@ class UmbraDrawerTerminal(QFrame):
         # Log inicial de bienvenida
         self.display.log_info("UMBRA", "Consola táctica del operador inicializada. Sistema listo.")
         self.display.log("SYS", "Núcleo CachyOS Linux · Resiliencia Btrfs & Gestor de Infraestructura", tag_color="#38bdf8")
-
-    def _btn_style(self) -> str:
-        return """
-            QPushButton {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.10);
-                border-radius: 5px;
-                color: rgba(255, 255, 255, 0.70);
-                font-size: 10px;
-                font-weight: 600;
-                padding: 3px 8px;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.12);
-                border-color: rgba(255, 255, 255, 0.25);
-                color: #ffffff;
-            }
-        """
 
     def init_animation(self):
         self.anim = QVariantAnimation(self)

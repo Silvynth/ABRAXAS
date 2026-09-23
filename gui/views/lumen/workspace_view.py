@@ -12,9 +12,10 @@ from PySide6.QtWidgets import (
     QTextEdit, QApplication, QStackedWidget, QSizePolicy,
     QProgressBar, QLineEdit, QComboBox, QStyledItemDelegate,
     QCheckBox, QMenu, QDialog, QRadioButton, QButtonGroup, QMessageBox,
-    QInputDialog, QSplitter
+    QInputDialog, QSplitter, QGraphicsDropShadowEffect
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread, QPoint
+from PySide6.QtGui import QColor
 
 from core import get_version
 from core.lumen_sync import get_full_project_sync
@@ -51,6 +52,7 @@ from core.environments import (
     deep_scan_docker_files, parse_compose_file_lightweight, detect_compose_tool, execute_compose_action
 )
 from gui.views.lumen.git_graph_canvas import LumenHorizontalGitGraphView
+from gui.views.umbra.sectors_view import SectorSwitcherPill
 
 
 
@@ -851,12 +853,18 @@ class LumenProjectWorkspaceView(QWidget):
         top_bar = QFrame()
         top_bar.setStyleSheet("""
             QFrame {
-                background-color: rgba(17, 19, 26, 0.85);
-                border: 1px solid rgba(99, 102, 241, 0.25);
-                border-radius: 10px;
+                background-color: rgba(18, 19, 26, 0.95);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 12px;
                 padding: 4px 8px;
             }
         """)
+        shadow_tb = QGraphicsDropShadowEffect(top_bar)
+        shadow_tb.setBlurRadius(20)
+        shadow_tb.setColor(QColor(0, 0, 0, 140))
+        shadow_tb.setOffset(0, 3)
+        top_bar.setGraphicsEffect(shadow_tb)
+
         tb_layout = QHBoxLayout(top_bar)
         tb_layout.setContentsMargins(10, 8, 12, 8)
         tb_layout.setSpacing(14)
@@ -950,13 +958,16 @@ class LumenProjectWorkspaceView(QWidget):
         self.hud_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self.hud_card.setStyleSheet("""
             QFrame.surface {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 rgba(19, 21, 29, 0.95), stop:1 rgba(15, 17, 23, 0.95));
-                border: 1px solid rgba(99, 102, 241, 0.30);
-                border-left: 5px solid #818cf8;
+                background-color: rgba(18, 19, 26, 0.95);
+                border: 1px solid rgba(255, 255, 255, 0.08);
                 border-radius: 12px;
             }
         """)
+        shadow_hud = QGraphicsDropShadowEffect(self.hud_card)
+        shadow_hud.setBlurRadius(20)
+        shadow_hud.setColor(QColor(0, 0, 0, 140))
+        shadow_hud.setOffset(0, 3)
+        self.hud_card.setGraphicsEffect(shadow_hud)
         hud_layout = QVBoxLayout(self.hud_card)
         hud_layout.setContentsMargins(18, 12, 18, 12)
         hud_layout.setSpacing(8)
@@ -1222,12 +1233,16 @@ class LumenProjectWorkspaceView(QWidget):
         self.terminal_frame.setProperty("class", "surface")
         self.terminal_frame.setStyleSheet("""
             QFrame.surface {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(20, 23, 33, 0.92), stop:1 rgba(14, 16, 23, 0.92));
-                border: 1px solid rgba(99, 102, 241, 0.28);
-                border-radius: 10px;
+                background-color: rgba(18, 19, 26, 0.95);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 12px;
             }
         """)
+        shadow_tf = QGraphicsDropShadowEffect(self.terminal_frame)
+        shadow_tf.setBlurRadius(20)
+        shadow_tf.setColor(QColor(0, 0, 0, 140))
+        shadow_tf.setOffset(0, 3)
+        self.terminal_frame.setGraphicsEffect(shadow_tf)
         b_layout = QVBoxLayout(self.terminal_frame)
         b_layout.setContentsMargins(0, 0, 0, 0)
         b_layout.setSpacing(0)
@@ -1369,30 +1384,49 @@ class LumenProjectWorkspaceView(QWidget):
         card = QFrame()
         card.setProperty("class", "surface")
         card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        card.setStyleSheet(f"""
-            QFrame.surface {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(22, 24, 34, 0.95), stop:1 rgba(16, 18, 25, 0.95));
+        card.setStyleSheet("""
+            QFrame.surface {
+                background-color: rgba(18, 19, 26, 0.95);
                 border: 1px solid rgba(255, 255, 255, 0.08);
-                border-top: 3px solid {accent_color};
-                border-radius: 10px;
-            }}
+                border-radius: 12px;
+            }
         """)
+        shadow_c = QGraphicsDropShadowEffect(card)
+        shadow_c.setBlurRadius(16)
+        shadow_c.setColor(QColor(0, 0, 0, 120))
+        shadow_c.setOffset(0, 3)
+        card.setGraphicsEffect(shadow_c)
+
         c_layout = QVBoxLayout(card)
-        c_layout.setContentsMargins(14, 10, 14, 10)
+        c_layout.setContentsMargins(14, 12, 14, 12)
         c_layout.setSpacing(6)
 
-        # Header del Sector
-        h_layout = QHBoxLayout()
+        # Header del Sector estilo Umbra (Micro-tag Haute Horlogerie + Título en blanco)
+        h_layout = QVBoxLayout()
+        h_layout.setContentsMargins(0, 0, 0, 4)
+        h_layout.setSpacing(2)
+
+        tag_mapping = {
+            1: "SECTOR 01 // PROTOCOLO GIT",
+            2: "SECTOR 02 // ENTORNOS & RUN",
+            3: "SECTOR 03 // HERRAMIENTAS & IA"
+        }
+        sector_tag_text = tag_mapping.get(sector_idx, f"SECTOR 0{sector_idx} // SISTEMA DEV")
+
+        lbl_tag = QLabel(sector_tag_text)
+        lbl_tag.setStyleSheet("font-size: 9px; font-weight: 800; letter-spacing: 1.5px; color: rgba(255, 255, 255, 0.40); text-transform: uppercase;")
+        h_layout.addWidget(lbl_tag)
+
         lbl_title = QLabel(title)
-        lbl_title.setStyleSheet(f"font-size: 12.5px; font-weight: 900; color: {accent_color}; letter-spacing: 0.5px;")
+        lbl_title.setStyleSheet("font-size: 13px; font-weight: 800; color: #ffffff; letter-spacing: 0.3px;")
         h_layout.addWidget(lbl_title)
-        h_layout.addStretch()
         c_layout.addLayout(h_layout)
 
+        card.lbl_tag = lbl_tag
         card.lbl_title = lbl_title
         card.action_buttons = []
         card.original_title = title
+        card.original_tag = sector_tag_text
         card.accent_color = accent_color
 
         if sector_idx == 1:
@@ -1444,55 +1478,33 @@ class LumenProjectWorkspaceView(QWidget):
                 card.nogit_container.setVisible(not is_git)
                 if is_git:
                     lbl_title.setText(card.original_title)
+                    lbl_tag.setText(card.original_tag)
                 else:
                     lbl_title.setText("🔄  SECTOR 1 : PROTOCOLO GIT  [NO INICIALIZADO]")
+                    lbl_tag.setText("SECTOR 01 // REPOSITORIO INACTIVO")
             elif sector_idx == 3:
                 if is_git:
                     lbl_title.setText(card.original_title)
+                    lbl_tag.setText(card.original_tag)
                     for b in card.action_buttons:
                         b.set_locked(False)
                 else:
                     lbl_title.setText("🧠  SECTOR 3 : HERRAMIENTAS & IA  [BLOQUEADO]")
+                    lbl_tag.setText("SECTOR 03 // REQUIERE REPOSITORIO GIT")
                     for b in card.action_buttons:
                         b.set_locked(True, "Bloqueado: Requiere repositorio Git")
 
         card.set_git_state = set_git_state
         return card
 
-    def create_sector1_dedicated_view(self) -> QFrame:
-        """Crea la ventana del Sector 1 con sub-páginas (0: Flujo Ciclos de Trabajo, 1: Selección IA AUDIT)."""
-        card = QFrame()
-        card.setProperty("class", "surface")
-        card.setStyleSheet("""
-            QFrame.surface {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(22, 24, 34, 0.95), stop:1 rgba(16, 18, 25, 0.95));
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-top: 3px solid #38bdf8;
-                border-radius: 10px;
-            }
-        """)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(10)
+    def _create_sector1_nav_bar(self, active_tab_index: int) -> QHBoxLayout:
+        """Crea la barra superior de navegación interactiva para las sub-páginas del Sector 1 con SectorSwitcherPill."""
+        nav = QHBoxLayout()
+        nav.setSpacing(10)
 
-        # Sub-stack interno reactivo para alternar entre Flujo y Vista IA AUDIT
-        self.sector1_sub_stack = LumenDynamicStackedWidget()
-
-        # =============================================================
-        # SUB-PÁGINA 0: FLUJO PRINCIPAL DE CICLOS DE TRABAJO
-        # =============================================================
-        page_work = QWidget()
-        w_lay = QVBoxLayout(page_work)
-        w_lay.setContentsMargins(0, 0, 0, 0)
-        w_lay.setSpacing(10)
-
-        head_w = QHBoxLayout()
-        head_w.setSpacing(12)
-
-        btn_back_to_main = QPushButton("◀  Volver al Menú de Sectores")
-        btn_back_to_main.setCursor(Qt.PointingHandCursor)
-        btn_back_to_main.setStyleSheet("""
+        btn_back = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setStyleSheet("""
             QPushButton {
                 background-color: rgba(56, 189, 248, 0.15);
                 color: #bae6fd;
@@ -1508,12 +1520,62 @@ class LumenProjectWorkspaceView(QWidget):
                 color: #ffffff;
             }
         """)
-        btn_back_to_main.clicked.connect(self.go_back_to_sectors_overview)
-        head_w.addWidget(btn_back_to_main)
+        btn_back.clicked.connect(self.go_back_to_sectors_overview)
+        nav.addWidget(btn_back)
 
-        lbl_w_title = QLabel("🔄  PRIMER SECTOR : FLUJO DE CICLOS DE TRABAJO")
-        lbl_w_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
-        head_w.addWidget(lbl_w_title)
+        lbl_title = QLabel("🔄  SECTOR 1 : PROTOCOLO GIT")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
+        nav.addWidget(lbl_title)
+
+        tab_names = ["🔄  Ciclos de Trabajo", "🌿  Control de Ramas", "🔀  Fusión de Ramas", "⚡  Estado y Sync"]
+        def on_s1_tab(idx: int):
+            if idx == 0:
+                self.go_back_to_work_cycles()
+            elif idx == 1:
+                self.open_branches_view()
+            elif idx == 2:
+                self.open_merge_view()
+            elif idx == 3:
+                self.open_sync_view()
+
+        switcher = SectorSwitcherPill(tab_names, on_s1_tab)
+        switcher._update_styles(active_tab_index)
+        nav.addWidget(switcher)
+        return nav
+
+    def create_sector1_dedicated_view(self) -> QFrame:
+        """Crea la ventana del Sector 1 con sub-páginas (0: Flujo Ciclos de Trabajo, 1: Selección IA AUDIT)."""
+        card = QFrame()
+        card.setProperty("class", "surface")
+        card.setStyleSheet("""
+            QFrame.surface {
+                background-color: rgba(18, 19, 26, 0.95);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 12px;
+            }
+        """)
+        shadow_s1 = QGraphicsDropShadowEffect(card)
+        shadow_s1.setBlurRadius(20)
+        shadow_s1.setColor(QColor(0, 0, 0, 140))
+        shadow_s1.setOffset(0, 3)
+        card.setGraphicsEffect(shadow_s1)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        # Sub-stack interno reactivo para alternar entre Flujo y Vista IA AUDIT
+        self.sector1_sub_stack = LumenDynamicStackedWidget()
+
+        # =============================================================
+        # SUB-PÁGINA 0: FLUJO PRINCIPAL DE CICLOS DE TRABAJO
+        # =============================================================
+        page_work = QWidget()
+        w_lay = QVBoxLayout(page_work)
+        w_lay.setContentsMargins(0, 0, 0, 0)
+        w_lay.setSpacing(10)
+
+        head_w = self._create_sector1_nav_bar(0)
         head_w.addStretch()
 
         lbl_flow_pill = QLabel("[ADD ➔ IA AUDIT ➔ IA COMMIT ➔ PUSH]")
@@ -2142,96 +2204,7 @@ class LumenProjectWorkspaceView(QWidget):
         layout.setSpacing(10)
 
         # 1. Cabecera
-        head = QHBoxLayout()
-        head.setSpacing(10)
-
-        btn_back_main = QPushButton("◀  Volver al Menú de Sectores")
-        btn_back_main.setCursor(Qt.PointingHandCursor)
-        btn_back_main.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(56, 189, 248, 0.15);
-                color: #bae6fd;
-                border: 1px solid rgba(56, 189, 248, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(56, 189, 248, 0.30);
-                border-color: #38bdf8;
-                color: #ffffff;
-            }
-        """)
-        btn_back_main.clicked.connect(self.go_back_to_sectors_overview)
-        head.addWidget(btn_back_main)
-
-        btn_to_work = QPushButton("🔄  Ciclos de Trabajo")
-        btn_to_work.setCursor(Qt.PointingHandCursor)
-        btn_to_work.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(99, 102, 241, 0.15);
-                color: #c7d2fe;
-                border: 1px solid rgba(99, 102, 241, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(99, 102, 241, 0.30);
-                border-color: #818cf8;
-                color: #ffffff;
-            }
-        """)
-        btn_to_work.clicked.connect(self.go_back_to_work_cycles)
-        head.addWidget(btn_to_work)
-
-        btn_to_merge = QPushButton("🔀  Fusión de Ramas")
-        btn_to_merge.setCursor(Qt.PointingHandCursor)
-        btn_to_merge.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(56, 189, 248, 0.15);
-                color: #bae6fd;
-                border: 1px solid rgba(56, 189, 248, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(56, 189, 248, 0.30);
-                border-color: #38bdf8;
-                color: #ffffff;
-            }
-        """)
-        btn_to_merge.clicked.connect(self.open_merge_view)
-        head.addWidget(btn_to_merge)
-
-        btn_to_sync = QPushButton("⚡  Estado y Sync")
-        btn_to_sync.setCursor(Qt.PointingHandCursor)
-        btn_to_sync.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(52, 211, 153, 0.15);
-                color: #6ee7b7;
-                border: 1px solid rgba(52, 211, 153, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(52, 211, 153, 0.30);
-                border-color: #34d399;
-                color: #ffffff;
-            }
-        """)
-        btn_to_sync.clicked.connect(self.open_sync_view)
-        head.addWidget(btn_to_sync)
-
-        lbl_title = QLabel("🌿  CONTROL DE RAMAS")
-        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
-        head.addWidget(lbl_title)
+        head = self._create_sector1_nav_bar(1)
         head.addStretch()
 
         lbl_pill = QLabel("[LUMEN • CONTROL DE RAMAS]")
@@ -2552,19 +2525,69 @@ class LumenProjectWorkspaceView(QWidget):
     # =================================================================
     # SEGUNDO SECTOR : ENTORNOS Y EJECUCIÓN (VENV & EDITOR LAUNCHER)
     # =================================================================
+    def _create_sector2_nav_bar(self, active_tab_index: int) -> QHBoxLayout:
+        """Crea la barra superior de navegación interactiva para las sub-páginas del Sector 2 con SectorSwitcherPill."""
+        nav = QHBoxLayout()
+        nav.setSpacing(10)
+
+        btn_back = QPushButton("◀  Volver al Menú de Sectores")
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(16, 185, 129, 0.15);
+                color: #6ee7b7;
+                border: 1px solid rgba(16, 185, 129, 0.40);
+                border-radius: 6px;
+                padding: 5px 12px;
+                font-weight: 700;
+                font-size: 11.5px;
+            }
+            QPushButton:hover {
+                background-color: rgba(16, 185, 129, 0.30);
+                border-color: #10b981;
+                color: #ffffff;
+            }
+        """)
+        btn_back.clicked.connect(self.go_back_to_sectors_overview)
+        nav.addWidget(btn_back)
+
+        lbl_title = QLabel("🚀  SECTOR 2 : ENTORNOS & RUN")
+        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #10b981; letter-spacing: 0.5px;")
+        nav.addWidget(lbl_title)
+
+        tab_names = ["💻  Selector de Editor", "🐍  Entorno Python", "🐳  Docker", "🔌  Puertos TCP"]
+        def on_s2_tab(idx: int):
+            if idx == 0:
+                self.open_sector2_editor_view()
+            elif idx == 1:
+                self.open_sector2_venv_view()
+            elif idx == 2:
+                self.open_sector2_docker_view()
+            elif idx == 3:
+                self.open_sector2_ports_view()
+
+        switcher = SectorSwitcherPill(tab_names, on_s2_tab)
+        switcher._update_styles(active_tab_index)
+        nav.addWidget(switcher)
+        return nav
+
     def create_sector2_dedicated_view(self) -> QFrame:
         """Crea la ventana interactiva dedicada del Sector 2 (Entornos y Ejecución)."""
         card = QFrame()
         card.setProperty("class", "surface")
         card.setStyleSheet("""
             QFrame.surface {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(22, 24, 34, 0.95), stop:1 rgba(16, 18, 25, 0.95));
+                background-color: rgba(18, 19, 26, 0.95);
                 border: 1px solid rgba(255, 255, 255, 0.08);
-                border-top: 3px solid #10b981;
-                border-radius: 10px;
+                border-radius: 12px;
             }
         """)
+        shadow_s2 = QGraphicsDropShadowEffect(card)
+        shadow_s2.setBlurRadius(20)
+        shadow_s2.setColor(QColor(0, 0, 0, 140))
+        shadow_s2.setOffset(0, 3)
+        card.setGraphicsEffect(shadow_s2)
+
         card.setMinimumHeight(440)
         card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QVBoxLayout(card)
@@ -2600,114 +2623,7 @@ class LumenProjectWorkspaceView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        # Barra de navegación con botón único de volver al menú global y pestañas
-        nav = QHBoxLayout()
-        nav.setSpacing(10)
-
-        btn_back = QPushButton("◀  Volver al Menú de Sectores")
-        btn_back.setCursor(Qt.PointingHandCursor)
-        btn_back.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(16, 185, 129, 0.15);
-                color: #6ee7b7;
-                border: 1px solid rgba(16, 185, 129, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(16, 185, 129, 0.30);
-                border-color: #10b981;
-                color: #ffffff;
-            }
-        """)
-        btn_back.clicked.connect(self.go_back_to_sectors_overview)
-        nav.addWidget(btn_back)
-
-        lbl_title = QLabel("🚀  SECTOR 2 : ENTORNOS & RUN")
-        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #10b981; letter-spacing: 0.5px;")
-        nav.addWidget(lbl_title)
-
-        # Pestañas de Navegación Sector 2
-        btn_tab_editor = QPushButton("💻  Selector de Editor")
-        btn_tab_editor.setCursor(Qt.PointingHandCursor)
-        btn_tab_editor.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(16, 185, 129, 0.25);
-                color: #ffffff;
-                border: 1px solid #10b981;
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 800;
-                font-size: 11px;
-            }
-        """)
-        nav.addWidget(btn_tab_editor)
-
-        btn_tab_venv = QPushButton("🐍  Entorno Python")
-        btn_tab_venv.setCursor(Qt.PointingHandCursor)
-        btn_tab_venv.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.05);
-                color: #9ca3af;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: rgba(52, 211, 153, 0.15);
-                color: #6ee7b7;
-                border-color: #34d399;
-            }
-        """)
-        btn_tab_venv.clicked.connect(self.open_sector2_venv_view)
-        nav.addWidget(btn_tab_venv)
-
-        btn_tab_docker = QPushButton("🐳  Docker")
-        btn_tab_docker.setCursor(Qt.PointingHandCursor)
-        btn_tab_docker.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.05);
-                color: #9ca3af;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: rgba(56, 189, 248, 0.15);
-                color: #38bdf8;
-                border-color: #38bdf8;
-            }
-        """)
-        btn_tab_docker.clicked.connect(self.open_sector2_docker_view)
-        nav.addWidget(btn_tab_docker)
-
-        btn_tab_ports = QPushButton("🔌  Puertos TCP")
-        btn_tab_ports.setCursor(Qt.PointingHandCursor)
-        btn_tab_ports.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.05);
-                color: #9ca3af;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: rgba(251, 191, 36, 0.15);
-                color: #fbbf24;
-                border-color: #fbbf24;
-            }
-        """)
-        btn_tab_ports.clicked.connect(self.open_sector2_ports_view)
-        nav.addWidget(btn_tab_ports)
-
+        nav = self._create_sector2_nav_bar(0)
         nav.addStretch()
 
         self.lbl_s2_pref_editor_pill = QLabel("PREFERIDO: DETECTANDO...")
@@ -2769,114 +2685,7 @@ class LumenProjectWorkspaceView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        # Barra de navegación
-        nav = QHBoxLayout()
-        nav.setSpacing(10)
-
-        btn_back = QPushButton("◀  Volver al Menú de Sectores")
-        btn_back.setCursor(Qt.PointingHandCursor)
-        btn_back.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(52, 211, 153, 0.15);
-                color: #6ee7b7;
-                border: 1px solid rgba(52, 211, 153, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(52, 211, 153, 0.30);
-                border-color: #34d399;
-                color: #ffffff;
-            }
-        """)
-        btn_back.clicked.connect(self.go_back_to_sectors_overview)
-        nav.addWidget(btn_back)
-
-        lbl_title = QLabel("🚀  SECTOR 2 : ENTORNOS & RUN")
-        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #10b981; letter-spacing: 0.5px;")
-        nav.addWidget(lbl_title)
-
-        # Pestañas de Navegación Sector 2
-        btn_tab_editor = QPushButton("💻  Selector de Editor")
-        btn_tab_editor.setCursor(Qt.PointingHandCursor)
-        btn_tab_editor.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.05);
-                color: #9ca3af;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: rgba(16, 185, 129, 0.15);
-                color: #6ee7b7;
-                border-color: #10b981;
-            }
-        """)
-        btn_tab_editor.clicked.connect(self.open_sector2_editor_view)
-        nav.addWidget(btn_tab_editor)
-
-        btn_tab_venv = QPushButton("🐍  Entorno Python")
-        btn_tab_venv.setCursor(Qt.PointingHandCursor)
-        btn_tab_venv.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(52, 211, 153, 0.25);
-                color: #ffffff;
-                border: 1px solid #34d399;
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 800;
-                font-size: 11px;
-            }
-        """)
-        nav.addWidget(btn_tab_venv)
-
-        btn_tab_docker = QPushButton("🐳  Docker")
-        btn_tab_docker.setCursor(Qt.PointingHandCursor)
-        btn_tab_docker.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.05);
-                color: #9ca3af;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: rgba(56, 189, 248, 0.15);
-                color: #38bdf8;
-                border-color: #38bdf8;
-            }
-        """)
-        btn_tab_docker.clicked.connect(self.open_sector2_docker_view)
-        nav.addWidget(btn_tab_docker)
-
-        btn_tab_ports = QPushButton("🔌  Puertos TCP")
-        btn_tab_ports.setCursor(Qt.PointingHandCursor)
-        btn_tab_ports.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.05);
-                color: #9ca3af;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: rgba(251, 191, 36, 0.15);
-                color: #fbbf24;
-                border-color: #fbbf24;
-            }
-        """)
-        btn_tab_ports.clicked.connect(self.open_sector2_ports_view)
-        nav.addWidget(btn_tab_ports)
-
+        nav = self._create_sector2_nav_bar(1)
         nav.addStretch()
 
         btn_refresh = QPushButton("🔄  Refrescar Estado")
@@ -3320,114 +3129,7 @@ class LumenProjectWorkspaceView(QWidget):
         layout.setContentsMargins(0, 0, 6, 0)
         layout.setSpacing(10)
 
-        # Barra de navegación
-        nav = QHBoxLayout()
-        nav.setSpacing(10)
-
-        btn_back = QPushButton("◀  Volver al Menú de Sectores")
-        btn_back.setCursor(Qt.PointingHandCursor)
-        btn_back.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(56, 189, 248, 0.15);
-                color: #bae6fd;
-                border: 1px solid rgba(56, 189, 248, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(56, 189, 248, 0.30);
-                border-color: #38bdf8;
-                color: #ffffff;
-            }
-        """)
-        btn_back.clicked.connect(self.go_back_to_sectors_overview)
-        nav.addWidget(btn_back)
-
-        lbl_title = QLabel("🚀  SECTOR 2 : ENTORNOS & RUN")
-        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #10b981; letter-spacing: 0.5px;")
-        nav.addWidget(lbl_title)
-
-        # Pestañas de Navegación Sector 2
-        btn_tab_editor = QPushButton("💻  Selector de Editor")
-        btn_tab_editor.setCursor(Qt.PointingHandCursor)
-        btn_tab_editor.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.05);
-                color: #9ca3af;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: rgba(16, 185, 129, 0.15);
-                color: #6ee7b7;
-                border-color: #10b981;
-            }
-        """)
-        btn_tab_editor.clicked.connect(self.open_sector2_editor_view)
-        nav.addWidget(btn_tab_editor)
-
-        btn_tab_venv = QPushButton("🐍  Entorno Python")
-        btn_tab_venv.setCursor(Qt.PointingHandCursor)
-        btn_tab_venv.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.05);
-                color: #9ca3af;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: rgba(52, 211, 153, 0.15);
-                color: #6ee7b7;
-                border-color: #34d399;
-            }
-        """)
-        btn_tab_venv.clicked.connect(self.open_sector2_venv_view)
-        nav.addWidget(btn_tab_venv)
-
-        btn_tab_docker = QPushButton("🐳  Docker")
-        btn_tab_docker.setCursor(Qt.PointingHandCursor)
-        btn_tab_docker.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(56, 189, 248, 0.25);
-                color: #ffffff;
-                border: 1px solid #38bdf8;
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 800;
-                font-size: 11px;
-            }
-        """)
-        nav.addWidget(btn_tab_docker)
-
-        btn_tab_ports = QPushButton("🔌  Puertos TCP")
-        btn_tab_ports.setCursor(Qt.PointingHandCursor)
-        btn_tab_ports.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.05);
-                color: #9ca3af;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: rgba(251, 191, 36, 0.15);
-                color: #fbbf24;
-                border-color: #fbbf24;
-            }
-        """)
-        btn_tab_ports.clicked.connect(self.open_sector2_ports_view)
-        nav.addWidget(btn_tab_ports)
-
+        nav = self._create_sector2_nav_bar(2)
         nav.addStretch()
 
         btn_refresh = QPushButton("🔄  Refrescar")
@@ -3565,114 +3267,7 @@ class LumenProjectWorkspaceView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        # Barra de navegación
-        nav = QHBoxLayout()
-        nav.setSpacing(10)
-
-        btn_back = QPushButton("◀  Volver al Menú de Sectores")
-        btn_back.setCursor(Qt.PointingHandCursor)
-        btn_back.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(251, 191, 36, 0.15);
-                color: #fde68a;
-                border: 1px solid rgba(251, 191, 36, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(251, 191, 36, 0.30);
-                border-color: #fbbf24;
-                color: #ffffff;
-            }
-        """)
-        btn_back.clicked.connect(self.go_back_to_sectors_overview)
-        nav.addWidget(btn_back)
-
-        lbl_title = QLabel("🚀  SECTOR 2 : ENTORNOS & RUN")
-        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #10b981; letter-spacing: 0.5px;")
-        nav.addWidget(lbl_title)
-
-        # Pestañas de Navegación Sector 2
-        btn_tab_editor = QPushButton("💻  Selector de Editor")
-        btn_tab_editor.setCursor(Qt.PointingHandCursor)
-        btn_tab_editor.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.05);
-                color: #9ca3af;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: rgba(16, 185, 129, 0.15);
-                color: #6ee7b7;
-                border-color: #10b981;
-            }
-        """)
-        btn_tab_editor.clicked.connect(self.open_sector2_editor_view)
-        nav.addWidget(btn_tab_editor)
-
-        btn_tab_venv = QPushButton("🐍  Entorno Python")
-        btn_tab_venv.setCursor(Qt.PointingHandCursor)
-        btn_tab_venv.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.05);
-                color: #9ca3af;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: rgba(52, 211, 153, 0.15);
-                color: #6ee7b7;
-                border-color: #34d399;
-            }
-        """)
-        btn_tab_venv.clicked.connect(self.open_sector2_venv_view)
-        nav.addWidget(btn_tab_venv)
-
-        btn_tab_docker = QPushButton("🐳  Docker")
-        btn_tab_docker.setCursor(Qt.PointingHandCursor)
-        btn_tab_docker.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.05);
-                color: #9ca3af;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: rgba(56, 189, 248, 0.15);
-                color: #38bdf8;
-                border-color: #38bdf8;
-            }
-        """)
-        btn_tab_docker.clicked.connect(self.open_sector2_docker_view)
-        nav.addWidget(btn_tab_docker)
-
-        btn_tab_ports = QPushButton("🔌  Puertos TCP")
-        btn_tab_ports.setCursor(Qt.PointingHandCursor)
-        btn_tab_ports.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(251, 191, 36, 0.25);
-                color: #ffffff;
-                border: 1px solid #fbbf24;
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 800;
-                font-size: 11px;
-            }
-        """)
-        nav.addWidget(btn_tab_ports)
-
+        nav = self._create_sector2_nav_bar(3)
         nav.addStretch()
 
         btn_refresh = QPushButton("🔄  Escanear Puertos")
@@ -4238,13 +3833,17 @@ class LumenProjectWorkspaceView(QWidget):
         card.setProperty("class", "surface")
         card.setStyleSheet("""
             QFrame.surface {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(22, 24, 34, 0.95), stop:1 rgba(16, 18, 25, 0.95));
+                background-color: rgba(18, 19, 26, 0.95);
                 border: 1px solid rgba(255, 255, 255, 0.08);
-                border-top: 3px solid #c084fc;
-                border-radius: 10px;
+                border-radius: 12px;
             }
         """)
+        shadow_s3 = QGraphicsDropShadowEffect(card)
+        shadow_s3.setBlurRadius(20)
+        shadow_s3.setColor(QColor(0, 0, 0, 140))
+        shadow_s3.setOffset(0, 3)
+        card.setGraphicsEffect(shadow_s3)
+
         card.setMinimumHeight(440)
         card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QVBoxLayout(card)
@@ -4269,7 +3868,7 @@ class LumenProjectWorkspaceView(QWidget):
         return card
 
     def _create_sector3_nav_bar(self, active_tab_index: int) -> QHBoxLayout:
-        """Crea la barra superior de navegación interactiva para las sub-páginas del Sector 3."""
+        """Crea la barra superior de navegación interactiva para las sub-páginas del Sector 3 con SectorSwitcherPill."""
         nav = QHBoxLayout()
         nav.setSpacing(10)
 
@@ -4298,47 +3897,18 @@ class LumenProjectWorkspaceView(QWidget):
         lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #c084fc; letter-spacing: 0.5px;")
         nav.addWidget(lbl_title)
 
-        tab_items = [
-            ("🛡️  Gestor .gitignore & .env", self.open_sector3_gitignore_view),
-            ("📖  Lector de Documentación", self.open_sector3_docs_view),
-            ("🤖  Utilidades IA & Ollama", self.open_sector3_ai_view),
-        ]
+        tab_names = ["🛡️  Gestor .gitignore & .env", "📖  Lector Documentación", "🤖  Utilidades IA"]
+        def on_s3_tab(idx: int):
+            if idx == 0:
+                self.open_sector3_gitignore_view()
+            elif idx == 1:
+                self.open_sector3_docs_view()
+            elif idx == 2:
+                self.open_sector3_ai_view()
 
-        for i, (tab_title, slot) in enumerate(tab_items):
-            btn = QPushButton(tab_title)
-            btn.setCursor(Qt.PointingHandCursor)
-            if i == active_tab_index:
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: rgba(192, 132, 252, 0.25);
-                        color: #ffffff;
-                        border: 1px solid #c084fc;
-                        border-radius: 6px;
-                        padding: 4px 10px;
-                        font-weight: 800;
-                        font-size: 11px;
-                    }
-                """)
-            else:
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: rgba(255, 255, 255, 0.05);
-                        color: #9ca3af;
-                        border: 1px solid rgba(255, 255, 255, 0.12);
-                        border-radius: 6px;
-                        padding: 4px 10px;
-                        font-weight: 600;
-                        font-size: 11px;
-                    }
-                    QPushButton:hover {
-                        background-color: rgba(192, 132, 252, 0.15);
-                        color: #e9d5ff;
-                        border-color: #c084fc;
-                    }
-                """)
-                btn.clicked.connect(slot)
-            nav.addWidget(btn)
-
+        switcher = SectorSwitcherPill(tab_names, on_s3_tab)
+        switcher._update_styles(active_tab_index)
+        nav.addWidget(switcher)
         nav.addStretch()
         return nav
 
@@ -6067,96 +5637,7 @@ class LumenProjectWorkspaceView(QWidget):
         layout.setSpacing(10)
 
         # 1. Cabecera de Navegación del Módulo 3
-        head = QHBoxLayout()
-        head.setSpacing(10)
-
-        btn_back_main = QPushButton("◀  Volver al Menú de Sectores")
-        btn_back_main.setCursor(Qt.PointingHandCursor)
-        btn_back_main.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(56, 189, 248, 0.15);
-                color: #bae6fd;
-                border: 1px solid rgba(56, 189, 248, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(56, 189, 248, 0.30);
-                border-color: #38bdf8;
-                color: #ffffff;
-            }
-        """)
-        btn_back_main.clicked.connect(self.go_back_to_sectors_overview)
-        head.addWidget(btn_back_main)
-
-        btn_to_work = QPushButton("🔄  Ciclos de Trabajo")
-        btn_to_work.setCursor(Qt.PointingHandCursor)
-        btn_to_work.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(99, 102, 241, 0.15);
-                color: #c7d2fe;
-                border: 1px solid rgba(99, 102, 241, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(99, 102, 241, 0.30);
-                border-color: #818cf8;
-                color: #ffffff;
-            }
-        """)
-        btn_to_work.clicked.connect(self.go_back_to_work_cycles)
-        head.addWidget(btn_to_work)
-
-        btn_to_branches = QPushButton("🌿  Control de Ramas")
-        btn_to_branches.setCursor(Qt.PointingHandCursor)
-        btn_to_branches.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(52, 211, 153, 0.15);
-                color: #6ee7b7;
-                border: 1px solid rgba(52, 211, 153, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(52, 211, 153, 0.30);
-                border-color: #34d399;
-                color: #ffffff;
-            }
-        """)
-        btn_to_branches.clicked.connect(self.open_branches_view)
-        head.addWidget(btn_to_branches)
-
-        btn_to_sync = QPushButton("⚡  Estado y Sync")
-        btn_to_sync.setCursor(Qt.PointingHandCursor)
-        btn_to_sync.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(52, 211, 153, 0.15);
-                color: #6ee7b7;
-                border: 1px solid rgba(52, 211, 153, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(52, 211, 153, 0.30);
-                border-color: #34d399;
-                color: #ffffff;
-            }
-        """)
-        btn_to_sync.clicked.connect(self.open_sync_view)
-        head.addWidget(btn_to_sync)
-
-        lbl_title = QLabel("🔀  FUSIÓN DE RAMAS (GIT MERGE)")
-        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #38bdf8; letter-spacing: 0.5px;")
-        head.addWidget(lbl_title)
+        head = self._create_sector1_nav_bar(2)
         head.addStretch()
 
         btn_toggle_graph = QPushButton("📊  Alternar Grafo / Terminal")
@@ -7344,96 +6825,7 @@ class LumenProjectWorkspaceView(QWidget):
         layout.setSpacing(10)
 
         # 1. Cabecera de Navegación del Módulo 4
-        head = QHBoxLayout()
-        head.setSpacing(10)
-
-        btn_back_main = QPushButton("◀  Volver al Menú de Sectores")
-        btn_back_main.setCursor(Qt.PointingHandCursor)
-        btn_back_main.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(56, 189, 248, 0.15);
-                color: #bae6fd;
-                border: 1px solid rgba(56, 189, 248, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(56, 189, 248, 0.30);
-                border-color: #38bdf8;
-                color: #ffffff;
-            }
-        """)
-        btn_back_main.clicked.connect(self.go_back_to_sectors_overview)
-        head.addWidget(btn_back_main)
-
-        btn_to_work = QPushButton("🔄  Ciclos de Trabajo")
-        btn_to_work.setCursor(Qt.PointingHandCursor)
-        btn_to_work.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(99, 102, 241, 0.15);
-                color: #c7d2fe;
-                border: 1px solid rgba(99, 102, 241, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(99, 102, 241, 0.30);
-                border-color: #818cf8;
-                color: #ffffff;
-            }
-        """)
-        btn_to_work.clicked.connect(self.go_back_to_work_cycles)
-        head.addWidget(btn_to_work)
-
-        btn_to_branches = QPushButton("🌿  Control de Ramas")
-        btn_to_branches.setCursor(Qt.PointingHandCursor)
-        btn_to_branches.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(52, 211, 153, 0.15);
-                color: #6ee7b7;
-                border: 1px solid rgba(52, 211, 153, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(52, 211, 153, 0.30);
-                border-color: #34d399;
-                color: #ffffff;
-            }
-        """)
-        btn_to_branches.clicked.connect(self.open_branches_view)
-        head.addWidget(btn_to_branches)
-
-        btn_to_merge = QPushButton("🔀  Fusión de Ramas")
-        btn_to_merge.setCursor(Qt.PointingHandCursor)
-        btn_to_merge.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(56, 189, 248, 0.15);
-                color: #bae6fd;
-                border: 1px solid rgba(56, 189, 248, 0.40);
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-weight: 700;
-                font-size: 11.5px;
-            }
-            QPushButton:hover {
-                background-color: rgba(56, 189, 248, 0.30);
-                border-color: #38bdf8;
-                color: #ffffff;
-            }
-        """)
-        btn_to_merge.clicked.connect(self.open_merge_view)
-        head.addWidget(btn_to_merge)
-
-        lbl_title = QLabel("⚡  ESTADO Y SINCRONIZACIÓN")
-        lbl_title.setStyleSheet("font-size: 12.5px; font-weight: 900; color: #34d399; letter-spacing: 0.5px;")
-        head.addWidget(lbl_title)
+        head = self._create_sector1_nav_bar(3)
         head.addStretch()
 
         btn_toggle_graph = QPushButton("📊  Alternar Grafo / Terminal")
