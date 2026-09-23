@@ -89,9 +89,9 @@ class UmbraView(QWidget):
 
         layout.addWidget(self.work_deck, 1)
 
-    def _on_terminal_state_changed(self, is_expanded: bool):
+    def _on_terminal_state_changed(self, mode):
         """Oculta o muestra los sectores según el estado de la terminal sin mover la cubierta superior."""
-        if is_expanded:
+        if mode == "full" or mode is True:
             self.sectors_deck.setVisible(False)
         else:
             self.sectors_deck.setVisible(True)

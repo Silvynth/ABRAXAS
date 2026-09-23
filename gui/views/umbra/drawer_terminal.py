@@ -144,13 +144,14 @@ class UmbraDrawerTerminal(QFrame):
     - Estado Expandido (Max Workspace ~420px): Sube con animación OutCubic cubriendo los sectores.
     - Manija central superior interactiva (_) para alternar estados con un clic.
     """
-    state_changed = Signal(bool)  # True: Expandido, False: Contraído
+    state_changed = Signal(str)  # "collapsed", "half", "full"
 
     COLLAPSED_HEIGHT = 42
     DEFAULT_EXPANDED_HEIGHT = 380
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.drawer_step = 0  # 0: colapsado, 1: mitad, 2: maximo, 3: mitad
         self.is_expanded = False
         self.expanded_height = self.DEFAULT_EXPANDED_HEIGHT
         self.init_ui()
@@ -264,7 +265,7 @@ class UmbraDrawerTerminal(QFrame):
         btn_clear.clicked.connect(self.clear_output)
         right_box.addWidget(btn_clear)
 
-        self.btn_toggle = QPushButton("▲ Expandir")
+        self.btn_toggle = QPushButton("▲ Abrir")
         self.btn_toggle.setCursor(QCursor(Qt.PointingHandCursor))
         self.btn_toggle.setStyleSheet("""
             QPushButton {
@@ -282,8 +283,29 @@ class UmbraDrawerTerminal(QFrame):
                 color: #ffffff;
             }
         """)
-        self.btn_toggle.clicked.connect(self.toggle_drawer)
+        self.btn_toggle.clicked.connect(self.toggle_open_minimize)
         right_box.addWidget(self.btn_toggle)
+
+        self.btn_maximize = QPushButton("⛶ Maximizar")
+        self.btn_maximize.setCursor(QCursor(Qt.PointingHandCursor))
+        self.btn_maximize.setStyleSheet("""
+            QPushButton {
+                background: rgba(168, 85, 247, 0.18);
+                border: 1px solid rgba(168, 85, 247, 0.40);
+                border-radius: 4px;
+                color: #e9d5ff;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 3px 10px;
+            }
+            QPushButton:hover {
+                background: rgba(168, 85, 247, 0.35);
+                border-color: #c084fc;
+                color: #ffffff;
+            }
+        """)
+        self.btn_maximize.clicked.connect(self.toggle_maximize)
+        right_box.addWidget(self.btn_maximize)
 
         self.lbl_t_status = QLabel("⚡ VISOR DE SALIDA [READ-ONLY]")
         self.lbl_t_status.setStyleSheet("""
@@ -317,8 +339,8 @@ class UmbraDrawerTerminal(QFrame):
 
     def init_animation(self):
         self.anim = QVariantAnimation(self)
-        self.anim.setDuration(320)
-        self.anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.anim.setDuration(150)
+        self.anim.setEasingCurve(QEasingCurve.OutQuad)
         self.anim.valueChanged.connect(self._on_anim_frame)
         self.anim.finished.connect(self._on_anim_finished)
 
@@ -326,55 +348,97 @@ class UmbraDrawerTerminal(QFrame):
         self.setFixedHeight(int(val))
 
     def _on_anim_finished(self):
-        if not self.is_expanded:
+        if self.drawer_step == 0:
             self.display.setVisible(False)
-            self.btn_toggle.setText("▲ Expandir")
+            self.btn_toggle.setText("▲ Abrir")
+            self.btn_maximize.setText("⛶ Maximizar")
             self.handle_pill.set_glow(False)
             self.setFixedHeight(self.COLLAPSED_HEIGHT)
-        else:
-            self.btn_toggle.setText("▼ Contraer")
+            self.is_expanded = False
+            self.state_changed.emit("collapsed")
+        elif self.drawer_step in (1, 3):
+            self.btn_toggle.setText("▼ Minimizar")
+            self.btn_maximize.setText("⛶ Maximizar")
             self.handle_pill.set_glow(True)
-            self.setMinimumHeight(self.COLLAPSED_HEIGHT)
-            self.setMaximumHeight(16777215)
-        self.state_changed.emit(self.is_expanded)
+            self.is_expanded = True
+            self.state_changed.emit("half")
+        elif self.drawer_step == 2:
+            self.btn_toggle.setText("▼ Minimizar")
+            self.btn_maximize.setText("❐ Restaurar")
+            self.handle_pill.set_glow(True)
+            self.is_expanded = True
+            self.state_changed.emit("full")
+
+    def step_drawer(self):
+        """
+        Ciclo interactivo de 4 estados con el botón _ (handle pill):
+        0 (Minimizado 42px) -> 1 (Mitad de vista ~50%) -> 2 (Máximo 100%) -> 3 (Mitad de vista ~50%) -> 0 (Minimizado 42px)
+        """
+        self.drawer_step = (self.drawer_step + 1) % 4
+        self._apply_drawer_step(self.drawer_step)
+
+    def toggle_open_minimize(self):
+        """Si está colapsado, abre a la mitad. Si está abierto (mitad o máximo), minimiza a la barra."""
+        if self.drawer_step == 0:
+            self.drawer_step = 1
+        else:
+            self.drawer_step = 0
+        self._apply_drawer_step(self.drawer_step)
+
+    def toggle_maximize(self):
+        """Si está al máximo, restaura a la mitad. Si está minimizado o a la mitad, maximiza al 100%."""
+        if self.drawer_step == 2:
+            self.drawer_step = 1
+        else:
+            self.drawer_step = 2
+        self._apply_drawer_step(self.drawer_step)
+
+    def _apply_drawer_step(self, step: int):
+        if self.anim.state() == QVariantAnimation.Running:
+            self.anim.stop()
+
+        parent_w = self.parentWidget()
+        parent_h = parent_w.height() if parent_w and parent_w.height() > 100 else (self.window().height() - 250 if self.window() else 480)
+        parent_h = max(420, parent_h)
+
+        if step == 0:
+            target_h = self.COLLAPSED_HEIGHT
+            self.handle_pill.set_glow(False)
+            self.btn_toggle.setText("▲ Abrir")
+            self.btn_maximize.setText("⛶ Maximizar")
+            self.state_changed.emit("collapsed")
+        elif step in (1, 3):
+            self.display.setVisible(True)
+            target_h = max(260, int(parent_h * 0.52))
+            self.handle_pill.set_glow(True)
+            self.btn_toggle.setText("▼ Minimizar")
+            self.btn_maximize.setText("⛶ Maximizar")
+            self.state_changed.emit("half")
+        else: # step == 2 (Máximo)
+            self.display.setVisible(True)
+            target_h = max(380, parent_h)
+            self.handle_pill.set_glow(True)
+            self.btn_toggle.setText("▼ Minimizar")
+            self.btn_maximize.setText("❐ Restaurar")
+            self.state_changed.emit("full")
+
+        self.anim.setStartValue(self.height())
+        self.anim.setEndValue(target_h)
+        self.anim.start()
 
     def toggle_drawer(self):
-        """Alterna el estado entre contraído abajo y expandido máximo."""
-        if self.is_expanded:
-            self.collapse()
-        else:
-            self.expand()
+        """Alterna avanzando en el ciclo de 4 pasos."""
+        self.step_drawer()
 
     def expand(self, target_height: int = None):
-        """Despliega la terminal hacia arriba sin desbordar el contenedor."""
-        if self.anim.state() == QVariantAnimation.Running:
-            self.anim.stop()
-
-        self.display.setVisible(True)
-        # Limitar estrictamente la altura para no empujar los paneles fijos superiores
-        parent_h = self.parent().height() if self.parent() else 400
-        h_target = min(target_height or self.expanded_height, parent_h)
-        if h_target < 180 and parent_h > 200:
-            h_target = parent_h
-
-        self.anim.setStartValue(self.height())
-        self.anim.setEndValue(h_target)
-        self.is_expanded = True
-        self.btn_toggle.setText("▼ Contraer")
-        self.handle_pill.set_glow(True)
-        self.anim.start()
+        """Despliega directamente a la mitad."""
+        self.drawer_step = 1
+        self._apply_drawer_step(1)
 
     def collapse(self):
-        """Contrae la terminal a su barra mínima en la base (42px)."""
-        if self.anim.state() == QVariantAnimation.Running:
-            self.anim.stop()
-
-        self.anim.setStartValue(self.height())
-        self.anim.setEndValue(self.COLLAPSED_HEIGHT)
-        self.is_expanded = False
-        self.btn_toggle.setText("▲ Expandir")
-        self.handle_pill.set_glow(False)
-        self.anim.start()
+        """Contrae la terminal a su barra mínima (42px)."""
+        self.drawer_step = 0
+        self._apply_drawer_step(0)
 
     def copy_output(self):
         text = self.display.toPlainText()

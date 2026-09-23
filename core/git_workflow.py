@@ -394,24 +394,24 @@ def get_git_branches_matrix(project_path: str) -> Dict[str, Any]:
             status_label = "Stale/Gone"
         elif refname.startswith("refs/heads/"):
             if is_mine:
-                color = "#fde047"
+                color = "#a855f7"
                 category = "local_mine"
                 status_label = "Activa (Mía)" if is_active else "Local (Mía)"
             else:
-                color = "#f3f4f6"
+                color = "#cbd5e1"
                 category = "local_other"
                 status_label = "Activa" if is_active else "Local"
         elif is_remote:
             if not is_mine:
-                color = "#4ade80"
+                color = "#34d399"
                 category = "remote_other"
                 status_label = f"Remota ({author})" if author else "Remota"
             else:
-                color = "#60a5fa"
+                color = "#38bdf8"
                 category = "remote_mine"
                 status_label = "Remota (Mía)"
         else:
-            color = "#9ca3af"
+            color = "#94a3b8"
             category = "other"
             status_label = "Desconocido"
 

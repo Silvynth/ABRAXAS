@@ -41,6 +41,7 @@ class SectorSwitcherPill(QFrame):
 
     def _select_tab(self, index: int):
         self._update_styles(index)
+        QApplication.processEvents()
         if self.on_change_callback:
             self.on_change_callback(index)
 

@@ -53,6 +53,7 @@ from core.environments import (
 )
 from gui.views.lumen.git_graph_canvas import LumenHorizontalGitGraphView
 from gui.views.umbra.sectors_view import SectorSwitcherPill
+from gui.views.umbra.drawer_terminal import HandleBarPill
 
 
 
@@ -834,6 +835,14 @@ class LumenProjectWorkspaceView(QWidget):
         self.selected_merge_target = ""
         self.selected_merge_author = ""
         self.selected_merge_commits = []
+
+        # Registro de switchers para sincronización atómica (elimina retraso de 1 acción)
+        self.sector1_switchers = []
+        self.sector2_switchers = []
+        self.sector3_switchers = []
+        self.is_terminal_collapsed = False
+        self.terminal_default_height = 240
+
         self.init_ui()
 
         # Temporizador para la hora en vivo
@@ -841,6 +850,120 @@ class LumenProjectWorkspaceView(QWidget):
         self.clock_timer.setInterval(1000)
         self.clock_timer.timeout.connect(self.update_clock)
         self.clock_timer.start()
+
+    def _sync_sector1_tabs(self, tab_idx: int):
+        """Sincroniza instantáneamente todos los switchers del Sector 1."""
+        for s in getattr(self, "sector1_switchers", []):
+            s._update_styles(tab_idx)
+
+    def _sync_sector2_tabs(self, tab_idx: int):
+        """Sincroniza instantáneamente todos los switchers del Sector 2."""
+        for s in getattr(self, "sector2_switchers", []):
+            s._update_styles(tab_idx)
+
+    def _sync_sector3_tabs(self, tab_idx: int):
+        """Sincroniza instantáneamente todos los switchers del Sector 3."""
+        for s in getattr(self, "sector3_switchers", []):
+            s._update_styles(tab_idx)
+
+    def set_terminal_state(self, state: int):
+        """
+        Aplica uno de los 3 estados a la terminal de Lumen:
+        0: Collapsed (38px, barra compacta, contenido oculto)
+        1: Normal / Mitad (240px+, contenido visible junto con sectores y HUD)
+        2: Maximized (100% de la vista, ocultando temporalmente los sectores y HUD)
+        """
+        if not hasattr(self, "terminal_frame") or not hasattr(self, "terminal_stack"):
+            return
+        self.terminal_state = state
+        self.is_terminal_collapsed = (state == 0)
+
+        if state == 0:  # Collapsed / Oculta
+            self.terminal_stack.setVisible(False)
+            self.terminal_frame.setMinimumHeight(38)
+            self.terminal_frame.setMaximumHeight(38)
+            self.terminal_frame.setFixedHeight(38)
+            if hasattr(self, "bottom_terminal_container"):
+                self.bottom_terminal_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                self.bottom_terminal_container.setFixedHeight(38)
+            if hasattr(self, "hud_card"):
+                self.hud_card.setVisible(True)
+            if hasattr(self, "sectors_stack"):
+                self.sectors_stack.setVisible(True)
+            if hasattr(self, "btn_toggle_terminal"):
+                self.btn_toggle_terminal.setText("▲ Abrir")
+            if hasattr(self, "btn_maximize_terminal"):
+                self.btn_maximize_terminal.setText("⛶ Maximizar")
+            if hasattr(self, "handle_pill"):
+                self.handle_pill.set_glow(False)
+            if hasattr(self, "btn_s3_toggle_terminal"):
+                self.btn_s3_toggle_terminal.setText("📟  Mostrar Terminal")
+
+        elif state == 1:  # Normal / Mitad
+            self.terminal_stack.setVisible(True)
+            self.terminal_frame.setMinimumHeight(240)
+            self.terminal_frame.setMaximumHeight(16777215)
+            if hasattr(self, "bottom_terminal_container"):
+                self.bottom_terminal_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                self.bottom_terminal_container.setMaximumHeight(16777215)
+            if hasattr(self, "hud_card"):
+                self.hud_card.setVisible(True)
+            if hasattr(self, "sectors_stack"):
+                self.sectors_stack.setVisible(True)
+            if hasattr(self, "btn_toggle_terminal"):
+                self.btn_toggle_terminal.setText("▼ Minimizar")
+            if hasattr(self, "btn_maximize_terminal"):
+                self.btn_maximize_terminal.setText("⛶ Maximizar")
+            if hasattr(self, "handle_pill"):
+                self.handle_pill.set_glow(True)
+            if hasattr(self, "btn_s3_toggle_terminal"):
+                self.btn_s3_toggle_terminal.setText("📟  Ocultar Terminal")
+
+        elif state == 2:  # Maximized / 100% de la vista
+            self.terminal_stack.setVisible(True)
+            self.terminal_frame.setMinimumHeight(450)
+            self.terminal_frame.setMaximumHeight(16777215)
+            if hasattr(self, "bottom_terminal_container"):
+                self.bottom_terminal_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                self.bottom_terminal_container.setMaximumHeight(16777215)
+            if hasattr(self, "hud_card"):
+                self.hud_card.setVisible(False)
+            if hasattr(self, "sectors_stack"):
+                self.sectors_stack.setVisible(False)
+            if hasattr(self, "btn_toggle_terminal"):
+                self.btn_toggle_terminal.setText("▼ Minimizar")
+            if hasattr(self, "btn_maximize_terminal"):
+                self.btn_maximize_terminal.setText("❐ Restaurar")
+            if hasattr(self, "handle_pill"):
+                self.handle_pill.set_glow(True)
+            if hasattr(self, "btn_s3_toggle_terminal"):
+                self.btn_s3_toggle_terminal.setText("📟  Ocultar Terminal")
+
+        self.updateGeometry()
+
+    def toggle_terminal_collapsed(self):
+        """Si está colapsada, abre a tamaño normal (1). Si está abierta o maximizada, minimiza a 38px (0)."""
+        curr = getattr(self, "terminal_state", 1 if not getattr(self, "is_terminal_collapsed", False) else 0)
+        new_state = 1 if curr == 0 else 0
+        self.set_terminal_state(new_state)
+
+    def toggle_terminal_maximized(self):
+        """Si está maximizada, restaura a normal (1). Si está colapsada o normal, maximiza a 100% (2)."""
+        curr = getattr(self, "terminal_state", 1 if not getattr(self, "is_terminal_collapsed", False) else 0)
+        new_state = 1 if curr == 2 else 2
+        self.set_terminal_state(new_state)
+
+    def cycle_terminal_handle(self):
+        """Ciclo interactivo de 4 pasos al hacer clic en el handle _: 0 (colapsado) -> 1 (mitad) -> 2 (máximo) -> 1 (mitad) -> 0."""
+        step = getattr(self, "terminal_step_cycle", 0)
+        step = (step + 1) % 4
+        self.terminal_step_cycle = step
+        if step == 0:
+            self.set_terminal_state(0)
+        elif step in (1, 3):
+            self.set_terminal_state(1)
+        elif step == 2:
+            self.set_terminal_state(2)
 
     def init_ui(self):
         root_layout = QVBoxLayout(self)
@@ -1233,31 +1356,32 @@ class LumenProjectWorkspaceView(QWidget):
         self.terminal_frame.setProperty("class", "surface")
         self.terminal_frame.setStyleSheet("""
             QFrame.surface {
-                background-color: rgba(18, 19, 26, 0.95);
-                border: 1px solid rgba(255, 255, 255, 0.08);
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(20, 23, 33, 0.95), stop:1 rgba(14, 16, 23, 0.95));
+                border: 1px solid rgba(99, 102, 241, 0.28);
                 border-radius: 12px;
             }
         """)
         shadow_tf = QGraphicsDropShadowEffect(self.terminal_frame)
         shadow_tf.setBlurRadius(20)
-        shadow_tf.setColor(QColor(0, 0, 0, 140))
+        shadow_tf.setColor(QColor(0, 0, 0, 160))
         shadow_tf.setOffset(0, 3)
         self.terminal_frame.setGraphicsEffect(shadow_tf)
         b_layout = QVBoxLayout(self.terminal_frame)
         b_layout.setContentsMargins(0, 0, 0, 0)
         b_layout.setSpacing(0)
 
-        # Barra de título de la terminal
+        # Barra de título de la terminal (Idéntica a Umbra)
         term_bar = QFrame()
         term_bar.setStyleSheet("""
             background-color: rgba(255, 255, 255, 0.03);
             border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-            border-top-left-radius: 10px;
-            border-top-right-radius: 10px;
+            border-top-left-radius: 12px;
+            border-top-right-radius: 12px;
             padding: 4px 10px;
         """)
         t_bar_layout = QHBoxLayout(term_bar)
-        t_bar_layout.setContentsMargins(12, 7, 12, 7)
+        t_bar_layout.setContentsMargins(12, 6, 12, 6)
         t_bar_layout.setSpacing(10)
 
         # Dots de ventana Unix
@@ -1266,7 +1390,7 @@ class LumenProjectWorkspaceView(QWidget):
         t_bar_layout.addWidget(lbl_dots)
 
         self.lbl_t_title = QLabel("lumen-terminal@abraxas:~$")
-        self.lbl_t_title.setStyleSheet("font-family: monospace; font-size: 12px; font-weight: 700; color: #a5b4fc;")
+        self.lbl_t_title.setStyleSheet("font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 12px; font-weight: 700; color: #a5b4fc;")
         t_bar_layout.addWidget(self.lbl_t_title)
 
         t_bar_layout.addStretch()
@@ -1294,6 +1418,11 @@ class LumenProjectWorkspaceView(QWidget):
         self.btn_toggle_graph_terminal.clicked.connect(self.toggle_terminal_graph_view)
         self.btn_toggle_graph_terminal.setVisible(False)
         t_bar_layout.addWidget(self.btn_toggle_graph_terminal)
+
+        # Manija táctil interactiva central (_) idéntica a Umbra
+        self.handle_pill = HandleBarPill(self.terminal_frame)
+        self.handle_pill.clicked.connect(self.cycle_terminal_handle)
+        t_bar_layout.addWidget(self.handle_pill)
 
         t_bar_layout.addStretch()
 
@@ -1340,6 +1469,50 @@ class LumenProjectWorkspaceView(QWidget):
         """)
         btn_clear.clicked.connect(self.clear_terminal_output)
         t_bar_layout.addWidget(btn_clear)
+
+        # Botón Toggle Abrir / Minimizar
+        self.btn_toggle_terminal = QPushButton("▼ Minimizar")
+        self.btn_toggle_terminal.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_terminal.setStyleSheet("""
+            QPushButton {
+                background: rgba(99, 102, 241, 0.18);
+                border: 1px solid rgba(99, 102, 241, 0.40);
+                border-radius: 4px;
+                color: #c7d2fe;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 3px 10px;
+            }
+            QPushButton:hover {
+                background: rgba(99, 102, 241, 0.35);
+                border-color: #818cf8;
+                color: #ffffff;
+            }
+        """)
+        self.btn_toggle_terminal.clicked.connect(self.toggle_terminal_collapsed)
+        t_bar_layout.addWidget(self.btn_toggle_terminal)
+
+        # Botón Toggle Maximizar / Restaurar
+        self.btn_maximize_terminal = QPushButton("⛶ Maximizar")
+        self.btn_maximize_terminal.setCursor(Qt.PointingHandCursor)
+        self.btn_maximize_terminal.setStyleSheet("""
+            QPushButton {
+                background: rgba(168, 85, 247, 0.18);
+                border: 1px solid rgba(168, 85, 247, 0.40);
+                border-radius: 4px;
+                color: #e9d5ff;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 3px 10px;
+            }
+            QPushButton:hover {
+                background: rgba(168, 85, 247, 0.35);
+                border-color: #c084fc;
+                color: #ffffff;
+            }
+        """)
+        self.btn_maximize_terminal.clicked.connect(self.toggle_terminal_maximized)
+        t_bar_layout.addWidget(self.btn_maximize_terminal)
 
         self.lbl_t_status = QLabel("⚡ VISOR DE SALIDA [READ-ONLY]")
         self.lbl_t_status.setStyleSheet("font-size: 10px; font-weight: 800; color: #38bdf8; background-color: rgba(6, 182, 212, 0.12); border: 1px solid rgba(6, 182, 212, 0.35); border-radius: 4px; padding: 2px 8px; letter-spacing: 0.5px;")
@@ -1529,6 +1702,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         tab_names = ["🔄  Ciclos de Trabajo", "🌿  Control de Ramas", "🔀  Fusión de Ramas", "⚡  Estado y Sync"]
         def on_s1_tab(idx: int):
+            self._sync_sector1_tabs(idx)
             if idx == 0:
                 self.go_back_to_work_cycles()
             elif idx == 1:
@@ -1540,6 +1714,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         switcher = SectorSwitcherPill(tab_names, on_s1_tab)
         switcher._update_styles(active_tab_index)
+        self.sector1_switchers.append(switcher)
         nav.addWidget(switcher)
         return nav
 
@@ -2234,10 +2409,10 @@ class LumenProjectWorkspaceView(QWidget):
 
         legends = [
             ("■ Stale/Gone", "#f87171"),
-            ("■ Local (Mía)", "#fde047"),
-            ("■ Local", "#f3f4f6"),
-            ("■ Remota (Otros)", "#4ade80"),
-            ("■ Remota (Mía)", "#60a5fa")
+            ("■ Local (Mía)", "#a855f7"),
+            ("■ Local", "#cbd5e1"),
+            ("■ Remota (Otros)", "#34d399"),
+            ("■ Remota (Mía)", "#38bdf8")
         ]
         for leg_text, leg_color in legends:
             l_lbl = QLabel(leg_text)
@@ -2557,6 +2732,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         tab_names = ["💻  Selector de Editor", "🐍  Entorno Python", "🐳  Docker", "🔌  Puertos TCP"]
         def on_s2_tab(idx: int):
+            self._sync_sector2_tabs(idx)
             if idx == 0:
                 self.open_sector2_editor_view()
             elif idx == 1:
@@ -2568,6 +2744,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         switcher = SectorSwitcherPill(tab_names, on_s2_tab)
         switcher._update_styles(active_tab_index)
+        self.sector2_switchers.append(switcher)
         nav.addWidget(switcher)
         return nav
 
@@ -2748,6 +2925,7 @@ class LumenProjectWorkspaceView(QWidget):
 
     def open_sector2_editor_view(self):
         """Abre la sub-página del lanzador de editores y refresca los editores detectados."""
+        self._sync_sector2_tabs(0)
         self.dock_terminal_at_bottom()
         self.sectors_stack.setCurrentIndex(2)
         if hasattr(self, "sector2_sub_stack"):
@@ -2755,6 +2933,7 @@ class LumenProjectWorkspaceView(QWidget):
             self.sector2_sub_stack.updateGeometry()
         if hasattr(self, "sectors_stack"):
             self.sectors_stack.updateGeometry()
+        QApplication.processEvents()
         self.refresh_sector2_editor_view()
         p_name = self.project_data.get("name", "Proyecto")
         self.terminal_display.log("IDE", f"Panel de Lanzador de Editor abierto para <b>{p_name}</b>.", tag_color="#10b981", prefix="💻")
@@ -2904,6 +3083,7 @@ class LumenProjectWorkspaceView(QWidget):
 
     def open_sector2_venv_view(self):
         """Abre la sub-página de gestión de entornos virtuales y refresca la telemetría."""
+        self._sync_sector2_tabs(1)
         self.dock_terminal_at_bottom()
         self.sectors_stack.setCurrentIndex(2)
         if hasattr(self, "sector2_sub_stack"):
@@ -2911,6 +3091,7 @@ class LumenProjectWorkspaceView(QWidget):
             self.sector2_sub_stack.updateGeometry()
         if hasattr(self, "sectors_stack"):
             self.sectors_stack.updateGeometry()
+        QApplication.processEvents()
         self.refresh_sector2_venv_view()
         p_name = self.project_data.get("name", "Proyecto")
         self.terminal_display.log("VENV", f"Gestor de Entorno Virtual cargado para <b>{p_name}</b>.", tag_color="#34d399", prefix="🐍")
@@ -3324,6 +3505,7 @@ class LumenProjectWorkspaceView(QWidget):
     # =================================================================
     def open_sector2_docker_view(self):
         """Abre la sub-página de control de Docker y refresca contenedores."""
+        self._sync_sector2_tabs(2)
         self.dock_terminal_in_docker()
         self.sectors_stack.setCurrentIndex(2)
         if hasattr(self, "sector2_sub_stack"):
@@ -3331,12 +3513,14 @@ class LumenProjectWorkspaceView(QWidget):
             self.sector2_sub_stack.updateGeometry()
         if hasattr(self, "sectors_stack"):
             self.sectors_stack.updateGeometry()
+        QApplication.processEvents()
         self.refresh_sector2_docker_view()
         p_name = self.project_data.get("name", "Proyecto")
         self.terminal_display.log("DOCKER", f"Panel de Control Docker & Compose abierto para <b>{p_name}</b>.", tag_color="#38bdf8", prefix="🐳")
 
     def open_sector2_ports_view(self):
         """Abre la sub-página de auditoría de puertos TCP."""
+        self._sync_sector2_tabs(3)
         self.dock_terminal_at_bottom()
         self.sectors_stack.setCurrentIndex(2)
         if hasattr(self, "sector2_sub_stack"):
@@ -3344,6 +3528,7 @@ class LumenProjectWorkspaceView(QWidget):
             self.sector2_sub_stack.updateGeometry()
         if hasattr(self, "sectors_stack"):
             self.sectors_stack.updateGeometry()
+        QApplication.processEvents()
         self.refresh_sector2_ports_view()
         self.terminal_display.log("PORTS", "Monitor de Puertos TCP y Procesos en Escucha abierto.", tag_color="#fbbf24", prefix="🔌")
 
@@ -3899,6 +4084,7 @@ class LumenProjectWorkspaceView(QWidget):
 
         tab_names = ["🛡️  Gestor .gitignore & .env", "📖  Lector Documentación", "🤖  Utilidades IA"]
         def on_s3_tab(idx: int):
+            self._sync_sector3_tabs(idx)
             if idx == 0:
                 self.open_sector3_gitignore_view()
             elif idx == 1:
@@ -3908,8 +4094,32 @@ class LumenProjectWorkspaceView(QWidget):
 
         switcher = SectorSwitcherPill(tab_names, on_s3_tab)
         switcher._update_styles(active_tab_index)
+        self.sector3_switchers.append(switcher)
         nav.addWidget(switcher)
         nav.addStretch()
+
+        # Botón dedicado en el Sector 3 para ocultar/mostrar la terminal
+        self.btn_s3_toggle_terminal = QPushButton("📟  Mostrar Terminal" if self.is_terminal_collapsed else "📟  Ocultar Terminal")
+        self.btn_s3_toggle_terminal.setCursor(Qt.PointingHandCursor)
+        self.btn_s3_toggle_terminal.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(192, 132, 252, 0.15);
+                color: #e9d5ff;
+                border: 1px solid rgba(192, 132, 252, 0.40);
+                border-radius: 6px;
+                padding: 4px 12px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(192, 132, 252, 0.35);
+                border-color: #c084fc;
+                color: #ffffff;
+            }
+        """)
+        self.btn_s3_toggle_terminal.clicked.connect(self.toggle_terminal_collapsed)
+        nav.addWidget(self.btn_s3_toggle_terminal)
+
         return nav
 
     # -----------------------------------------------------------------
@@ -4790,6 +5000,7 @@ class LumenProjectWorkspaceView(QWidget):
     # -----------------------------------------------------------------
     def open_sector3_gitignore_view(self):
         """Navega a la sub-página de Gitignore y .env."""
+        self._sync_sector3_tabs(0)
         self.dock_terminal_at_bottom()
         self.sectors_stack.setCurrentIndex(3)
         if hasattr(self, "sector3_sub_stack"):
@@ -4797,12 +5008,14 @@ class LumenProjectWorkspaceView(QWidget):
             self.sector3_sub_stack.updateGeometry()
         if hasattr(self, "sectors_stack"):
             self.sectors_stack.updateGeometry()
+        QApplication.processEvents()
         self.refresh_sector3_gitignore_view()
         p_name = self.project_data.get("name", "Proyecto")
         self.terminal_display.log("GITIGNORE", f"Gestor de .gitignore & .env abierto para <b>{p_name}</b>.", tag_color="#c084fc", prefix="🛡️")
 
     def open_sector3_docs_view(self):
         """Navega a la sub-página de Lector de Documentación."""
+        self._sync_sector3_tabs(1)
         self.dock_terminal_at_bottom()
         self.sectors_stack.setCurrentIndex(3)
         if hasattr(self, "sector3_sub_stack"):
@@ -4810,12 +5023,14 @@ class LumenProjectWorkspaceView(QWidget):
             self.sector3_sub_stack.updateGeometry()
         if hasattr(self, "sectors_stack"):
             self.sectors_stack.updateGeometry()
+        QApplication.processEvents()
         self.refresh_sector3_docs_view()
         p_name = self.project_data.get("name", "Proyecto")
         self.terminal_display.log("DOCS", f"Lector de Documentación Markdown abierto para <b>{p_name}</b>.", tag_color="#c084fc", prefix="📖")
 
     def open_sector3_ai_view(self):
         """Navega a la sub-página de Utilidades IA y Ollama."""
+        self._sync_sector3_tabs(2)
         self.dock_terminal_at_bottom()
         self.sectors_stack.setCurrentIndex(3)
         if hasattr(self, "sector3_sub_stack"):
@@ -4823,6 +5038,7 @@ class LumenProjectWorkspaceView(QWidget):
             self.sector3_sub_stack.updateGeometry()
         if hasattr(self, "sectors_stack"):
             self.sectors_stack.updateGeometry()
+        QApplication.processEvents()
         self.refresh_sector3_ai_view()
         p_name = self.project_data.get("name", "Proyecto")
         self.terminal_display.log("IA", f"Utilidades IA & Ollama abiertas para <b>{p_name}</b>.", tag_color="#c084fc", prefix="🤖")
@@ -5270,11 +5486,13 @@ class LumenProjectWorkspaceView(QWidget):
             self.sector2_sub_stack.setCurrentIndex(0)
         if sector_idx == 3 and hasattr(self, "sector3_sub_stack"):
             self.sector3_sub_stack.setCurrentIndex(0)
-            self.refresh_sector3_gitignore_view()
         if hasattr(self, "btn_toggle_graph_terminal"):
             self.btn_toggle_graph_terminal.setVisible(False)
         if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 1:
             self.toggle_terminal_graph_view()
+        QApplication.processEvents()
+        if sector_idx == 3:
+            self.refresh_sector3_gitignore_view()
         self.terminal_display.log("NAV", f"Abriendo ventana dedicada de <b>{sector_title}</b>.", tag_color="#38bdf8", prefix="📂")
 
     def open_sector_and_handle(self, sector_idx: int, sector_title: str, action_title: str):
@@ -5339,43 +5557,52 @@ class LumenProjectWorkspaceView(QWidget):
 
     def open_sync_view(self):
         """Abre la vista dedicada de Estado y Sincronización (Status / Fetch / Pull) en el Sector 1."""
+        self._sync_sector1_tabs(3)
         self.sectors_stack.setCurrentIndex(1)
         self.sector1_sub_stack.setCurrentWidget(self.page_sync)
+        QApplication.processEvents()
         self.terminal_display.log("NAV", "Accediendo al módulo <b>Estado y Sincronización (Status • Fetch • Pull)</b>...", tag_color="#34d399", prefix="⚡")
         self.refresh_sync_view()
-        self.refresh_git_graph()
         if hasattr(self, "btn_toggle_graph_terminal"):
             self.btn_toggle_graph_terminal.setVisible(True)
         if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 0:
             self.toggle_terminal_graph_view()
+        else:
+            self.refresh_git_graph()
         self.sector1_sub_stack.updateGeometry()
         self.sectors_stack.updateGeometry()
 
     def open_branches_view(self):
         """Abre la vista dedicada de Control de Ramas en el Sector 1."""
+        self._sync_sector1_tabs(1)
         self.sectors_stack.setCurrentIndex(1)
         self.sector1_sub_stack.setCurrentWidget(self.page_branches)
+        QApplication.processEvents()
         self.terminal_display.log("NAV", "Accediendo al módulo <b>Control de Ramas</b>...", tag_color="#38bdf8", prefix="🌿")
         self.refresh_branches_list()
-        self.refresh_git_graph()
         if hasattr(self, "btn_toggle_graph_terminal"):
             self.btn_toggle_graph_terminal.setVisible(True)
         if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 0:
             self.toggle_terminal_graph_view()
+        else:
+            self.refresh_git_graph()
         self.sector1_sub_stack.updateGeometry()
         self.sectors_stack.updateGeometry()
 
     def open_merge_view(self):
         """Abre la vista dedicada de Fusión de Ramas (Git Merge) en el Sector 1."""
+        self._sync_sector1_tabs(2)
         self.sectors_stack.setCurrentIndex(1)
         self.sector1_sub_stack.setCurrentWidget(self.page_merge)
+        QApplication.processEvents()
         self.terminal_display.log("NAV", "Accediendo al módulo <b>Fusión de Ramas (Git Merge)</b>...", tag_color="#38bdf8", prefix="🔀")
         self.refresh_merge_view()
-        self.refresh_git_graph()
         if hasattr(self, "btn_toggle_graph_terminal"):
             self.btn_toggle_graph_terminal.setVisible(True)
         if hasattr(self, "terminal_stack") and self.terminal_stack.currentIndex() == 0:
             self.toggle_terminal_graph_view()
+        else:
+            self.refresh_git_graph()
         self.sector1_sub_stack.updateGeometry()
         self.sectors_stack.updateGeometry()
 
@@ -5411,76 +5638,109 @@ class LumenProjectWorkspaceView(QWidget):
             is_active = b["is_active"]
             accent = b["color"]
 
-            row_frame.setStyleSheet(f"""
-                QFrame {{
-                    background-color: {"rgba(56, 189, 248, 0.08)" if is_active else "rgba(255, 255, 255, 0.02)"};
-                    border: 1px solid {"rgba(56, 189, 248, 0.40)" if is_active else "rgba(255, 255, 255, 0.06)"};
-                    border-radius: 6px;
-                    padding: 5px 10px;
-                }}
-                QFrame:hover {{
-                    background-color: rgba(255, 255, 255, 0.05);
-                    border-color: {accent};
-                }}
-            """)
+            if is_active:
+                row_frame.setStyleSheet("""
+                    QFrame {
+                        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                            stop:0 rgba(99, 102, 241, 0.18), stop:1 rgba(168, 85, 247, 0.14));
+                        border: 1px solid rgba(168, 85, 247, 0.50);
+                        border-radius: 8px;
+                        padding: 6px 12px;
+                    }
+                    QFrame:hover {
+                        border-color: #a855f7;
+                        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                            stop:0 rgba(99, 102, 241, 0.25), stop:1 rgba(168, 85, 247, 0.20));
+                    }
+                """)
+            else:
+                row_frame.setStyleSheet(f"""
+                    QFrame {{
+                        background-color: rgba(255, 255, 255, 0.02);
+                        border: 1px solid rgba(255, 255, 255, 0.06);
+                        border-radius: 8px;
+                        padding: 6px 12px;
+                    }}
+                    QFrame:hover {{
+                        background-color: rgba(255, 255, 255, 0.05);
+                        border-color: rgba(168, 85, 247, 0.35);
+                    }}
+                """)
             r_lay = QHBoxLayout(row_frame)
             r_lay.setContentsMargins(8, 4, 8, 4)
             r_lay.setSpacing(10)
 
             # Símbolo / Indicador
             lbl_dot = QLabel("★" if is_active else "◈")
-            lbl_dot.setStyleSheet(f"color: {accent}; font-size: 13px; font-weight: 800; min-width: 14px;")
+            lbl_dot.setStyleSheet(f"color: {accent}; font-size: 14px; font-weight: 800; min-width: 16px;")
             r_lay.addWidget(lbl_dot)
 
             # Nombre de la rama
             lbl_name = QLabel(b["name"])
-            lbl_name.setStyleSheet(f"font-size: 12.5px; font-weight: 800; color: {accent}; min-width: 150px;")
+            lbl_name.setStyleSheet(f"""
+                font-size: 13px;
+                font-weight: 800;
+                color: {"#ffffff" if is_active else "#e2e8f0"};
+                font-family: 'JetBrains Mono', 'Fira Code', monospace;
+                min-width: 150px;
+            """)
             r_lay.addWidget(lbl_name, 1)
 
             # Autor
             lbl_author = QLabel(f"👤 {b['author']}")
-            lbl_author.setStyleSheet("font-size: 11.5px; color: #9ca3af; min-width: 90px;")
+            lbl_author.setStyleSheet("font-size: 11px; color: #94a3af; font-weight: 500; min-width: 90px;")
             r_lay.addWidget(lbl_author)
 
             # Fecha
             lbl_date = QLabel(f"⏱ {b['date']}")
-            lbl_date.setStyleSheet("font-size: 11px; color: #6b7280; min-width: 90px;")
+            lbl_date.setStyleSheet("font-size: 11px; color: #64748b; font-family: monospace; min-width: 90px;")
             r_lay.addWidget(lbl_date)
 
             # Etiqueta de Estado
             lbl_st = QLabel(b["status_label"])
             lbl_st.setStyleSheet(f"""
-                font-size: 10.5px;
+                font-size: 10px;
                 font-weight: 700;
                 color: {accent};
-                background-color: rgba(255, 255, 255, 0.03);
-                border: 1px solid {accent};
-                border-radius: 4px;
-                padding: 2px 7px;
+                background-color: rgba(255, 255, 255, 0.04);
+                border: 1px solid {accent}55;
+                border-radius: 10px;
+                padding: 3px 8px;
+                letter-spacing: 0.5px;
+                text-transform: uppercase;
             """)
             r_lay.addWidget(lbl_st)
 
             # Acción
             if is_active:
                 lbl_act = QLabel("✔ ACTIVA")
-                lbl_act.setStyleSheet("font-size: 10.5px; font-weight: 900; color: #34d399; padding: 3px 8px;")
+                lbl_act.setStyleSheet("""
+                    font-size: 10px;
+                    font-weight: 800;
+                    color: #34d399;
+                    background: rgba(52, 211, 153, 0.15);
+                    border: 1px solid rgba(52, 211, 153, 0.40);
+                    border-radius: 6px;
+                    padding: 3px 10px;
+                    letter-spacing: 0.5px;
+                """)
                 r_lay.addWidget(lbl_act)
             else:
                 btn_checkout = QPushButton("🔀 Checkout")
                 btn_checkout.setCursor(Qt.PointingHandCursor)
                 btn_checkout.setStyleSheet("""
                     QPushButton {
-                        background-color: rgba(56, 189, 248, 0.15);
-                        color: #7dd3fc;
-                        border: 1px solid rgba(56, 189, 248, 0.40);
-                        border-radius: 4px;
-                        padding: 3px 10px;
+                        background: rgba(99, 102, 241, 0.16);
+                        color: #c7d2fe;
+                        border: 1px solid rgba(99, 102, 241, 0.35);
+                        border-radius: 6px;
+                        padding: 3px 12px;
                         font-weight: 700;
                         font-size: 11px;
                     }
                     QPushButton:hover {
-                        background-color: rgba(56, 189, 248, 0.35);
-                        border-color: #38bdf8;
+                        background: rgba(99, 102, 241, 0.35);
+                        border-color: #818cf8;
                         color: #ffffff;
                     }
                 """)
@@ -7894,14 +8154,11 @@ class LumenProjectWorkspaceView(QWidget):
         if hasattr(self, "docker_side_terminal_container"):
             self.docker_side_terminal_container.setVisible(False)
         self.bottom_terminal_container.setVisible(True)
-        self.bottom_terminal_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.terminal_stack.setVisible(True)
         self.terminal_frame.setMinimumWidth(0)
         self.terminal_frame.setMaximumWidth(16777215)
-        self.terminal_frame.setMinimumHeight(240)
-        self.terminal_frame.setMaximumHeight(16777215)
-        self.terminal_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.bottom_terminal_layout.addWidget(self.terminal_frame)
+        state = getattr(self, "terminal_state", 0 if getattr(self, "is_terminal_collapsed", False) else 1)
+        self.set_terminal_state(state)
 
     def create_git_graph_view(self) -> QWidget:
         """Crea la vista de Grafo Horizontal de Ramas estilo VS Code Git Graph / GitHub Network."""
@@ -8277,6 +8534,7 @@ class LumenProjectWorkspaceView(QWidget):
 
     def go_back_to_work_cycles(self):
         """Regresa a la página principal de Ciclos de Trabajo."""
+        self._sync_sector1_tabs(0)
         self.sector1_sub_stack.setCurrentIndex(0)
         if hasattr(self, "btn_toggle_graph_terminal"):
             self.btn_toggle_graph_terminal.setVisible(False)
@@ -8287,12 +8545,16 @@ class LumenProjectWorkspaceView(QWidget):
             self.drawer_switch_dest.setVisible(False)
         if hasattr(self, "merge_inner_stack"):
             self.merge_inner_stack.setCurrentIndex(0)
+        QApplication.processEvents()
         self.terminal_display.log("NAV", "Regresando al menú de Ciclos de Trabajo.", tag_color="#9ca3af", prefix="◀")
 
     def go_back_to_sectors_overview(self):
         """Regresa directamente al menú principal de los 3 sectores en un solo clic."""
         self.dock_terminal_at_bottom()
         self.sectors_stack.setCurrentIndex(0)
+        self._sync_sector1_tabs(0)
+        self._sync_sector2_tabs(0)
+        self._sync_sector3_tabs(0)
         if hasattr(self, "sector1_sub_stack"):
             self.sector1_sub_stack.setCurrentIndex(0)
         if hasattr(self, "sector2_sub_stack"):
@@ -8310,6 +8572,7 @@ class LumenProjectWorkspaceView(QWidget):
             self.merge_inner_stack.setCurrentIndex(0)
         if hasattr(self, "drawer_stash_save"):
             self.drawer_stash_save.setVisible(False)
+        QApplication.processEvents()
         self.terminal_display.log("NAV", "Regresando al menú principal de Sectores.", tag_color="#9ca3af", prefix="◀")
 
     # -----------------------------------------------------------------
