@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QFrame, QLineEdit, QTextEdit, QScrollArea,
     QSplitter, QButtonGroup, QCheckBox, QStackedWidget, QSizePolicy, QDialog,
-    QTabWidget, QRadioButton
+    QTabWidget, QRadioButton, QMessageBox
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QThread
 from PySide6.QtGui import QCursor
@@ -1636,28 +1636,220 @@ class Sector12BranchesView(QWidget):
     # ACCIONES: FUSIÓN DE RAMAS (GIT MERGE)
     # =============================================================
     def _execute_merge(self):
-        """Ejecuta git merge de la rama seleccionada sobre la rama activa con mensaje estructurado."""
+        """Ejecuta la segunda confirmación emergente antes de aplicar git merge."""
         if not self.project or not self.project.path or not self.selected_merge_branch:
             return
 
+        p_path = Path(self.project.path)
         src_branch = self.selected_merge_branch
-        title = self.txt_merge_title.text().strip() or f"Merge branch '{src_branch}'"
+
+        # 1. Detectar rama activa actual
+        res_active = run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=p_path)
+        active_branch = res_active.stdout.strip() if res_active.success else "main"
+
+        if src_branch == active_branch:
+            self.log_emitted.emit(f"Error: No puedes fusionar la rama <b>{src_branch}</b> sobre sí misma.")
+            return
+
+        # 2. Diagnóstico topológico: ¿Es Fast-Forward, Divergente o Ya Integrada?
+        ret_ancestor = run_command(["git", "merge-base", "--is-ancestor", "HEAD", src_branch], cwd=p_path)
+        is_ff_possible = (ret_ancestor.returncode == 0)
+
+        ret_already = run_command(["git", "merge-base", "--is-ancestor", src_branch, "HEAD"], cwd=p_path)
+        is_already_merged = (ret_already.returncode == 0)
+
+        # Contador de divergencia
+        res_count = run_command(["git", "rev-list", "--left-right", "--count", f"HEAD...{src_branch}"], cwd=p_path)
+        ahead, behind = 0, 0
+        if res_count.success and res_count.stdout.strip():
+            parts = res_count.stdout.strip().split()
+            if len(parts) >= 2:
+                ahead = int(parts[0])
+                behind = int(parts[1])
+
+        # Verificar árbol de trabajo
+        res_status = run_command(["git", "status", "--porcelain"], cwd=p_path)
+        dirty_lines = [l.strip() for l in res_status.stdout.splitlines() if l.strip()] if res_status.success else []
+
+        title = self.txt_merge_title.text().strip() or f"Merge branch '{src_branch}' into '{active_branch}'"
         desc = self.txt_merge_desc.toPlainText().strip()
         full_msg = f"{title}\n\n{desc}" if desc else title
 
-        self.log_emitted.emit(f"Iniciando fusión de <b>{src_branch}</b> con mensaje estructurado...")
+        # 3. Construir Diálogo Modal de Segunda Confirmación
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Confirmar Fusión de Ramas (Git Merge)")
+        dialog.setModal(True)
+        dialog.setFixedWidth(520)
+        dialog.setProperty("class", "cyber_dialog")
 
-        res = run_command(["git", "merge", "--no-ff", "-m", full_msg, src_branch], cwd=self.project.path)
+        d_layout = QVBoxLayout(dialog)
+        d_layout.setContentsMargins(20, 18, 20, 18)
+        d_layout.setSpacing(12)
+
+        # Micro-tag y Título
+        lbl_tag = QLabel("SECTOR 1.2 // SEGUNDA CONFIRMACIÓN DE FUSIÓN")
+        lbl_tag.setProperty("class", "sector_micro_tag")
+        d_layout.addWidget(lbl_tag)
+
+        lbl_title = QLabel("🔀 Protocolo de Integración de Ramas")
+        lbl_title.setProperty("class", "sector_title")
+        d_layout.addWidget(lbl_title)
+
+        # Fila de Ramas Origen ➔ Destino
+        row_branches = QHBoxLayout()
+        row_branches.setSpacing(8)
+        lbl_src = QLabel(f"🌿 Origen: <b>{src_branch}</b>")
+        lbl_src.setProperty("class", "badge_telemetry")
+        row_branches.addWidget(lbl_src)
+
+        lbl_arrow = QLabel("➔")
+        lbl_arrow.setStyleSheet("font-size: 14px; color: #9ca3af; font-weight: bold;")
+        row_branches.addWidget(lbl_arrow)
+
+        lbl_tgt = QLabel(f"🎯 Destino: <b>{active_branch}</b>")
+        lbl_tgt.setProperty("class", "badge_staged")
+        row_branches.addWidget(lbl_tgt)
+        row_branches.addStretch()
+        d_layout.addLayout(row_branches)
+
+        # Card de Diagnóstico Topológico
+        card_diag = QFrame()
+        card_diag.setProperty("class", "sector_card")
+        l_diag = QVBoxLayout(card_diag)
+        l_diag.setContentsMargins(12, 10, 12, 10)
+        l_diag.setSpacing(6)
+
+        radio_ff = None
+        radio_no_ff = None
+
+        if is_already_merged:
+            lbl_badge_type = QLabel("● YA INTEGRADA (Already up to date)")
+            lbl_badge_type.setProperty("class", "badge_telemetry")
+            l_diag.addWidget(lbl_badge_type)
+
+            lbl_info = QLabel(f"Todos los commits de <b>'{src_branch}'</b> ya están presentes en <b>'{active_branch}'</b>. No hay cambios pendientes.")
+            lbl_info.setProperty("class", "sector_desc")
+            lbl_info.setWordWrap(True)
+            l_diag.addWidget(lbl_info)
+
+        elif is_ff_possible:
+            lbl_badge_type = QLabel("⚡ FAST-FORWARD DISPONIBLE (Avance Rápido)")
+            lbl_badge_type.setProperty("class", "badge_staged")
+            l_diag.addWidget(lbl_badge_type)
+
+            lbl_info = QLabel(
+                f"La rama activa avanzará directamente <b>+{behind} commits</b> en línea recta.<br>"
+                "Selecciona el estilo de fusión deseado:"
+            )
+            lbl_info.setProperty("class", "sector_desc")
+            lbl_info.setWordWrap(True)
+            l_diag.addWidget(lbl_info)
+
+            # Selector de Estilo FF vs No-FF
+            group_ff = QButtonGroup(dialog)
+            radio_ff = QRadioButton("⚡ Avance Rápido (Fast-Forward: limpio, lineal, sin commit extra)")
+            radio_ff.setChecked(True)
+            group_ff.addButton(radio_ff)
+            l_diag.addWidget(radio_ff)
+
+            radio_no_ff = QRadioButton("🔀 Forzar Commit de Fusión (--no-ff: genera nodo explícito)")
+            group_ff.addButton(radio_no_ff)
+            l_diag.addWidget(radio_no_ff)
+
+        else:
+            lbl_badge_type = QLabel("🔀 DIVERGENCIA DETECTADA (Merge Commit Requerido)")
+            lbl_badge_type.setProperty("class", "badge_pending")
+            l_diag.addWidget(lbl_badge_type)
+
+            lbl_info = QLabel(
+                f"Las ramas han divergido (<b>+{ahead} locales</b> en {active_branch} / <b>+{behind} entrantes</b> desde {src_branch}).<br>"
+                "Git creará un <b>commit de fusión</b> con ambos padres unificados."
+            )
+            lbl_info.setProperty("class", "sector_desc")
+            lbl_info.setWordWrap(True)
+            l_diag.addWidget(lbl_info)
+
+        d_layout.addWidget(card_diag)
+
+        # Advertencia de working tree sucio
+        if dirty_lines:
+            warn_card = QFrame()
+            warn_card.setStyleSheet("background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 6px; padding: 8px;")
+            l_warn = QVBoxLayout(warn_card)
+            l_warn.setSpacing(2)
+            lbl_w_title = QLabel(f"⚠️ Árbol de trabajo con {len(dirty_lines)} archivo(s) modificados sin confirmar.")
+            lbl_w_title.setStyleSheet("font-weight: 700; font-size: 11px; color: #fbbf24;")
+            l_warn.addWidget(lbl_w_title)
+            lbl_w_desc = QLabel("Si los cambios colisionan con los commits de la rama a fusionar, la operación se detendrá.")
+            lbl_w_desc.setStyleSheet("font-size: 11px; color: #fde68a;")
+            l_warn.addWidget(lbl_w_desc)
+            d_layout.addWidget(warn_card)
+
+        # Preview del mensaje de commit (si aplica)
+        box_msg = QFrame()
+        box_msg.setProperty("class", "commit_preview_box")
+        l_msg = QVBoxLayout(box_msg)
+        l_msg.setContentsMargins(10, 8, 10, 8)
+        lbl_msg_tag = QLabel("MENSAJE DEL COMMIT:")
+        lbl_msg_tag.setProperty("class", "sector_micro_tag")
+        l_msg.addWidget(lbl_msg_tag)
+        lbl_msg_preview = QLabel(f"<b>{title}</b>" + (f"<br><font color='#9ca3af'>{desc}</font>" if desc else ""))
+        lbl_msg_preview.setWordWrap(True)
+        l_msg.addWidget(lbl_msg_preview)
+        d_layout.addWidget(box_msg)
+
+        # Botonera de Acción
+        btn_box = QHBoxLayout()
+        btn_box.setSpacing(10)
+        btn_box.addStretch()
+
+        btn_cancel = QPushButton("❌ Cancelar")
+        btn_cancel.setProperty("class", "cyber_btn")
+        btn_cancel.setCursor(Qt.PointingHandCursor)
+        btn_cancel.clicked.connect(dialog.reject)
+        btn_box.addWidget(btn_cancel)
+
+        btn_confirm = QPushButton("🔀 Ejecutar Fusión")
+        btn_confirm.setProperty("class", "cyber_btn_primary")
+        btn_confirm.setCursor(Qt.PointingHandCursor)
+        btn_confirm.clicked.connect(dialog.accept)
+        btn_box.addWidget(btn_confirm)
+        d_layout.addLayout(btn_box)
+
+        if dialog.exec() != QDialog.Accepted:
+            self.log_emitted.emit("Fusión cancelada por el usuario.")
+            return
+
+        # 4. Determinar flag de merge según diagnóstico y elección del usuario
+        use_no_ff = False
+        if is_ff_possible:
+            if radio_no_ff and radio_no_ff.isChecked():
+                use_no_ff = True
+            else:
+                use_no_ff = False
+        else:
+            use_no_ff = True
+
+        cmd = ["git", "merge"]
+        if use_no_ff:
+            cmd.extend(["--no-ff", "-m", full_msg, src_branch])
+            self.log_emitted.emit(f"Iniciando fusión (No-FF / Commit explícito): <b>{src_branch}</b> ➔ <b>{active_branch}</b>...")
+        else:
+            cmd.extend(["--ff", src_branch])
+            self.log_emitted.emit(f"Iniciando fusión (Fast-Forward): <b>{src_branch}</b> ➔ <b>{active_branch}</b>...")
+
+        res = run_command(cmd, cwd=p_path)
         if res.success:
-            self.log_emitted.emit(f"🎉 Fusión completada con éxito: <b>{src_branch}</b> integrada.")
+            style_str = "No-FF (Merge Commit)" if use_no_ff else "Fast-Forward (Lineal)"
+            self.log_emitted.emit(f"🎉 Fusión completada con éxito ({style_str}): <b>{src_branch}</b> integrada en <b>{active_branch}</b>.")
             self.txt_merge_title.clear()
             self.txt_merge_desc.clear()
             self.btn_confirm_merge.setEnabled(False)
             self.selected_merge_branch = None
             self.update_project(self.project)
-            self.action_requested.emit("git_merge_completed", {"source": src_branch})
+            self.action_requested.emit("git_merge_completed", {"source": src_branch, "style": "no-ff" if use_no_ff else "ff"})
         else:
-            self.log_emitted.emit(f"Alerta en fusión: {res.output}")
+            self.log_emitted.emit(f"⚠️ Alerta en fusión: {res.output}")
             self.log_emitted.emit("Es posible que existan conflictos. Resuelve los conflictos en tus archivos o cancela con <code>git merge --abort</code>.")
 
     # =============================================================
