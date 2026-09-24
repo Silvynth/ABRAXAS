@@ -396,11 +396,157 @@ QScrollBar::handle:vertical {{
     min-height: 24px;
 }}
 
-QScrollBar::handle:vertical:hover {{
-    background: rgba(255, 255, 255, 0.3);
-}}
-
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0;
 }}
+
+/* -------------------------------------------------------------
+   9. GESTOR DE RAMAS (SECTOR 1.2)
+------------------------------------------------------------- */
+QFrame.branch_item_row {{
+    background-color: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+}}
+
+QFrame.branch_item_row:hover {{
+    background-color: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.12);
+}}
+
+QFrame.branch_item_row_active {{
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 6px;
+}}
+
+QFrame.branch_item_row_selected {{
+    background-color: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 6px;
+}}
+
+QPushButton.cyber_btn_danger {{
+    background-color: rgba(255, 255, 255, 0.03);
+    color: #e2e8f0;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    padding: 6px 14px;
+    min-height: 30px;
+    font-size: 11px;
+    font-weight: 700;
+}}
+
+QPushButton.cyber_btn_danger:hover {{
+    background-color: rgba(255, 255, 255, 0.10);
+    border-color: rgba(255, 255, 255, 0.35);
+    color: #ffffff;
+}}
+
+QPushButton.cyber_btn_danger:pressed {{
+    background-color: #ffffff;
+    color: #000000;
+}}
+
+QPushButton.cyber_btn_danger_compact {{
+    background-color: rgba(255, 255, 255, 0.03);
+    color: #e2e8f0;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 5px;
+    padding: 3px 10px;
+    min-height: 26px;
+    font-size: 10.5px;
+    font-weight: 700;
+}}
+
+QPushButton.cyber_btn_danger_compact:hover {{
+    background-color: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.35);
+    color: #ffffff;
+}}
+
+/* -------------------------------------------------------------
+   10. MODAL DE CONFIRMACIÓN CRÍTICA
+------------------------------------------------------------- */
+QDialog.cyber_dialog {{
+    background-color: {p["BG_CANVAS"]};
+    border: 1px solid rgba(255, 255, 255, 0.20);
+    border-radius: 10px;
+}}
+
+/* -------------------------------------------------------------
+   11. PESTAÑAS TÁCTICAS (SECTOR 1.3)
+------------------------------------------------------------- */
+QTabWidget.cyber_tab_widget::pane {{
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.01);
+    border-radius: 6px;
+}}
+
+QTabBar::tab {{
+    background: rgba(255, 255, 255, 0.03);
+    color: #94a3b8;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: none;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+    padding: 6px 14px;
+    margin-right: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 600;
+}}
+
+QTabBar::tab:selected {{
+    background: rgba(255, 255, 255, 0.10);
+    color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.25);
+    font-weight: 700;
+}}
+
+QTabBar::tab:hover:!selected {{
+    background: rgba(255, 255, 255, 0.06);
+    color: #e2e8f0;
+}}
+
+/* -------------------------------------------------------------
+   12. BADGES DE VISIBILIDAD & RADAR
+------------------------------------------------------------- */
+QLabel.badge_public {{
+    color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    font-weight: 800;
+    padding: 3px 8px;
+}}
+
+QLabel.badge_private {{
+    color: #cbd5e1;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.20);
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    font-weight: 800;
+    padding: 3px 8px;
+}}
+
+/* -------------------------------------------------------------
+   13. FILAS DE TRÁFICO DE COMMITS (AHEAD / BEHIND)
+------------------------------------------------------------- */
+QFrame.commit_traffic_row {{
+    background-color: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 5px;
+    padding: 2px 4px;
+}}
+
+QFrame.commit_traffic_row:hover {{
+    background-color: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.15);
+}}
 """
+

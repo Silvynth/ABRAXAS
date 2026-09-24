@@ -267,7 +267,7 @@ def get_repo_visibility(project_path: str, force_refresh: bool = False) -> Dict[
     # 2. Consultar visibilidad exacta en GitHub vía gh CLI (con timeout estricto de 3s)
     try:
         gh_proc = subprocess.run(
-            ["gh", "repo", "view", "--json", "isPrivate,visibility,nameWithOwner"],
+            ["gh", "repo", "view", "--json", "isPrivate,visibility,nameWithOwner,viewerCanAdminister,viewerPermission"],
             cwd=project_path,
             capture_output=True,
             text=True,
@@ -276,6 +276,8 @@ def get_repo_visibility(project_path: str, force_refresh: bool = False) -> Dict[
         if gh_proc.returncode == 0 and gh_proc.stdout.strip():
             data = json.loads(gh_proc.stdout)
             is_priv = data.get("isPrivate", False)
+            can_admin = data.get("viewerCanAdminister", False)
+            viewer_perm = data.get("viewerPermission", "NONE")
             vis = "private" if is_priv else "public"
             badge = "🔒 Privado" if is_priv else "🌐 Público"
             res = {
@@ -285,7 +287,9 @@ def get_repo_visibility(project_path: str, force_refresh: bool = False) -> Dict[
                 "visibility": vis,
                 "text": "Privado" if is_priv else "Público",
                 "badge": badge,
-                "repo_name": data.get("nameWithOwner", "")
+                "repo_name": data.get("nameWithOwner", ""),
+                "can_admin": can_admin,
+                "viewer_permission": viewer_perm
             }
             _REPO_VISIBILITY_CACHE[norm_path] = (now, res)
             return res

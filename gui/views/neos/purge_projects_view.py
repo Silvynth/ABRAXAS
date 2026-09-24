@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 
-from core.projects import list_project_folders, purge_project_folder, get_projects_dir
+from core.projects import list_project_folders, purge_project_folder, get_projects_dir, check_project_unsaved_changes
 
 class PurgeProjectRowWidget(QFrame):
     """Fila interactiva para mostrar un proyecto con botón de purga directa."""
@@ -41,6 +41,18 @@ class PurgeProjectRowWidget(QFrame):
         lbl_tag = QLabel(tag_text)
         lbl_tag.setProperty("class", "badge_dir")
         r_top.addWidget(lbl_tag)
+
+        # Badge de cambios sin guardar en Git
+        unsaved = folder_data.get("unsaved", {})
+        if unsaved.get("has_unsaved"):
+            lbl_unsaved = QLabel(f"⚠️ {unsaved.get('summary', 'Cambios sin guardar')}")
+            lbl_unsaved.setStyleSheet(
+                "font-size: 11px; font-weight: 600; color: #fbbf24; "
+                "background: rgba(251, 191, 36, 0.12); border: 1px solid rgba(251, 191, 36, 0.35); "
+                "border-radius: 4px; padding: 2px 6px;"
+            )
+            lbl_unsaved.setToolTip("El proyecto tiene cambios locales no guardados o commits sin subir a GitHub")
+            r_top.addWidget(lbl_unsaved)
 
         # Tamaño en disco
         size_str = folder_data.get("size_str", "")
@@ -219,26 +231,81 @@ class PurgeProjectsView(QWidget):
         name = folder_data["name"]
         path = folder_data["path"]
 
+        # 1. Comprobar si hay cambios o archivos sin guardar en Git
+        unsaved = check_project_unsaved_changes(path)
+        has_unsaved = unsaved.get("has_unsaved", False)
+
         box = QMessageBox(self)
-        box.setWindowTitle("⚠️ Confirmar Purga de Proyecto")
-        box.setText(f"<h3>¿Estás seguro de purgar el proyecto?</h3>")
-        box.setInformativeText(
-            f"La carpeta <b>'{name}'</b> y todos sus archivos se eliminarán permanentemente del disco.<br><br>"
-            f"<code>{path}</code><br><br>"
-            f"<font color='#ef4444'><b>Esta acción es irreversible.</b></font>"
-        )
         box.setIcon(QMessageBox.Warning)
-        
-        btn_confirm = box.addButton("🗑️ Purgar Permanentemente", QMessageBox.AcceptRole)
+
+        if has_unsaved:
+            box.setWindowTitle("⚠️ Advertencia: Archivos Sin Guardar")
+            box.setText(f"<h3>⚠️ ¡Atención: Hay cambios sin guardar en '{name}'!</h3>")
+
+            details = []
+            mod_files = unsaved.get("modified_files", [])
+            if mod_files:
+                details.append(f"<b>📄 Archivos modificados sin confirmar ({len(mod_files)}):</b>")
+                for f in mod_files[:6]:
+                    details.append(f"&nbsp;&nbsp;• <code>{f}</code>")
+                if len(mod_files) > 6:
+                    details.append(f"&nbsp;&nbsp;<i>... y {len(mod_files) - 6} más</i>")
+
+            untracked = unsaved.get("untracked_files", [])
+            if untracked:
+                details.append(f"<b>✨ Archivos nuevos sin seguimiento ({len(untracked)}):</b>")
+                for f in untracked[:5]:
+                    details.append(f"&nbsp;&nbsp;• <code>{f}</code>")
+                if len(untracked) > 5:
+                    details.append(f"&nbsp;&nbsp;<i>... y {len(untracked) - 5} más</i>")
+
+            unpushed = unsaved.get("unpushed_commits", 0)
+            if unpushed > 0:
+                details.append(f"<b>⬆️ Commits locales no subidos al remoto:</b> {unpushed}")
+
+            body_details = "<br>".join(details)
+            box.setInformativeText(
+                f"El proyecto contiene archivos o modificaciones <b>que no han sido guardadas ni enviadas a Git</b>:<br><br>"
+                f"{body_details}<br><br>"
+                f"Ruta: <code>{path}</code><br><br>"
+                f"Si continúas, <b>estos cambios y todo el proyecto se eliminarán permanentemente al 100%</b> del disco sin posibilidad de recuperación.<br><br>"
+                f"<font color='#ef4444'><b>¿Deseas purgar el proyecto de todos modos?</b></font>"
+            )
+            btn_confirm = box.addButton("🗑️ Purgar de Todos Modos (100%)", QMessageBox.AcceptRole)
+        else:
+            box.setWindowTitle("⚠️ Confirmar Purga de Proyecto")
+            box.setText(f"<h3>¿Estás seguro de purgar el proyecto?</h3>")
+            box.setInformativeText(
+                f"La carpeta <b>'{name}'</b> y todos sus archivos se eliminarán permanentemente del disco.<br><br>"
+                f"<code>{path}</code><br><br>"
+                f"<font color='#ef4444'><b>Esta acción es irreversible y purgará el proyecto al 100%.</b></font>"
+            )
+            btn_confirm = box.addButton("🗑️ Purgar Permanentemente", QMessageBox.AcceptRole)
+
         btn_cancel = box.addButton("❌ Cancelar", QMessageBox.RejectRole)
         box.setDefaultButton(btn_cancel)
-
         box.exec()
 
         if box.clickedButton() == btn_confirm:
             try:
                 purge_project_folder(path, self.config_target)
-                self.lbl_status.setText(f"✅ Proyecto '{name}' purgado correctamente del sistema.")
+
+                # Desvincular de orden de Lumen si estaba registrado
+                try:
+                    from gui.views.lumen.main_view import get_project_order_file
+                    order_file = get_project_order_file()
+                    if os.path.exists(order_file):
+                        import json
+                        with open(order_file, "r", encoding="utf-8") as f:
+                            order = json.load(f)
+                        if name in order:
+                            order.remove(name)
+                            with open(order_file, "w", encoding="utf-8") as f:
+                                json.dump(order, f, indent=2)
+                except Exception:
+                    pass
+
+                self.lbl_status.setText(f"✅ Proyecto '{name}' purgado al 100% correctamente del sistema.")
                 self.lbl_status.setStyleSheet("font-size: 12px; font-weight: 600; color: #10b981;")
                 self.lbl_status.setVisible(True)
                 

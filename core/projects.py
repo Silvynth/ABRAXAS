@@ -5,6 +5,9 @@
 
 import os
 import time
+import shutil
+import subprocess
+import stat
 from core.setup import read_toml_dict, get_target_config_path
 
 _FOLDER_SIZE_CACHE = {}  # folder_path: (mtime, timestamp, result_str)
@@ -69,6 +72,83 @@ def get_folder_size_str(folder_path: str, force_refresh: bool = False) -> str:
     except (PermissionError, OSError):
         return "Tamaño no disponible"
 
+def check_project_unsaved_changes(project_path: str) -> dict:
+    """
+    Inspecciona si el proyecto tiene cambios locales sin guardar o commits sin enviar en Git.
+    Retorna un diccionario estructurado con:
+    - has_unsaved: bool
+    - modified_files: list[str]
+    - untracked_files: list[str]
+    - unpushed_commits: int
+    - summary: str
+    """
+    git_dir = os.path.join(project_path, ".git")
+    if not os.path.isdir(git_dir):
+        return {
+            "has_unsaved": False,
+            "modified_files": [],
+            "untracked_files": [],
+            "unpushed_commits": 0,
+            "summary": "Sin repositorio Git"
+        }
+
+    modified = []
+    untracked = []
+    unpushed = 0
+
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            for line in proc.stdout.splitlines():
+                l = line.strip()
+                if not l:
+                    continue
+                code = l[:2].strip()
+                fname = l[2:].strip()
+                if code == "??":
+                    untracked.append(fname)
+                else:
+                    modified.append(fname)
+    except Exception:
+        pass
+
+    try:
+        proc_up = subprocess.run(
+            ["git", "rev-list", "--count", "@{upstream}..HEAD"],
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if proc_up.returncode == 0 and proc_up.stdout.strip():
+            unpushed = int(proc_up.stdout.strip())
+    except Exception:
+        pass
+
+    has_unsaved = bool(modified or untracked or unpushed > 0)
+    summary_parts = []
+    if modified:
+        summary_parts.append(f"{len(modified)} modificados")
+    if untracked:
+        summary_parts.append(f"{len(untracked)} nuevos")
+    if unpushed > 0:
+        summary_parts.append(f"{unpushed} sin subir")
+
+    summary = ", ".join(summary_parts) if summary_parts else "Limpio"
+    return {
+        "has_unsaved": has_unsaved,
+        "modified_files": modified,
+        "untracked_files": untracked,
+        "unpushed_commits": unpushed,
+        "summary": summary
+    }
+
 def list_project_folders(config_path=None):
     """Lista las carpetas que existen dentro del directorio de proyectos de config.toml."""
     base_dir = get_projects_dir(config_path)
@@ -81,10 +161,12 @@ def list_project_folders(config_path=None):
         for entry in sorted(os.listdir(base_dir)):
             full_path = os.path.join(base_dir, entry)
             if os.path.isdir(full_path) and not entry.startswith("."):
+                unsaved_data = check_project_unsaved_changes(full_path)
                 folders.append({
                     "name": entry,
                     "path": full_path,
-                    "size_str": get_folder_size_str(full_path)
+                    "size_str": get_folder_size_str(full_path),
+                    "unsaved": unsaved_data
                 })
     except Exception as e:
         print(f"Error al listar carpetas de proyectos en {base_dir}: {e}")
@@ -114,8 +196,22 @@ def purge_project_folder(project_path: str, config_path=None) -> bool:
     if not os.path.isdir(abs_target):
         raise ValueError(f"'{abs_target}' no es un directorio.")
 
-    # Eliminar árbol completo de la carpeta
-    shutil.rmtree(abs_target)
+    # Manejador de permisos para archivos de solo lectura en .git u otros
+    def _handle_readonly(func, path, exc_info):
+        try:
+            os.chmod(path, stat.S_IWRITE | stat.S_IWUSR)
+            func(path)
+        except Exception:
+            pass
+
+    # Eliminar árbol completo de la carpeta al 100%
+    try:
+        shutil.rmtree(abs_target, onexc=lambda fn, p, exc: _handle_readonly(fn, p, exc))
+    except TypeError:
+        shutil.rmtree(abs_target, onerror=_handle_readonly)
+
+    # Invalidar caché de tamaño
+    _FOLDER_SIZE_CACHE.pop(abs_target, None)
     return True
 
 if __name__ == "__main__":
