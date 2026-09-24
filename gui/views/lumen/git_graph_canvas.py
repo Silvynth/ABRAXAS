@@ -1013,8 +1013,94 @@ class LumenHorizontalGitGraphView(QGraphicsView):
                         self.scene.addItem(edge)
                         self.edges.append(edge)
 
+            # Simulación Estética de Fusión (Preview en modo Vertical: FF o No-FF)
+            if simulated_merge and self.nodes:
+                src_b = simulated_merge.get("source_branch", "").strip()
+                tgt_b = simulated_merge.get("target_branch", "").strip()
+                style = simulated_merge.get("style", "no_ff")
+                m_title = simulated_merge.get("title", "").strip()
+
+                tgt_node = self.head_node
+                if tgt_b:
+                    clean_tgt = tgt_b.replace("origin/", "").strip()
+                    for n in self.nodes:
+                        if any(r == tgt_b or r == f"HEAD -> {tgt_b}" or r == clean_tgt for r in n.refs):
+                            tgt_node = n
+                            break
+
+                src_node = None
+                if src_b:
+                    clean_src = src_b.replace("origin/", "").strip()
+                    for n in self.nodes:
+                        if any(r == src_b or r == f"HEAD -> {src_b}" or r == clean_src for r in n.refs):
+                            src_node = n
+                            break
+
+                if tgt_node:
+                    top_node = self.nodes[0]
+                    sim_y = top_node.y() - y_step
+
+                    if style == "ff" and src_node:
+                        sim_lane = src_node.lane_idx
+                        sim_x = base_x + sim_lane * lane_step
+                        sim_color = QColor("#34d399")
+                        sim_subj = m_title or f"⚡ Fast-Forward: {tgt_b} ➔ {src_b} (Lineal)"
+                        sim_commit_data = {
+                            "hash": "~ff",
+                            "subject": sim_subj,
+                            "author": "Simulación FF",
+                            "date": "proyección lineal",
+                            "refs": ["🧪 SIMULACIÓN FF", f"⚡ {tgt_b} avanzará aquí"],
+                            "parents": [src_node.hash],
+                            "is_simulation": True
+                        }
+                    else:
+                        sim_lane = tgt_node.lane_idx
+                        sim_x = base_x + sim_lane * lane_step
+                        sim_color = QColor("#c084fc")
+                        sim_subj = m_title or f"🔀 Merge Commit: {src_b} ➔ {tgt_b}"
+                        sim_commit_data = {
+                            "hash": "~merge",
+                            "subject": sim_subj,
+                            "author": "Simulación Merge",
+                            "date": "proyección bifurcada",
+                            "refs": ["🧪 SIMULACIÓN MERGE", "🔀 Commit de Fusión"],
+                            "parents": [tgt_node.hash] + ([src_node.hash] if src_node and src_node != tgt_node else []),
+                            "is_simulation": True
+                        }
+
+                    sim_node = GitGraphCommitNode(
+                        commit_data=sim_commit_data,
+                        lane_idx=sim_lane,
+                        lane_color=sim_color,
+                        is_head=False,
+                        orientation="vertical",
+                        details_x=details_offset - sim_x,
+                        on_click_cb=self._on_node_clicked,
+                        graph_view=self
+                    )
+                    sim_node.setPos(sim_x, sim_y)
+                    self.scene.addItem(sim_node)
+                    self.nodes.insert(0, sim_node)
+
+                    if style == "ff" and src_node:
+                        edge_src = GitGraphConnectorEdge(src_node, sim_node, sim_color, orientation="vertical", is_dashed=True)
+                        self.scene.addItem(edge_src)
+                        self.edges.append(edge_src)
+                    else:
+                        edge_tgt = GitGraphConnectorEdge(tgt_node, sim_node, tgt_node.lane_color, orientation="vertical", is_dashed=True)
+                        self.scene.addItem(edge_tgt)
+                        self.edges.append(edge_tgt)
+
+                        if src_node and src_node != tgt_node:
+                            edge_src = GitGraphConnectorEdge(src_node, sim_node, src_node.lane_color, orientation="vertical", is_dashed=True)
+                            self.scene.addItem(edge_src)
+                            self.edges.append(edge_src)
+
+                    self.head_node = sim_node
+
             rect = self.scene.itemsBoundingRect()
-            self.scene.setSceneRect(QRectF(0, 0, max(rect.right() + 40, details_offset + 380.0), total_height))
+            self.scene.setSceneRect(QRectF(0, min(rect.top() - 20, 0), max(rect.right() + 40, details_offset + 380.0), total_height + 40))
             self.scroll_to_head()
 
         else:
@@ -1093,11 +1179,12 @@ class LumenHorizontalGitGraphView(QGraphicsView):
                         self.scene.addItem(edge)
                         self.edges.append(edge)
 
-            # Simulación Estética de Fusión (Merge preview)
+            # Simulación Estética de Fusión (Merge preview: FF o No-FF)
             if simulated_merge and self.nodes:
                 src_b = simulated_merge.get("source_branch", "").strip()
                 tgt_b = simulated_merge.get("target_branch", "").strip()
-                m_title = simulated_merge.get("title", f"Fusión: {src_b} ➔ {tgt_b}").strip()
+                style = simulated_merge.get("style", "no_ff")
+                m_title = simulated_merge.get("title", "").strip()
 
                 tgt_node = self.head_node
                 if tgt_b:
@@ -1118,19 +1205,35 @@ class LumenHorizontalGitGraphView(QGraphicsView):
                 if tgt_node:
                     max_x = max([n.x() for n in self.nodes])
                     sim_x = max_x + x_step
-                    sim_y = tgt_node.y()
-                    sim_lane = tgt_node.lane_idx
-                    sim_color = QColor("#c084fc")
 
-                    sim_commit_data = {
-                        "hash": "~merge",
-                        "subject": m_title,
-                        "author": "Simulación",
-                        "date": "proyección",
-                        "refs": ["🧪 SIMULACIÓN"],
-                        "parents": [tgt_node.hash] + ([src_node.hash] if src_node and src_node != tgt_node else []),
-                        "is_simulation": True
-                    }
+                    if style == "ff" and src_node:
+                        sim_lane = src_node.lane_idx
+                        sim_y = src_node.y()
+                        sim_color = QColor("#34d399")
+                        sim_subj = m_title or f"⚡ Fast-Forward: {tgt_b} ➔ {src_b} (Lineal)"
+                        sim_commit_data = {
+                            "hash": "~ff",
+                            "subject": sim_subj,
+                            "author": "Simulación FF",
+                            "date": "proyección lineal",
+                            "refs": ["🧪 SIMULACIÓN FF", f"⚡ {tgt_b} avanzará aquí"],
+                            "parents": [src_node.hash],
+                            "is_simulation": True
+                        }
+                    else:
+                        sim_lane = tgt_node.lane_idx
+                        sim_y = tgt_node.y()
+                        sim_color = QColor("#c084fc")
+                        sim_subj = m_title or f"🔀 Merge Commit: {src_b} ➔ {tgt_b}"
+                        sim_commit_data = {
+                            "hash": "~merge",
+                            "subject": sim_subj,
+                            "author": "Simulación Merge",
+                            "date": "proyección bifurcada",
+                            "refs": ["🧪 SIMULACIÓN MERGE", "🔀 Commit de Fusión"],
+                            "parents": [tgt_node.hash] + ([src_node.hash] if src_node and src_node != tgt_node else []),
+                            "is_simulation": True
+                        }
 
                     sim_node = GitGraphCommitNode(
                         commit_data=sim_commit_data,
@@ -1145,14 +1248,19 @@ class LumenHorizontalGitGraphView(QGraphicsView):
                     self.scene.addItem(sim_node)
                     self.nodes.append(sim_node)
 
-                    edge_tgt = GitGraphConnectorEdge(tgt_node, sim_node, tgt_node.lane_color, orientation="horizontal", is_dashed=True)
-                    self.scene.addItem(edge_tgt)
-                    self.edges.append(edge_tgt)
-
-                    if src_node and src_node != tgt_node:
-                        edge_src = GitGraphConnectorEdge(src_node, sim_node, src_node.lane_color, orientation="horizontal", is_dashed=True)
+                    if style == "ff" and src_node:
+                        edge_src = GitGraphConnectorEdge(src_node, sim_node, sim_color, orientation="horizontal", is_dashed=True)
                         self.scene.addItem(edge_src)
                         self.edges.append(edge_src)
+                    else:
+                        edge_tgt = GitGraphConnectorEdge(tgt_node, sim_node, tgt_node.lane_color, orientation="horizontal", is_dashed=True)
+                        self.scene.addItem(edge_tgt)
+                        self.edges.append(edge_tgt)
+
+                        if src_node and src_node != tgt_node:
+                            edge_src = GitGraphConnectorEdge(src_node, sim_node, src_node.lane_color, orientation="horizontal", is_dashed=True)
+                            self.scene.addItem(edge_src)
+                            self.edges.append(edge_src)
 
                     self.head_node = sim_node
 
