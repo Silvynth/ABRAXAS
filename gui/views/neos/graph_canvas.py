@@ -15,17 +15,39 @@ from PySide6.QtGui import (
 )
 from PySide6.QtCore import Qt, QPointF, QRectF
 
-# Paleta de carriles estilo GitHub Network / Git Graph
-LANE_COLORS = [
-    QColor("#6366f1"),  # Índigo / Neos Accent
-    QColor("#06b6d4"),  # Cian brillante
-    QColor("#10b981"),  # Esmeralda
-    QColor("#f59e0b"),  # Ámbar
-    QColor("#ec4899"),  # Rosa neón
-    QColor("#8b5cf6"),  # Violeta
-    QColor("#38bdf8"),  # Azul cielo
-    QColor("#14b8a6"),  # Turquesa
+# Paletas de carriles según el tema activo (Sincronización con Primario, Secundario o Monocromo)
+MONOCHROME_LANE_COLORS = [
+    QColor("#ffffff"),  # Blanco puro (Root / Nivel 0)
+    QColor("#e2e8f0"),  # Platino
+    QColor("#cbd5e1"),  # Plata
+    QColor("#94a3b8"),  # Pizarra claro
+    QColor("#64748b"),  # Titanio medio
+    QColor("#9ca3af"),  # Gris neutro
+    QColor("#f1f5f9"),  # Nieve
+    QColor("#78716c"),  # Piedra
 ]
+
+def get_theme_lane_colors(theme_key="monochrome"):
+    """Resuelve la paleta de colores para los carriles del grafo sincronizada con el tema."""
+    if theme_key == "monochrome":
+        return MONOCHROME_LANE_COLORS
+    try:
+        from gui.theme import get_system_theme_palette, THEMES
+        pal = get_system_theme_palette() or THEMES.get(theme_key, THEMES.get("noctalia", {}))
+        return [
+            QColor(pal.get("ACCENT", "#6366f1")),
+            QColor(pal.get("CYAN", "#06b6d4")),
+            QColor(pal.get("SUCCESS", "#10b981")),
+            QColor(pal.get("WARNING", "#f59e0b")),
+            QColor(pal.get("ACCENT_HOVER", "#4f46e5")),
+            QColor(pal.get("ACCENT_LIGHT", "#e0e7ff")),
+            QColor(pal.get("TEXT_PRIMARY", "#ffffff")),
+            QColor(pal.get("TEXT_SECONDARY", "#9ca3af")),
+        ]
+    except Exception:
+        return MONOCHROME_LANE_COLORS
+
+LANE_COLORS = MONOCHROME_LANE_COLORS
 
 def get_file_icon(name, is_dir):
     if is_dir:
@@ -57,30 +79,45 @@ class FixedGridGraphEdge(QGraphicsPathItem):
         self.setZValue(1)
         self.update_path()
 
-    def update_path(self):
+    def update_path(self, orientation="horizontal"):
         if not self.source or not self.target:
             return
 
-        p1 = self.source.get_right_anchor()
-        p2 = self.target.get_left_anchor()
-
         path = QPainterPath()
-        path.moveTo(p1)
+        if orientation == "horizontal":
+            p1 = self.source.get_right_anchor()
+            p2 = self.target.get_left_anchor()
+            path.moveTo(p1)
 
-        dx = p2.x() - p1.x()
-        dy = p2.y() - p1.y()
+            dx = p2.x() - p1.x()
+            dy = p2.y() - p1.y()
 
-        if abs(dy) < 2:
-            # Misma línea horizontal
-            path.lineTo(p2)
-        else:
-            # Trazo ortogonal con quiebre diagonal a 45°
-            diag_span = min(abs(dy), 22)
-            mid_x = p1.x() + 24
+            if abs(dy) < 2:
+                path.lineTo(p2)
+            else:
+                diag_span = min(abs(dy), 22)
+                mid_x = p1.x() + 24
+                path.lineTo(mid_x, p1.y())
+                path.lineTo(mid_x + diag_span, p2.y())
+                path.lineTo(p2)
+        else: # "vertical"
+            p1 = self.source.get_bottom_anchor()
+            p2 = self.target.get_top_anchor()
+            path.moveTo(p1)
 
-            path.lineTo(mid_x, p1.y())
-            path.lineTo(mid_x + diag_span, p2.y())
-            path.lineTo(p2)
+            dx = p2.x() - p1.x()
+            dy = p2.y() - p1.y()
+
+            if abs(dx) < 2:
+                path.lineTo(p2)
+            else:
+                mid_y = p1.y() + 16
+                diag_span = min(abs(dx), 16)
+                path.lineTo(p1.x(), mid_y)
+                sign = 1 if dx > 0 else -1
+                path.lineTo(p1.x() + sign * diag_span, mid_y + diag_span)
+                path.lineTo(p2.x(), mid_y + diag_span)
+                path.lineTo(p2)
 
         self.setPath(path)
         
@@ -129,6 +166,16 @@ class FixedGridGraphNode(QGraphicsItem):
         """Punto de salida derecho (hacia las ramas hijas)."""
         pos = self.scenePos()
         return QPointF(pos.x() + self.card_width / 2, pos.y())
+
+    def get_top_anchor(self):
+        """Punto de entrada superior (orientación vertical)."""
+        pos = self.scenePos()
+        return QPointF(pos.x(), pos.y() - self.card_height / 2)
+
+    def get_bottom_anchor(self):
+        """Punto de salida inferior (orientación vertical)."""
+        pos = self.scenePos()
+        return QPointF(pos.x(), pos.y() + self.card_height / 2)
 
     def boundingRect(self):
         return QRectF(
@@ -244,21 +291,38 @@ class ProjectGraphCanvas(QGraphicsView):
         self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.setStyleSheet("background-color: #090a0f; border: 1px solid #22242e; border-radius: 8px;")
+        self.setStyleSheet("background-color: #0a0b0e; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px;")
 
         self.current_path = ""
         self.depth_level = 2
         self.max_files_per_dir = 8
+        self.orientation = "horizontal"
+        self.theme_key = "monochrome"
+        self.lane_colors = get_theme_lane_colors(self.theme_key)
 
         self.root_node = None
         self.nodes = []
         self.edges = []
         self.zoom_level = 1.0
 
+    def set_theme(self, theme_key="monochrome"):
+        """Actualiza la paleta de colores del grafo según el tema."""
+        self.theme_key = theme_key
+        self.lane_colors = get_theme_lane_colors(theme_key)
+        if self.current_path:
+            self.build_graph_from_directory(self.current_path, depth=self.depth_level)
+
+    def toggle_orientation(self) -> str:
+        """Alterna entre orientación 'horizontal' (izq a der) y 'vertical' (arriba a abajo)."""
+        self.orientation = "vertical" if getattr(self, "orientation", "horizontal") == "horizontal" else "horizontal"
+        self._layout_fixed_grid()
+        self.center_graph()
+        return self.orientation
+
     def drawBackground(self, painter, rect):
         """Fondo con líneas fijas de cuadrícula y carriles de alineación."""
         super().drawBackground(painter, rect)
-        painter.fillRect(rect, QColor("#090a0f"))
+        painter.fillRect(rect, QColor("#0a0b0e"))
 
         # Líneas de cuadrícula horizontal
         pen_line = QPen(QColor(255, 255, 255, 7), 1, Qt.DashLine)
@@ -308,7 +372,7 @@ class ProjectGraphCanvas(QGraphicsView):
         root_name = os.path.basename(root_path) or root_path
         self.root_node = FixedGridGraphNode(
             root_name, root_path, is_dir=True, is_root=True, level=0, 
-            lane_color=LANE_COLORS[0], on_toggle_cb=self.toggle_node_expansion
+            lane_color=self.lane_colors[0], on_toggle_cb=self.toggle_node_expansion
         )
         self.scene.addItem(self.root_node)
         self.nodes.append(self.root_node)
@@ -352,9 +416,10 @@ class ProjectGraphCanvas(QGraphicsView):
             extra = len(files) - max_files
             selected_items.append((f"+ {extra} archivos", current_path, False))
 
+        colors = getattr(self, "lane_colors", LANE_COLORS)
         for i, (name, p, is_dir) in enumerate(selected_items):
-            lane_idx = (parent_node.level + i + 1) % len(LANE_COLORS)
-            lane_col = LANE_COLORS[lane_idx]
+            lane_idx = (parent_node.level + i + 1) % len(colors)
+            lane_col = colors[lane_idx]
 
             child_node = FixedGridGraphNode(
                 name, p, is_dir=is_dir, level=current_depth, 
@@ -379,38 +444,61 @@ class ProjectGraphCanvas(QGraphicsView):
                 )
 
     def _layout_fixed_grid(self):
-        """Alinea los nodos en una cuadrícula fija por columnas y filas horizontales."""
+        """Alinea los nodos en la cuadrícula fija según la orientación activa."""
         if not self.root_node:
             return
 
-        def layout_node(node, depth=0, start_y=0, x_step=250, y_step=48):
-            node.x_grid = depth * x_step
+        if getattr(self, "orientation", "horizontal") == "horizontal":
+            def layout_node_h(node, depth=0, start_y=0, x_step=250, y_step=48):
+                node.x_grid = depth * x_step
 
-            if not node.is_expanded or not node.children_nodes:
-                node.y_grid = start_y
+                if not node.is_expanded or not node.children_nodes:
+                    node.y_grid = start_y
+                    node.setPos(node.x_grid, node.y_grid)
+                    return start_y + y_step
+
+                curr_y = start_y
+                for child in node.children_nodes:
+                    curr_y = layout_node_h(child, depth + 1, curr_y, x_step, y_step)
+
+                first_child = node.children_nodes[0]
+                last_child = node.children_nodes[-1]
+                node.y_grid = (first_child.y_grid + last_child.y_grid) / 2.0
                 node.setPos(node.x_grid, node.y_grid)
-                return start_y + y_step
+                return curr_y
 
-            curr_y = start_y
-            for child in node.children_nodes:
-                curr_y = layout_node(child, depth + 1, curr_y, x_step, y_step)
+            total_height = layout_node_h(self.root_node, depth=0, start_y=0)
+            offset_y = total_height / 2.0
+            for node in self.nodes:
+                node.setPos(node.x_grid - 180, node.y_grid - offset_y)
+        else:
+            def layout_node_v(node, depth=0, start_x=0, y_step=75, x_spacing=18):
+                node.y_grid = depth * y_step
+                my_w = max(node.card_width, 140)
 
-            first_child = node.children_nodes[0]
-            last_child = node.children_nodes[-1]
-            node.y_grid = (first_child.y_grid + last_child.y_grid) / 2.0
-            node.setPos(node.x_grid, node.y_grid)
-            return curr_y
+                if not node.is_expanded or not node.children_nodes:
+                    node.x_grid = start_x + my_w / 2.0
+                    node.setPos(node.x_grid, node.y_grid)
+                    return start_x + my_w + x_spacing
 
-        total_height = layout_node(self.root_node, depth=0, start_y=0)
+                curr_x = start_x
+                for child in node.children_nodes:
+                    curr_x = layout_node_v(child, depth + 1, curr_x, y_step, x_spacing)
 
-        # Centrado vertical fijo
-        offset_y = total_height / 2.0
-        for node in self.nodes:
-            node.setPos(node.x_grid - 180, node.y_grid - offset_y)
+                first_child = node.children_nodes[0]
+                last_child = node.children_nodes[-1]
+                node.x_grid = (first_child.x_grid + last_child.x_grid) / 2.0
+                node.setPos(node.x_grid, node.y_grid)
+                return max(curr_x, start_x + my_w + x_spacing)
 
-        # Actualizar aristas ortogonales
+            total_width = layout_node_v(self.root_node, depth=0, start_x=0)
+            offset_x = total_width / 2.0
+            for node in self.nodes:
+                node.setPos(node.x_grid - offset_x, node.y_grid - 100)
+
+        # Actualizar aristas ortogonales según la orientación
         for edge in self.edges:
-            edge.update_path()
+            edge.update_path(orientation=self.orientation)
 
     def change_depth(self, delta):
         """Aumenta (+1) o disminuye (-1) la profundidad de visualización."""
@@ -438,9 +526,12 @@ class ProjectGraphCanvas(QGraphicsView):
                 self._set_children_visibility(child, visible and child.is_expanded)
 
     def center_graph(self):
-        """Centra la vista en el origen horizontal."""
+        """Centra la vista en el origen según la orientación activa."""
         if self.root_node:
-            self.centerOn(self.root_node.scenePos().x() + 200, 0)
+            if getattr(self, "orientation", "horizontal") == "horizontal":
+                self.centerOn(self.root_node.scenePos().x() + 200, 0)
+            else:
+                self.centerOn(self.root_node.scenePos().x(), self.root_node.scenePos().y() + 150)
 
     def wheelEvent(self, event):
         """Zoom suave."""

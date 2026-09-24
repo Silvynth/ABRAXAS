@@ -104,9 +104,9 @@ class ProjectsView(QWidget):
         # -------------------------------------------------------------
         # 2. BARRA DE CONTROL & MODOS DE ACCIÓN (BUSCAR, CREAR, SYNC, PURGAR)
         # -------------------------------------------------------------
-        top_card = QFrame()
-        top_card.setProperty("class", "surface")
-        top_layout = QVBoxLayout(top_card)
+        self.top_card = QFrame()
+        self.top_card.setProperty("class", "surface")
+        top_layout = QVBoxLayout(self.top_card)
         top_layout.setSpacing(10)
 
         # Fila 1: Ruta y Contador
@@ -184,7 +184,7 @@ class ProjectsView(QWidget):
         row_search.addWidget(btn_refresh)
         top_layout.addWidget(self.search_bar_widget)
 
-        root_layout.addWidget(top_card)
+        root_layout.addWidget(self.top_card)
 
         # -------------------------------------------------------------
         # 3. MAIN CENTRAL STACK (PÁGINAS: 0 = EXPLORADOR, 1 = CREAR, 2 = SYNC, 3 = PURGAR)
@@ -203,8 +203,8 @@ class ProjectsView(QWidget):
         self.splitter.setChildrenCollapsible(False)
 
         # --- SECCIÓN SUPERIOR: CONTENEDOR ÚNICO DE CARPETAS ---
-        top_container = QWidget()
-        top_c_layout = QVBoxLayout(top_container)
+        self.top_container = QWidget()
+        top_c_layout = QVBoxLayout(self.top_container)
         top_c_layout.setContentsMargins(0, 0, 0, 0)
         top_c_layout.setSpacing(6)
 
@@ -233,7 +233,7 @@ class ProjectsView(QWidget):
 
         self.scroll_area.setWidget(self.list_container_widget)
         top_c_layout.addWidget(self.scroll_area)
-        self.splitter.addWidget(top_container)
+        self.splitter.addWidget(self.top_container)
 
         # --- SECCIÓN INFERIOR: VISTA DE GRAFO & ÁRBOL DE CONTENIDO ---
         bottom_container = QFrame()
@@ -315,7 +315,20 @@ class ProjectsView(QWidget):
         tree_header_row.addWidget(self.btn_center_graph)
         tree_header_row.addWidget(self.btn_expand)
         tree_header_row.addWidget(self.btn_collapse)
-        tree_header_row.addWidget(btn_open)
+        self.btn_toggle_orientation = QPushButton("↔ Horizontal")
+        self.btn_toggle_orientation.setProperty("class", "browse")
+        self.btn_toggle_orientation.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_orientation.setToolTip("Alternar orientación del grafo: Horizontal o Vertical")
+        self.btn_toggle_orientation.clicked.connect(self.on_toggle_graph_orientation)
+        tree_header_row.addWidget(self.btn_toggle_orientation)
+
+        self.btn_maximize_graph = QPushButton("⛶ Maximizar")
+        self.btn_maximize_graph.setProperty("class", "browse")
+        self.btn_maximize_graph.setCursor(Qt.PointingHandCursor)
+        self.btn_maximize_graph.setToolTip("Maximizar lienzo a pantalla completa / Restaurar vista dividida")
+        self.btn_maximize_graph.clicked.connect(self.toggle_graph_maximize)
+        tree_header_row.addWidget(self.btn_maximize_graph)
+
         bottom_layout.addLayout(tree_header_row)
 
         # Stack interno con [0: Grafo Canvas, 1: Árbol QTreeView]
@@ -323,6 +336,14 @@ class ProjectsView(QWidget):
 
         # 1. Canvas del Grafo
         self.graph_canvas = ProjectGraphCanvas()
+        theme_key = "monochrome"
+        try:
+            from core.setup import read_toml_dict
+            cfg = read_toml_dict(self.config_target)
+            theme_key = cfg.get("abraxas", {}).get("theme", "monochrome")
+        except Exception:
+            pass
+        self.graph_canvas.set_theme(theme_key)
         self.bottom_stack.addWidget(self.graph_canvas)
 
         # 2. Árbol de Carpetas
@@ -435,6 +456,7 @@ class ProjectsView(QWidget):
             self.btn_view_graph.setProperty("class", "primary")
             self.btn_view_tree.setProperty("class", "browse")
             self.btn_center_graph.setVisible(True)
+            self.btn_toggle_orientation.setVisible(True)
             self.lbl_depth_title.setVisible(True)
             self.lbl_depth_val.setVisible(True)
             self.btn_depth_minus.setVisible(True)
@@ -448,6 +470,7 @@ class ProjectsView(QWidget):
             self.btn_view_graph.setProperty("class", "browse")
             self.btn_view_tree.setProperty("class", "primary")
             self.btn_center_graph.setVisible(False)
+            self.btn_toggle_orientation.setVisible(False)
             self.lbl_depth_title.setVisible(False)
             self.lbl_depth_val.setVisible(False)
             self.btn_depth_minus.setVisible(False)
@@ -569,3 +592,45 @@ class ProjectsView(QWidget):
         q = query.strip().lower()
         for name, row, folder in self.row_widgets:
             row.setVisible(q in name if q else True)
+
+    def on_toggle_graph_orientation(self):
+        """Alterna entre orientación Horizontal (LR) y Vertical (TB) con auto-centrado."""
+        new_or = self.graph_canvas.toggle_orientation()
+        if new_or == "vertical":
+            self.btn_toggle_orientation.setText("↕ Vertical")
+            self.btn_toggle_orientation.setToolTip("Orientación vertical activa (Top-to-Bottom). Clic para Horizontal")
+        else:
+            self.btn_toggle_orientation.setText("↔ Horizontal")
+            self.btn_toggle_orientation.setToolTip("Orientación horizontal activa (Left-to-Right). Clic para Vertical")
+        
+        self.btn_toggle_orientation.style().unpolish(self.btn_toggle_orientation)
+        self.btn_toggle_orientation.style().polish(self.btn_toggle_orientation)
+
+    def toggle_graph_maximize(self):
+        """Alterna entre la vista dividida y el lienzo a pantalla completa para mayor visibilidad."""
+        self.is_graph_maximized = not getattr(self, "is_graph_maximized", False)
+        if self.is_graph_maximized:
+            self.btn_maximize_graph.setText("⤢ Restaurar")
+            self.btn_maximize_graph.setToolTip("Restaurar vista dividida y lista de proyectos")
+            self._saved_splitter_sizes = self.splitter.sizes()
+            self.top_card.setVisible(False)
+            self.top_container.setVisible(False)
+        else:
+            self.btn_maximize_graph.setText("⛶ Maximizar")
+            self.btn_maximize_graph.setToolTip("Maximizar lienzo a pantalla completa")
+            self.top_card.setVisible(True)
+            self.top_container.setVisible(True)
+            if hasattr(self, "_saved_splitter_sizes") and self._saved_splitter_sizes:
+                self.splitter.setSizes(self._saved_splitter_sizes)
+        
+        self.btn_maximize_graph.style().unpolish(self.btn_maximize_graph)
+        self.btn_maximize_graph.style().polish(self.btn_maximize_graph)
+        
+        if self.current_mode == "graph":
+            self.center_graph_view()
+
+    def set_theme(self, theme_key):
+        """Actualiza la paleta de colores del grafo y los componentes."""
+        if hasattr(self, "graph_canvas"):
+            self.graph_canvas.set_theme(theme_key)
+
