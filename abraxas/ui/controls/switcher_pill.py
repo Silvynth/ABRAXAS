@@ -37,14 +37,14 @@ class SectorSwitcherPill(QFrame):
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setToolTip(tip)
-            btn.setFixedHeight(28)
+            btn.setFixedHeight(32)
             btn.setStyleSheet("""
                 QPushButton {
                     background-color: transparent;
                     color: #94a3b8;
                     border: 1px solid transparent;
                     border-radius: 6px;
-                    padding: 4px 12px;
+                    padding: 4px 14px;
                     font-size: 11px;
                     font-weight: 700;
                     letter-spacing: 0.5px;
@@ -56,7 +56,7 @@ class SectorSwitcherPill(QFrame):
                 QPushButton:checked {
                     background-color: rgba(255, 255, 255, 0.12);
                     color: #ffffff;
-                    border: 1px solid rgba(255, 255, 255, 0.2);
+                    border: 1px solid rgba(255, 255, 255, 0.20);
                 }
             """)
             btn.clicked.connect(lambda _, i=idx: self.select_sector(i))

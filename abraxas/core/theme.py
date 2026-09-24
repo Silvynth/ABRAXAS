@@ -1,6 +1,7 @@
 """
 ❖ ABRAXAS 2.0 | Foundation: Pure Monochromatic Theme Engine (Haute Horlogerie)
 Diseño de alto contraste y cero distracciones: grises puros, carbón mate, titanio y blanco polar.
+Todas las vistas heredan y consumen estas clases para garantizar coherencia visual absoluta.
 """
 
 from typing import Optional
@@ -31,7 +32,7 @@ def generate_monochrome_stylesheet() -> str:
     p = MONOCHROME_PALETTE
     return f"""
 /* =====================================================================
-   ❖ ABRAXAS 2.0 | MONOCHROMATIC STYLESHEET (CERO DISTRACCIONES)
+   ❖ ABRAXAS 2.0 | MONOCHROMATIC STYLESHEET (HAUTE HORLOGERIE)
 ===================================================================== */
 
 * {{
@@ -50,7 +51,7 @@ QWidget#NeosShellWindow, QWidget#content_area {{
 }}
 
 /* -------------------------------------------------------------
-   1. SIDEBAR
+   1. SIDEBAR & NAVEGACIÓN PRINCIPAL
 ------------------------------------------------------------- */
 QFrame.sidebar {{
     background-color: {p["BG_SIDEBAR"]};
@@ -82,7 +83,6 @@ QLabel.version_badge {{
     padding: 4px 8px;
 }}
 
-/* Botones de navegación en Sidebar */
 QPushButton.nav_btn {{
     background-color: transparent;
     color: {p["TEXT_MUTED"]};
@@ -113,7 +113,7 @@ QPushButton.nav_btn:checked {{
 QFrame.sector_card {{
     background-color: {p["BG_SURFACE"]};
     border: 1px solid {p["BORDER_SUBTLE"]};
-    border-radius: 12px;
+    border-radius: 10px;
 }}
 
 QFrame.sector_card:hover {{
@@ -122,41 +122,43 @@ QFrame.sector_card:hover {{
 
 QLabel.sector_micro_tag {{
     color: {p["TEXT_MICRO"]};
-    font-size: 10px;
+    font-size: 9.5px;
     font-weight: 700;
-    letter-spacing: 1.2px;
+    letter-spacing: 1.1px;
     text-transform: uppercase;
     font-family: 'JetBrains Mono', monospace;
 }}
 
 QLabel.sector_title {{
     color: {p["TEXT_TITLES"]};
-    font-size: 16px;
-    font-weight: 700;
+    font-size: 14px;
+    font-weight: 800;
     letter-spacing: -0.2px;
 }}
 
 QLabel.sector_desc {{
     color: {p["TEXT_MUTED"]};
-    font-size: 12.5px;
+    font-size: 12px;
     line-height: 1.4;
 }}
 
 /* -------------------------------------------------------------
-   3. BOTONES TÁCTICOS Y PÍLDORAS
+   3. BOTONES TÁCTICOS Y PÍLDORAS (CERO TEXTO CORTADO)
 ------------------------------------------------------------- */
 QPushButton.cyber_btn {{
     background-color: {p["BG_SURFACE"]};
-    color: {p["TEXT_TITLES"]};
+    color: {p["TEXT_BODY"]};
     border: 1px solid {p["BORDER_SUBTLE"]};
-    border-radius: 7px;
-    padding: 8px 16px;
-    font-size: 12px;
+    border-radius: 6px;
+    padding: 5px 14px;
+    min-height: 30px;
+    font-size: 11.5px;
     font-weight: 600;
 }}
 
 QPushButton.cyber_btn:hover {{
     background-color: {p["BG_SURFACE_HOVER"]};
+    color: {p["TEXT_TITLES"]};
     border: 1px solid {p["BORDER_MEDIUM"]};
 }}
 
@@ -169,9 +171,10 @@ QPushButton.cyber_btn_primary {{
     background-color: {p["TEXT_TITLES"]};
     color: {p["BG_CANVAS"]};
     border: 1px solid {p["TEXT_TITLES"]};
-    border-radius: 7px;
-    padding: 8px 18px;
-    font-size: 12px;
+    border-radius: 6px;
+    padding: 5px 16px;
+    min-height: 30px;
+    font-size: 11.5px;
     font-weight: 700;
 }}
 
@@ -180,8 +183,187 @@ QPushButton.cyber_btn_primary:hover {{
     border-color: #d1d5db;
 }}
 
+QPushButton.cyber_btn_primary:pressed {{
+    background-color: #9ca3af;
+}}
+
+/* Botones compactos para barras de herramientas */
+QPushButton.cyber_btn_compact {{
+    background-color: {p["BG_SURFACE"]};
+    color: {p["TEXT_BODY"]};
+    border: 1px solid {p["BORDER_SUBTLE"]};
+    border-radius: 5px;
+    padding: 3px 12px;
+    min-height: 26px;
+    font-size: 11px;
+    font-weight: 600;
+}}
+
+QPushButton.cyber_btn_compact:hover {{
+    background-color: {p["BG_SURFACE_HOVER"]};
+    color: {p["TEXT_TITLES"]};
+    border-color: {p["BORDER_MEDIUM"]};
+}}
+
+QPushButton.cyber_btn_compact:pressed {{
+    background-color: {p["TEXT_TITLES"]};
+    color: {p["BG_CANVAS"]};
+}}
+
+/* Botones de conmutación / Píldoras selectoras (SemVer, Ligero/Pesado) */
+QPushButton.cyber_btn_toggle {{
+    background-color: {p["BG_SURFACE"]};
+    color: {p["TEXT_MUTED"]};
+    border: 1px solid {p["BORDER_SUBTLE"]};
+    border-radius: 5px;
+    padding: 4px 11px;
+    min-height: 26px;
+    font-size: 10.5px;
+    font-weight: 600;
+}}
+
+QPushButton.cyber_btn_toggle:hover {{
+    background-color: {p["BG_SURFACE_HOVER"]};
+    color: {p["TEXT_TITLES"]};
+    border-color: {p["BORDER_MEDIUM"]};
+}}
+
+QPushButton.cyber_btn_toggle:checked {{
+    background-color: rgba(255, 255, 255, 0.12);
+    color: {p["TEXT_TITLES"]};
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    font-weight: 700;
+}}
+
+/* Botón en estado de carga animada */
+QPushButton.cyber_btn_loading {{
+    background-color: {p["BG_SURFACE_HOVER"]};
+    color: {p["TEXT_TITLES"]};
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 6px;
+    padding: 5px 14px;
+    min-height: 30px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+}}
+
+/* Botones cuadrados para iconos o acciones rápidas */
+QPushButton.cyber_btn_icon {{
+    background-color: rgba(255, 255, 255, 0.03);
+    color: {p["TEXT_MUTED"]};
+    border: 1px solid {p["BORDER_SUBTLE"]};
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    min-width: 22px;
+    min-height: 22px;
+    max-width: 22px;
+    max-height: 22px;
+    padding: 0;
+}}
+
+QPushButton.cyber_btn_icon:hover {{
+    background-color: rgba(255, 255, 255, 0.12);
+    color: {p["TEXT_TITLES"]};
+    border-color: {p["BORDER_MEDIUM"]};
+}}
+
+QPushButton.cyber_btn_icon_active {{
+    background-color: rgba(255, 255, 255, 0.10);
+    color: {p["TEXT_TITLES"]};
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 800;
+    min-width: 22px;
+    min-height: 22px;
+    max-width: 22px;
+    max-height: 22px;
+    padding: 0;
+}}
+
+QPushButton.cyber_btn_icon_active:hover {{
+    background-color: rgba(255, 255, 255, 0.20);
+    border-color: #ffffff;
+}}
+
 /* -------------------------------------------------------------
-   4. TERMINAL MONOCROMÁTICA
+   4. BADGES Y ETIQUETAS DE ESTADO MONOCROMÁTICAS
+------------------------------------------------------------- */
+QLabel.badge_staged {{
+    color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 3px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 8.5px;
+    font-weight: 800;
+    padding: 2px 6px;
+}}
+
+QLabel.badge_pending {{
+    color: #94a3b8;
+    background-color: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 8.5px;
+    font-weight: 700;
+    padding: 2px 6px;
+}}
+
+QLabel.badge_telemetry {{
+    color: {p["TEXT_BODY"]};
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid {p["BORDER_SUBTLE"]};
+    border-radius: 5px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 4px 10px;
+}}
+
+/* -------------------------------------------------------------
+   5. FILAS DE ARCHIVOS DEL WORKSPACE
+------------------------------------------------------------- */
+QFrame.workspace_file_row {{
+    background-color: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 5px;
+}}
+
+QFrame.workspace_file_row:hover {{
+    background-color: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.12);
+}}
+
+QLabel.file_path_label {{
+    color: {p["TEXT_BODY"]};
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+}}
+
+/* -------------------------------------------------------------
+   6. ENTRADAS DE TEXTO MONOCROMÁTICAS
+------------------------------------------------------------- */
+QLineEdit.cyber_input, QTextEdit.cyber_input {{
+    background-color: {p["BG_INPUT"]};
+    border: 1px solid {p["BORDER_SUBTLE"]};
+    border-radius: 6px;
+    color: {p["TEXT_TITLES"]};
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    padding: 6px 10px;
+}}
+
+QLineEdit.cyber_input:focus, QTextEdit.cyber_input:focus {{
+    border-color: rgba(255, 255, 255, 0.35);
+}}
+
+/* -------------------------------------------------------------
+   7. TERMINAL MONOCROMÁTICA
 ------------------------------------------------------------- */
 QTextEdit.cyber_terminal {{
     background-color: {p["BG_INPUT"]};
@@ -195,8 +377,13 @@ QTextEdit.cyber_terminal {{
 }}
 
 /* -------------------------------------------------------------
-   5. SCROLLBARS TÁCTICAS
+   8. SCROLLBARS TÁCTICAS
 ------------------------------------------------------------- */
+QScrollArea.clean_scroll {{
+    border: none;
+    background: transparent;
+}}
+
 QScrollBar:vertical {{
     background: transparent;
     width: 6px;

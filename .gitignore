@@ -20,6 +20,10 @@ secrets/
 docs/
 scratch/
 
+# Skills y Prompts de IA Privados del Usuario
+skills/*.txt
+!skills/*.example.txt
+
 # Certificados, Tokens y Claves Criptográficas
 *.pem
 *.key
