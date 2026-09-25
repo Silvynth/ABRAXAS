@@ -683,13 +683,34 @@ class Sector2EnvView(QWidget):
 
         self.containers_layout.addStretch()
 
+    def _set_terminal_content(self, text: str):
+        """Escribe texto en la terminal táctica de Docker y posiciona el cursor al final."""
+        self.txt_docker_terminal.setPlainText(text)
+        cursor = self.txt_docker_terminal.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.txt_docker_terminal.setTextCursor(cursor)
+
     def _container_action(self, action: str, container_name: str):
-        """Ejecuta una acción sobre un contenedor (start, stop, restart, remove)."""
+        """Ejecuta una acción sobre un contenedor y canaliza la salida directamente a la terminal de logs."""
+        self.current_logs_target = container_name
+        self.current_logs_is_compose = False
+        self.lbl_terminal_title.setText(f"Logs: {container_name}")
+        self._switch_docker_subview(1)
+
+        self._set_terminal_content(f"$ docker {action} {container_name}\nEjecutando acción...")
+        QApplication.processEvents()
+
         ok, msg = execute_docker_container_action(action, container_name)
         if ok:
-            self.log_emitted.emit(f"🐳 Docker [{action.upper()}]: Contenedor <b>{container_name}</b> ejecutado con éxito.")
+            out_text = f"$ docker {action} {container_name}\n✔ {msg}"
+            if action in ["start", "restart"]:
+                ok_logs, logs = get_docker_container_logs(container_name, tail_lines=80)
+                if ok_logs and logs:
+                    out_text += f"\n\n--- [Registros de {container_name}] ---\n{logs}"
+            self._set_terminal_content(out_text)
         else:
-            self.log_emitted.emit(f"⚠️ Docker Error [{action}]: {msg}")
+            self._set_terminal_content(f"$ docker {action} {container_name} [FALLO]\n❌ {msg}")
+
         self._populate_containers_list()
 
     def _switch_docker_subview(self, index: int):
@@ -707,7 +728,6 @@ class Sector2EnvView(QWidget):
         self.lbl_terminal_title.setText(f"Logs: {container_name}")
         self._switch_docker_subview(1)
         self._refresh_active_logs()
-        self.log_emitted.emit(f"📜 Mostrando registros del contenedor <b>{container_name}</b>.")
 
     def _show_compose_logs(self):
         """Cambia a la terminal integrada de Docker y muestra los registros de Docker Compose."""
@@ -717,7 +737,8 @@ class Sector2EnvView(QWidget):
         d_status = inspect_docker_status(p_path)
         compose_files = d_status.get("compose_files", [])
         if not compose_files:
-            self.log_emitted.emit("⚠️ No se encontró ningún archivo docker-compose en el proyecto.")
+            self._switch_docker_subview(1)
+            self._set_terminal_content("⚠️ No se encontró ningún archivo docker-compose en el proyecto.")
             return
 
         c_file = os.path.join(p_path, compose_files[0])
@@ -726,12 +747,11 @@ class Sector2EnvView(QWidget):
         self.lbl_terminal_title.setText(f"Logs: Compose ({compose_files[0]})")
         self._switch_docker_subview(1)
         self._refresh_active_logs()
-        self.log_emitted.emit(f"📜 Mostrando registros de Docker Compose (<b>{compose_files[0]}</b>).")
 
     def _refresh_active_logs(self):
         """Actualiza el contenido de la terminal de logs para el objetivo actualmente seleccionado."""
         if not self.current_logs_target:
-            self.txt_docker_terminal.setPlainText("No hay ningún contenedor o compose seleccionado para inspeccionar logs.")
+            self._set_terminal_content("No hay ningún contenedor o compose seleccionado para inspeccionar logs.")
             return
 
         if self.current_logs_is_compose:
@@ -740,14 +760,11 @@ class Sector2EnvView(QWidget):
             ok, logs = get_docker_container_logs(self.current_logs_target, tail_lines=150)
 
         if ok and logs:
-            self.txt_docker_terminal.setPlainText(logs)
-            cursor = self.txt_docker_terminal.textCursor()
-            cursor.movePosition(QTextCursor.End)
-            self.txt_docker_terminal.setTextCursor(cursor)
+            self._set_terminal_content(logs)
         elif not ok:
-            self.txt_docker_terminal.setPlainText(f"Error al obtener logs:\n{logs}")
+            self._set_terminal_content(f"Error al obtener logs:\n{logs}")
         else:
-            self.txt_docker_terminal.setPlainText("No hay registros disponibles para el objetivo seleccionado.")
+            self._set_terminal_content("No hay registros disponibles para el objetivo seleccionado.")
 
     def _copy_terminal_logs(self):
         """Copia el texto actual de la terminal de logs al portapapeles del sistema."""
@@ -756,34 +773,46 @@ class Sector2EnvView(QWidget):
             clipboard = QApplication.clipboard()
             if clipboard:
                 clipboard.setText(text)
-            self.log_emitted.emit("📋 Registros de Docker copiados al portapapeles.")
 
     def _clear_terminal_logs(self):
         """Limpia el contenido de la terminal de logs."""
         self.txt_docker_terminal.clear()
 
     def _trigger_compose_action(self, action: str):
-        """Ejecuta up, down o restart sobre el archivo compose del proyecto."""
+        """Ejecuta up, down o restart sobre el archivo compose del proyecto y canaliza la salida a la terminal de logs."""
         if not self.project or not self.project.path:
             return
         p_path = str(self.project.path)
         d_status = inspect_docker_status(p_path)
         compose_files = d_status.get("compose_files", [])
         if not compose_files:
-            self.log_emitted.emit("No se encontró ningún archivo docker-compose en el proyecto.")
+            self._switch_docker_subview(1)
+            self._set_terminal_content("⚠️ No se encontró ningún archivo docker-compose en el proyecto.")
             return
 
         c_file = os.path.join(p_path, compose_files[0])
-        self.log_emitted.emit(f"🚀 Ejecutando Docker Compose [{action.upper()}] en <b>{compose_files[0]}</b>...")
+        self.current_logs_target = c_file
+        self.current_logs_is_compose = True
+        self.lbl_terminal_title.setText(f"Logs: Compose ({compose_files[0]})")
+        self._switch_docker_subview(1)
+
+        self._set_terminal_content(f"$ docker compose -f {compose_files[0]} {action}\nEjecutando acción...")
+        QApplication.processEvents()
+
         ok, msg = execute_compose_action(c_file, action)
         if ok:
-            self.log_emitted.emit(f"✨ Docker Compose [{action}]: Operación completada exitosamente.")
+            out_text = f"$ docker compose -f {compose_files[0]} {action}\n✔ {msg}"
+            if action in ["up", "restart"]:
+                ok_l, logs = execute_compose_action(c_file, "logs")
+                if ok_l and logs:
+                    out_text += f"\n\n--- [Registros de Compose / Service Logs] ---\n{logs}"
+            self._set_terminal_content(out_text)
         else:
-            self.log_emitted.emit(f"⚠️ Error en Docker Compose [{action}]: {msg}")
+            self._set_terminal_content(f"$ docker compose -f {compose_files[0]} {action} [FALLO]\n❌ {msg}")
         self._refresh_docker()
 
     def _execute_docker_prune_dialog(self):
-        """Diálogo de confirmación para docker system prune."""
+        """Diálogo de confirmación para docker system prune con salida en la terminal de logs."""
         reply = QMessageBox.question(
             self,
             "Limpieza de Docker (System Prune)",
@@ -791,12 +820,18 @@ class Sector2EnvView(QWidget):
             QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            self.log_emitted.emit("🧹 Ejecutando Docker System Prune...")
+            self.current_logs_target = "System Prune"
+            self.current_logs_is_compose = False
+            self.lbl_terminal_title.setText("Logs: Docker System Prune")
+            self._switch_docker_subview(1)
+            self._set_terminal_content("$ docker system prune -f\nEjecutando limpieza de recursos huérfanos...")
+            QApplication.processEvents()
+
             ok, msg = execute_docker_prune()
             if ok:
-                self.log_emitted.emit(f"✨ Docker Prune finalizado: {msg}")
+                self._set_terminal_content(f"$ docker system prune -f\n✔ {msg}\n\n✨ Limpieza de sistema Docker completada.")
             else:
-                self.log_emitted.emit(f"⚠️ Error en Docker Prune: {msg}")
+                self._set_terminal_content(f"$ docker system prune -f [ERROR]\n❌ {msg}")
             self._refresh_docker()
 
     # =============================================================
