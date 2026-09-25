@@ -4,18 +4,20 @@
 
 import unittest
 from pathlib import Path
-from abraxas.core.paths import get_repo_root, get_active_config_path
-from abraxas.core.process import run_command, CommandResult
-from abraxas.core.semver import parse_semver, bump_semver, detect_project_semver
-from abraxas.core.config import load_config, save_config, AppConfig
-from abraxas.lumen.models.project import Project
-from abraxas.lumen.models.git import GitBranch, GitCommit
+from core.paths import get_repo_root, get_active_config_path
+from core.process import run_command, CommandResult
+from core.semver import parse_semver, bump_semver, detect_project_semver
+from core.config import load_config, save_config, AppConfig
+from lumen.models.project import Project
+from lumen.models.git import GitBranch, GitCommit
 
 class TestFoundation(unittest.TestCase):
     def test_paths_resolution(self):
         root = get_repo_root()
         self.assertTrue(root.exists())
-        self.assertTrue((root / "abraxas").is_dir())
+        self.assertTrue((root / "core").is_dir())
+        self.assertTrue((root / "lumen").is_dir())
+        self.assertTrue((root / "umbra").is_dir())
         
         cfg_path = get_active_config_path()
         self.assertTrue(cfg_path.name.endswith(".toml"))
@@ -87,7 +89,7 @@ class TestFoundation(unittest.TestCase):
     def test_cyber_terminal(self):
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance() or QApplication([])
-        from abraxas.ui.terminal.cyber_terminal import CyberTerminal
+        from ui.terminal.cyber_terminal import CyberTerminal
         term = CyberTerminal(prompt="test-term@abraxas:~$")
         self.assertEqual(term.current_state, 1)
         term.set_terminal_state(0)

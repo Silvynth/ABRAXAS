@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =====================================================================
-#  ❖ ABRAXAS 2.0 | REAL-TIME DEVELOPMENT PREVIEW LAUNCHER (abx2)
+#  ❖ ABRAXAS 2.0 | REAL-TIME DEVELOPMENT LAUNCHER (abx2)
 # =====================================================================
 
 REAL_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
@@ -9,7 +9,6 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/abraxas"
 mkdir -p "$LOG_DIR"
-LOG_FILE="$LOG_DIR/abraxas_v2.log"
 
 cd "$PROJECT_DIR" || exit 1
 export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
@@ -22,5 +21,4 @@ else
     PYTHON_BIN="$(which python3)"
 fi
 
-# Ejecución en primer plano como módulo empaquetado
-exec "$PYTHON_BIN" -m abraxas.app "$@"
+exec "$PYTHON_BIN" "$PROJECT_DIR/app.py" "$@"

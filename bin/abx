@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =====================================================================
-#  ❖ ABRAXAS 2.0 | PRIMARY LAUNCHER (abx)
+#  ❖ ABRAXAS 2.0 | MONOLITHIC PRIMARY LAUNCHER (abx)
 # =====================================================================
 
 REAL_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
@@ -21,5 +21,4 @@ else
     PYTHON_BIN="$(which python3)"
 fi
 
-# Ejecutar arquitectura principal Neos 2.0
-exec "$PYTHON_BIN" -m abraxas.app "$@"
+exec "$PYTHON_BIN" "$PROJECT_DIR/app.py" "$@"

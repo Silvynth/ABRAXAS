@@ -22,5 +22,4 @@ else
     PYTHON_BIN="$(which python3)"
 fi
 
-# Ejecutar arquitectura principal Neos 2.0
-exec "$PYTHON_BIN" -m abraxas.app "$@" > "$LOG_FILE" 2>&1
+exec "$PYTHON_BIN" "$PROJECT_DIR/app.py" "$@" > "$LOG_FILE" 2>&1
