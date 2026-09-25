@@ -45,6 +45,18 @@ QWidget {{
     outline: none;
 }}
 
+/* Tooltips tácticos de ultra-precisión */
+QToolTip {{
+    background-color: #101115;
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.20);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-family: 'Inter', -apple-system, sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+}}
+
 /* Fondo raíz de la ventana */
 QWidget#NeosShellWindow, QWidget#content_area {{
     background-color: {p["BG_CANVAS"]};

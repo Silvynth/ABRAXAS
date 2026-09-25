@@ -279,6 +279,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("ABRAXAS 2.0")
     app.setApplicationDisplayName("ABRAXAS 2.0 (Preview)")
+    app.setStyleSheet(generate_monochrome_stylesheet())
     
     icon_path = get_assets_dir() / "abraxas_icon.svg"
     if icon_path.exists():
