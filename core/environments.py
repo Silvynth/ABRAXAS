@@ -238,15 +238,8 @@ def inspect_python_venv(project_path: str) -> Dict[str, Any]:
                 pass
 
         # Conteo de paquetes
-        pip_bin = os.path.join(venv_full_path, "bin", "pip")
-        if os.path.exists(pip_bin):
-            try:
-                res = subprocess.run([pip_bin, "list", "--format=json"], capture_output=True, text=True, timeout=5)
-                if res.returncode == 0:
-                    pkgs = json.loads(res.stdout)
-                    data["package_count"] = len(pkgs)
-            except Exception:
-                pass
+        pkgs = list_installed_packages(venv_full_path)
+        data["package_count"] = len(pkgs)
 
     return data
 
@@ -287,22 +280,26 @@ def install_project_dependencies(project_path: str, venv_path: str) -> Tuple[boo
         if os.path.exists(req_file):
             if use_uv:
                 cmd = ["uv", "pip", "install", "-r", "requirements.txt", "--python", py_bin]
-            else:
+            elif os.path.exists(pip_bin):
                 cmd = [pip_bin, "install", "-r", "requirements.txt"]
-            res = subprocess.run(cmd, cwd=project_path, capture_output=True, text=True, timeout=120)
+            else:
+                cmd = [py_bin, "-m", "pip", "install", "-r", "requirements.txt"]
+            res = subprocess.run(cmd, cwd=project_path, capture_output=True, text=True, timeout=180)
             if res.returncode == 0:
                 return True, "Dependencias de requirements.txt instaladas correctamente."
-            return False, f"Error al instalar requirements.txt: {res.stderr.strip()}"
+            return False, f"Error al instalar requirements.txt: {res.stderr.strip() or res.stdout.strip()}"
 
         elif os.path.exists(pyp_file):
             if use_uv:
                 cmd = ["uv", "pip", "install", "-e", ".", "--python", py_bin]
-            else:
+            elif os.path.exists(pip_bin):
                 cmd = [pip_bin, "install", "-e", "."]
-            res = subprocess.run(cmd, cwd=project_path, capture_output=True, text=True, timeout=120)
+            else:
+                cmd = [py_bin, "-m", "pip", "install", "-e", "."]
+            res = subprocess.run(cmd, cwd=project_path, capture_output=True, text=True, timeout=180)
             if res.returncode == 0:
                 return True, "Proyecto y dependencias de pyproject.toml instaladas."
-            return False, f"Error al instalar pyproject.toml: {res.stderr.strip()}"
+            return False, f"Error al instalar pyproject.toml: {res.stderr.strip() or res.stdout.strip()}"
 
         return False, "No se encontró ningún requirements.txt ni pyproject.toml en el proyecto."
     except Exception as e:
@@ -320,8 +317,10 @@ def install_custom_packages(project_path: str, venv_path: str, packages: List[st
     try:
         if use_uv:
             cmd = ["uv", "pip", "install"] + packages + ["--python", py_bin]
-        else:
+        elif os.path.exists(pip_bin):
             cmd = [pip_bin, "install"] + packages
+        else:
+            cmd = [py_bin, "-m", "pip", "install"] + packages
             
         res = subprocess.run(cmd, cwd=project_path, capture_output=True, text=True, timeout=120)
         if res.returncode == 0:
@@ -330,40 +329,111 @@ def install_custom_packages(project_path: str, venv_path: str, packages: List[st
     except Exception as e:
         return False, f"Excepción al instalar paquetes: {str(e)}"
 
-def freeze_dependencies_to_file(project_path: str, venv_path: str) -> Tuple[bool, str]:
-    """Ejecuta pip freeze y lo guarda en requirements.txt."""
+def uninstall_package(project_path: str, venv_path: str, package_name: str) -> Tuple[bool, str]:
+    """Desinstala un paquete específico del entorno virtual."""
+    if not package_name:
+        return False, "Nombre de paquete no especificado."
+
     py_bin = os.path.join(venv_path, "bin", "python")
     pip_bin = os.path.join(venv_path, "bin", "pip")
     use_uv = bool(shutil.which("uv"))
 
     try:
         if use_uv:
-            res = subprocess.run(["uv", "pip", "freeze", "--python", py_bin], cwd=project_path, capture_output=True, text=True, timeout=15)
+            cmd = ["uv", "pip", "uninstall", package_name, "--python", py_bin]
+        elif os.path.exists(pip_bin):
+            cmd = [pip_bin, "uninstall", "-y", package_name]
         else:
-            res = subprocess.run([pip_bin, "freeze"], cwd=project_path, capture_output=True, text=True, timeout=15)
+            cmd = [py_bin, "-m", "pip", "uninstall", "-y", package_name]
 
+        res = subprocess.run(cmd, cwd=project_path, capture_output=True, text=True, timeout=60)
         if res.returncode == 0:
-            target_file = os.path.join(project_path, "requirements.txt")
-            with open(target_file, "w", encoding="utf-8") as f:
-                f.write(res.stdout)
-            count = len(res.stdout.strip().splitlines())
-            return True, f"requirements.txt generado con éxito ({count} dependencias)."
-        return False, f"Error al congelar dependencias: {res.stderr.strip()}"
+            return True, f"Paquete '{package_name}' desinstalado exitosamente."
+        return False, f"Error al desinstalar '{package_name}': {res.stderr.strip() or res.stdout.strip()}"
+    except Exception as e:
+        return False, f"Excepción al desinstalar: {str(e)}"
+
+def freeze_dependencies_to_file(project_path: str, venv_path: str) -> Tuple[bool, str]:
+    """Ejecuta freeze y lo guarda en requirements.txt."""
+    py_bin = os.path.join(venv_path, "bin", "python")
+    pip_bin = os.path.join(venv_path, "bin", "pip")
+    use_uv = bool(shutil.which("uv"))
+
+    try:
+        output = ""
+        if use_uv:
+            res = subprocess.run(["uv", "pip", "freeze", "--python", py_bin], cwd=project_path, capture_output=True, text=True, timeout=15)
+            if res.returncode == 0 and res.stdout.strip():
+                output = res.stdout
+        if not output and os.path.exists(pip_bin):
+            res = subprocess.run([pip_bin, "freeze"], cwd=project_path, capture_output=True, text=True, timeout=15)
+            if res.returncode == 0 and res.stdout.strip():
+                output = res.stdout
+        if not output:
+            res = subprocess.run([py_bin, "-m", "pip", "freeze"], cwd=project_path, capture_output=True, text=True, timeout=15)
+            if res.returncode == 0 and res.stdout.strip():
+                output = res.stdout
+        if not output:
+            # Fallback nativo con importlib.metadata
+            pkgs = list_installed_packages(venv_path)
+            output = "\n".join(f"{name}=={ver}" for name, ver in pkgs if ver) + "\n"
+
+        target_file = os.path.join(project_path, "requirements.txt")
+        with open(target_file, "w", encoding="utf-8") as f:
+            f.write(output)
+        count = len(output.strip().splitlines()) if output.strip() else 0
+        return True, f"requirements.txt generado con éxito ({count} dependencias)."
     except Exception as e:
         return False, f"Excepción al congelar dependencias: {str(e)}"
 
 def list_installed_packages(venv_path: str) -> List[Tuple[str, str]]:
-    """Obtiene la lista de tuplas (nombre, versión) de paquetes instalados."""
-    pip_bin = os.path.join(venv_path, "bin", "pip")
-    if not os.path.exists(pip_bin):
+    """Obtiene la lista de tuplas (nombre, versión) de paquetes instalados en el venv."""
+    if not venv_path or not os.path.exists(venv_path):
         return []
+
+    py_bin = os.path.join(venv_path, "bin", "python")
+    pip_bin = os.path.join(venv_path, "bin", "pip")
+
+    if not os.path.exists(py_bin):
+        return []
+
+    # 1. Intento con uv si está instalado
+    if shutil.which("uv"):
+        try:
+            res = subprocess.run(["uv", "pip", "list", "--python", py_bin, "--format=json"], capture_output=True, text=True, timeout=6)
+            if res.returncode == 0 and res.stdout:
+                data = json.loads(res.stdout)
+                return sorted([(item.get("name", ""), item.get("version", "")) for item in data], key=lambda x: x[0].lower())
+        except Exception:
+            pass
+
+    # 2. Intento con importlib.metadata nativo (Python 3.8+)
     try:
-        res = subprocess.run([pip_bin, "list", "--format=json"], capture_output=True, text=True, timeout=8)
-        if res.returncode == 0:
+        cmd = [py_bin, "-c", "import importlib.metadata as m, json; print(json.dumps([{'name': d.metadata['Name'] or d.name, 'version': d.version} for d in m.distributions()]))"]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=6)
+        if res.returncode == 0 and res.stdout:
             data = json.loads(res.stdout)
-            return [(item.get("name", ""), item.get("version", "")) for item in data]
+            seen = set()
+            pkgs = []
+            for item in data:
+                n, v = item.get("name", ""), item.get("version", "")
+                if n and n.lower() not in seen:
+                    seen.add(n.lower())
+                    pkgs.append((n, v))
+            return sorted(pkgs, key=lambda x: x[0].lower())
     except Exception:
         pass
+
+    # 3. Fallback con pip
+    if os.path.exists(pip_bin):
+        try:
+            res = subprocess.run([pip_bin, "list", "--format=json"], capture_output=True, text=True, timeout=8)
+            if res.returncode == 0 and res.stdout:
+                data = json.loads(res.stdout)
+                return sorted([(item.get("name", ""), item.get("version", "")) for item in data], key=lambda x: x[0].lower())
+        except Exception:
+            pass
+
     return []
 
 def delete_python_venv(venv_path: str) -> Tuple[bool, str]:

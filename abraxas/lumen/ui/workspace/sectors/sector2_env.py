@@ -28,7 +28,7 @@ from abraxas.lumen.models.project import Project
 from core.environments import (
     detect_installed_editors, get_preferred_editor, set_preferred_editor, launch_project_in_editor,
     inspect_python_venv, activate_python_venv, deactivate_python_venv, create_python_venv,
-    install_project_dependencies, install_custom_packages, freeze_dependencies_to_file,
+    install_project_dependencies, install_custom_packages, uninstall_package, freeze_dependencies_to_file,
     list_installed_packages, inspect_docker_status, list_docker_containers,
     execute_docker_container_action, get_docker_container_logs, execute_docker_prune,
     execute_compose_action, inspect_network_ports, kill_process_by_pid
@@ -918,20 +918,53 @@ class Sector2EnvView(QWidget):
         else:
             self.lbl_venv_badge.setText("○ Sin Entorno")
             self.lbl_venv_badge.setProperty("class", "badge_pending")
-            self.lbl_venv_details.setText("No se detectó carpeta .venv o venv en este proyecto.")
+            self.lbl_venv_details.setText("No se detectó entorno virtual (.venv) en este proyecto.")
             self.btn_toggle_venv.setText("⚡ Activar")
             self.btn_toggle_venv.setEnabled(False)
             self.btn_pip_install.setEnabled(False)
             self.btn_pip_freeze.setEnabled(False)
             self._installed_packages_cache = []
 
+            # Limpiar lista y mostrar estado inicial con botón de creación directa
+            while self.packages_layout.count():
+                item = self.packages_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+
+            self.lbl_pkg_count.setText("0 paquetes")
+
+            empty_box = QFrame()
+            empty_box.setProperty("class", "env_item_row")
+            eb_l = QVBoxLayout(empty_box)
+            eb_l.setContentsMargins(12, 12, 12, 12)
+            eb_l.setSpacing(6)
+
+            lbl_t = QLabel("○ Sin entorno virtual configurado")
+            lbl_t.setStyleSheet("font-weight: 700; color: #94a3b8; font-size: 11px;")
+            eb_l.addWidget(lbl_t)
+
+            lbl_d = QLabel("Crea un entorno virtual aislado para instalar paquetes y gestionar dependencias.")
+            lbl_d.setProperty("class", "sector_desc")
+            lbl_d.setWordWrap(True)
+            eb_l.addWidget(lbl_d)
+
+            btn_quick_venv = QPushButton("✨ Crear .venv ahora")
+            btn_quick_venv.setProperty("class", "cyber_btn_primary")
+            btn_quick_venv.setCursor(Qt.PointingHandCursor)
+            btn_quick_venv.clicked.connect(self._create_venv_dialog)
+            eb_l.addWidget(btn_quick_venv)
+
+            self.packages_layout.addWidget(empty_box)
+            self.packages_layout.addStretch()
+
         self.lbl_venv_badge.style().unpolish(self.lbl_venv_badge)
         self.lbl_venv_badge.style().polish(self.lbl_venv_badge)
 
-        self._render_packages_list(self._installed_packages_cache)
+        if v_info.get("has_venv"):
+            self._render_packages_list(self._installed_packages_cache)
 
     def _render_packages_list(self, packages: List[tuple[str, str]]):
-        """Renderiza los paquetes en la lista scrolleable."""
+        """Renderiza los paquetes en la lista scrolleable con acciones tácticas."""
         while self.packages_layout.count():
             item = self.packages_layout.takeAt(0)
             if item.widget():
@@ -940,7 +973,7 @@ class Sector2EnvView(QWidget):
         self.lbl_pkg_count.setText(f"{len(packages)} paquetes")
 
         if not packages:
-            lbl_empty = QLabel("No hay paquetes instalados o entorno inactivo.")
+            lbl_empty = QLabel("No hay paquetes instalados o entorno vacío.")
             lbl_empty.setProperty("class", "sector_desc")
             self.packages_layout.addWidget(lbl_empty)
             self.packages_layout.addStretch()
@@ -958,13 +991,46 @@ class Sector2EnvView(QWidget):
             r_l.addWidget(lbl_n)
             r_l.addStretch()
 
-            lbl_v = QLabel(f"v{version}")
-            lbl_v.setProperty("class", "badge_telemetry")
-            r_l.addWidget(lbl_v)
+            if version:
+                lbl_v = QLabel(f"v{version}")
+                lbl_v.setProperty("class", "badge_telemetry")
+                r_l.addWidget(lbl_v)
+
+            btn_rm_pkg = QPushButton("🗑")
+            btn_rm_pkg.setProperty("class", "cyber_btn_danger_compact")
+            btn_rm_pkg.setFixedSize(22, 22)
+            btn_rm_pkg.setCursor(Qt.PointingHandCursor)
+            btn_rm_pkg.setToolTip(f"Desinstalar paquete {name}")
+            btn_rm_pkg.clicked.connect(lambda _, pn=name: self._confirm_uninstall_package(pn))
+            r_l.addWidget(btn_rm_pkg)
 
             self.packages_layout.addWidget(row)
 
         self.packages_layout.addStretch()
+
+    def _confirm_uninstall_package(self, package_name: str):
+        """Pide confirmación y desinstala un paquete del entorno virtual."""
+        reply = QMessageBox.question(
+            self,
+            "Desinstalar Paquete",
+            f"¿Deseas desinstalar el paquete <b>{package_name}</b> del entorno virtual?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            if not self.project or not self.project.path:
+                return
+            p_path = str(self.project.path)
+            v_info = inspect_python_venv(p_path)
+            v_full = v_info.get("venv_path", "")
+            if not v_full:
+                return
+            self.log_emitted.emit(f"🗑 Desinstalando paquete <b>{package_name}</b>...")
+            ok, msg = uninstall_package(p_path, v_full, package_name)
+            if ok:
+                self.log_emitted.emit(f"✨ {msg}")
+            else:
+                self.log_emitted.emit(f"⚠️ {msg}")
+            self._refresh_python_env()
 
     def _filter_packages(self, query: str):
         """Filtra reactivamente la lista de paquetes instalados según el texto."""
