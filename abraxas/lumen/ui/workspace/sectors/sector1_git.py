@@ -1554,21 +1554,30 @@ class Sector12BranchesView(QWidget):
 
         # Habilitar fusión y campos
         self.btn_confirm_merge.setEnabled(True)
-        default_title = f"HEX:0053 | Fusión de rama '{branch_name}' en '{active_branch}'"
-        self.txt_merge_title.setText(default_title)
-        self.txt_merge_desc.setPlainText(f"- Integración táctica de cambios desde {branch_name}.\n- Validación de consistencia y convergencia de código.")
+        if not self.txt_merge_title.text() or self.txt_merge_title.text().startswith("HEX:0053"):
+            default_title = f"HEX:0053 | Fusión de rama '{branch_name}' en '{active_branch}'"
+            self.txt_merge_title.setText(default_title)
+        if not self.txt_merge_desc.toPlainText():
+            self.txt_merge_desc.setPlainText(f"- Integración táctica de cambios desde {branch_name}.\n- Validación de consistencia y convergencia de código.")
 
         if is_ff_possible:
             self.btn_sim_ff.setEnabled(True)
             self.btn_sim_no_ff.setEnabled(True)
+            self.btn_sim_ff.setToolTip("Simular avance rápido lineal (sin commit extra)")
+            self.btn_sim_no_ff.setToolTip("Simular commit de fusión explícito unificando ambas ramas")
             if self.selected_merge_style not in ("ff", "no_ff"):
                 self.selected_merge_style = "ff"
             self.btn_sim_ff.setChecked(self.selected_merge_style == "ff")
             self.btn_sim_no_ff.setChecked(self.selected_merge_style == "no_ff")
-            self.lbl_sim_status.setText("⚡ Fast-Forward")
+            if self.selected_merge_style == "no_ff":
+                self.lbl_sim_status.setText("🔀 Commit (--no-ff)")
+            else:
+                self.lbl_sim_status.setText("⚡ Fast-Forward")
         else:
             self.btn_sim_ff.setEnabled(False)
             self.btn_sim_no_ff.setEnabled(True)
+            self.btn_sim_ff.setToolTip("Avance rápido no disponible: las ramas han divergido")
+            self.btn_sim_no_ff.setToolTip("Commit de fusión explícito requerido por divergencia")
             self.selected_merge_style = "no_ff"
             self.btn_sim_ff.setChecked(False)
             self.btn_sim_no_ff.setChecked(True)
@@ -1864,11 +1873,21 @@ class Sector12BranchesView(QWidget):
 
             lbl_info = QLabel(
                 f"Las ramas han divergido (<b>+{ahead} locales</b> en {active_branch} / <b>+{behind} entrantes</b> desde {src_branch}).<br>"
-                "Git creará un <b>commit de fusión</b> con ambos padres unificados."
+                "El avance rápido (Fast-Forward) no es posible en ramas divergentes. Se requiere un commit de fusión:"
             )
             lbl_info.setProperty("class", "sector_desc")
             lbl_info.setWordWrap(True)
             l_diag.addWidget(lbl_info)
+
+            group_div = QButtonGroup(dialog)
+            radio_ff = QRadioButton("⚡ Avance Rápido (No disponible: ramas divergentes)")
+            radio_ff.setEnabled(False)
+            radio_no_ff = QRadioButton("🔀 Forzar Commit de Fusión (--no-ff: genera nodo explícito)")
+            radio_no_ff.setChecked(True)
+            group_div.addButton(radio_ff)
+            group_div.addButton(radio_no_ff)
+            l_diag.addWidget(radio_ff)
+            l_diag.addWidget(radio_no_ff)
 
         d_layout.addWidget(card_diag)
 

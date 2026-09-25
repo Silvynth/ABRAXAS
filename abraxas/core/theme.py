@@ -548,5 +548,65 @@ QFrame.commit_traffic_row:hover {{
     background-color: rgba(255, 255, 255, 0.05);
     border-color: rgba(255, 255, 255, 0.15);
 }}
+
+/* -------------------------------------------------------------
+   14. CONTROLES DE SELECCIÓN (RADIO BUTTONS & CHECKBOXES)
+------------------------------------------------------------- */
+QRadioButton {{
+    color: {p["TEXT_BODY"]};
+    spacing: 8px;
+    font-size: 11.5px;
+    font-weight: 500;
+    background-color: transparent;
+}}
+
+QRadioButton:hover {{
+    color: {p["TEXT_TITLES"]};
+}}
+
+QRadioButton::indicator {{
+    width: 15px;
+    height: 15px;
+    border: 1px solid {p["BORDER_MEDIUM"]};
+    border-radius: 8px;
+    background-color: {p["BG_SURFACE"]};
+}}
+
+QRadioButton::indicator:hover {{
+    border-color: {p["TEXT_TITLES"]};
+}}
+
+QRadioButton::indicator:checked {{
+    background-color: {p["TEXT_TITLES"]};
+    border: 4px solid {p["BG_CANVAS"]};
+}}
+
+QCheckBox {{
+    color: {p["TEXT_BODY"]};
+    spacing: 8px;
+    font-size: 11.5px;
+    background-color: transparent;
+}}
+
+QCheckBox:hover {{
+    color: {p["TEXT_TITLES"]};
+}}
+
+QCheckBox::indicator {{
+    width: 15px;
+    height: 15px;
+    border: 1px solid {p["BORDER_MEDIUM"]};
+    border-radius: 3px;
+    background-color: {p["BG_SURFACE"]};
+}}
+
+QCheckBox::indicator:hover {{
+    border-color: {p["TEXT_TITLES"]};
+}}
+
+QCheckBox::indicator:checked {{
+    background-color: {p["TEXT_TITLES"]};
+    border: 3px solid {p["BG_CANVAS"]};
+}}
 """
 
