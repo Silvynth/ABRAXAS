@@ -888,6 +888,14 @@ class Sector11WorkflowView(QWidget):
         # Desbloquear botones de Sector 1.1
         self._set_sector_locked(False)
 
+    def teardown(self):
+        """Detiene timers y hilos de síntesis IA activos."""
+        if hasattr(self, "loading_spinner_timer") and self.loading_spinner_timer.isActive():
+            self.loading_spinner_timer.stop()
+        if hasattr(self, "_commit_worker") and self._commit_worker.isRunning():
+            self._commit_worker.terminate()
+            self._commit_worker.wait(300)
+
     def _set_sector_locked(self, locked: bool):
         """Bloquea o desbloquea todos los controles interactivos del Sector 1.1."""
         self.btn_stage_all.setEnabled(not locked)
@@ -2983,4 +2991,9 @@ class Sector1GitView(QWidget):
             self.branches_view.update_project(project)
         if hasattr(self, "sync_view"):
             self.sync_view.update_project(project)
+
+    def teardown(self):
+        """Detiene timers y hilos activos en los subsectores."""
+        if hasattr(self, "workflow_view") and hasattr(self.workflow_view, "teardown"):
+            self.workflow_view.teardown()
 

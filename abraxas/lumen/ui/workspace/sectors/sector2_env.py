@@ -1317,3 +1317,10 @@ class Sector2EnvView(QWidget):
         set_preferred_editor(cmd)
         self.log_emitted.emit(f"★ Editor preferido actualizado a: <b>{cmd}</b>")
         self._refresh_editors()
+
+    def teardown(self):
+        """Limpia cachés, vacía la terminal de logs y resetea estados de Docker."""
+        self._installed_packages_cache.clear()
+        self.txt_docker_terminal.clear()
+        self.current_logs_target = None
+        self.current_logs_is_compose = False

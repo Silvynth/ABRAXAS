@@ -246,10 +246,44 @@ class LumenWorkspaceView(QWidget):
     def _on_action_requested(self, action: str, data: dict):
         self.terminal.log_info("ACTION", f"Comando disparado: <b>{action}</b> {data if data else ''}")
 
-    def closeEvent(self, event):
-        """Detiene de forma limpia los hilos del HUD y temporizadores."""
+    def teardown(self):
+        """Finaliza todos los procesos en segundo plano, hilos, watchers y timers al salir del proyecto."""
+        # 1. Detener timer de sincronización
         if hasattr(self, "sync_debounce_timer") and self.sync_debounce_timer.isActive():
             self.sync_debounce_timer.stop()
-        if hasattr(self, "hud"):
-            self.hud.close()
+
+        # 2. Desregistrar rutas de vigilancia del filesystem
+        if hasattr(self, "fs_watcher"):
+            existing = self.fs_watcher.files() + self.fs_watcher.directories()
+            if existing:
+                self.fs_watcher.removePaths(existing)
+
+        # 3. Finalizar hilos y timers del HUD
+        if hasattr(self, "hud") and self.hud:
+            self.hud.teardown()
+
+        # 4. Finalizar cualquier proceso activo en la CyberTerminal
+        if hasattr(self, "terminal") and self.terminal:
+            self.terminal.shutdown()
+
+        # 5. Teardown en sectores
+        for sector in [getattr(self, f"sector{i}", None) for i in range(4)]:
+            if sector and hasattr(sector, "teardown"):
+                try:
+                    sector.teardown()
+                except Exception:
+                    pass
+
+        # 6. Desactivar venv de Python si estaba activo en la sesión
+        try:
+            from core.environments import deactivate_python_venv
+            deactivate_python_venv()
+        except Exception:
+            pass
+
+        self.project = None
+
+    def closeEvent(self, event):
+        """Detiene de forma limpia los hilos y temporizadores al cerrar."""
+        self.teardown()
         super().closeEvent(event)

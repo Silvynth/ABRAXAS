@@ -83,7 +83,9 @@ class HardwareTelemetryWorker(QThread):
 
     def stop(self):
         self._running = False
-        self.wait(400)
+        if not self.wait(400):
+            self.terminate()
+            self.wait(200)
 
 
 class ProjectHud(QFrame):
@@ -512,10 +514,14 @@ class ProjectHud(QFrame):
             self.update_project(self.project)
         self.refresh_requested.emit()
 
-    def closeEvent(self, event):
-        """Detiene de forma limpia el worker de hardware al cerrar."""
+    def teardown(self):
+        """Detiene de forma limpia el worker de hardware y temporizadores."""
         if hasattr(self, "worker") and self.worker.isRunning():
             self.worker.stop()
         if hasattr(self, "clock_timer") and self.clock_timer.isActive():
             self.clock_timer.stop()
+
+    def closeEvent(self, event):
+        """Detiene de forma limpia el worker de hardware al cerrar."""
+        self.teardown()
         super().closeEvent(event)

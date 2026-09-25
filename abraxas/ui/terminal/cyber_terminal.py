@@ -488,6 +488,20 @@ class CyberTerminal(QFrame):
             self.process.terminate()
             QTimer.singleShot(800, lambda: self.process.kill() if self.is_running() else None)
 
+    def shutdown(self):
+        """Finaliza inmediatamente y de forma forzosa cualquier proceso activo al cerrar el espacio de trabajo."""
+        if hasattr(self, "process") and self.process is not None:
+            if self.is_running():
+                try:
+                    self.process.kill()
+                    self.process.waitForFinished(300)
+                except Exception:
+                    pass
+
+    def closeEvent(self, event):
+        self.shutdown()
+        super().closeEvent(event)
+
     def execute_current_input(self):
         """Ejecuta el texto actual de la línea de comandos."""
         cmd = self.cmd_input.text().strip()
