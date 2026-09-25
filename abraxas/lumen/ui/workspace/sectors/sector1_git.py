@@ -1302,10 +1302,10 @@ class Sector12BranchesView(QWidget):
         scroll_branches.setWidget(self.branch_list_container)
         merge_layout.addWidget(scroll_branches, 1)
 
-        # Selector interactivo de Modo de Simulación (Fast-Forward vs Merge Commit)
+        # Selector interactivo de Modo de Fusión (Exactamente 2 opciones)
         sim_ctrl_row = QHBoxLayout()
-        sim_ctrl_row.setSpacing(6)
-        lbl_mode = QLabel("Proyección:")
+        sim_ctrl_row.setSpacing(8)
+        lbl_mode = QLabel("Modo:")
         lbl_mode.setProperty("class", "sector_desc")
         sim_ctrl_row.addWidget(lbl_mode)
 
@@ -1317,24 +1317,22 @@ class Sector12BranchesView(QWidget):
         self.btn_sim_ff.setChecked(True)
         self.btn_sim_ff.setProperty("class", "cyber_btn_toggle")
         self.btn_sim_ff.setCursor(Qt.PointingHandCursor)
-        self.btn_sim_ff.setToolTip("Simular avance rápido lineal (sin commit extra)")
-        self.btn_sim_ff.setEnabled(False)
+        self.btn_sim_ff.setToolTip("Avance rápido: mueve el puntero en línea recta sin commit extra")
         self.btn_sim_ff.clicked.connect(lambda: self._set_merge_preview_style("ff"))
-        self.sim_btn_group.addButton(self.btn_sim_ff)
+        self.sim_btn_group.addButton(self.btn_sim_ff, 0)
         sim_ctrl_row.addWidget(self.btn_sim_ff)
 
         self.btn_sim_no_ff = QPushButton("🔀 Commit (--no-ff)")
         self.btn_sim_no_ff.setCheckable(True)
         self.btn_sim_no_ff.setProperty("class", "cyber_btn_toggle")
         self.btn_sim_no_ff.setCursor(Qt.PointingHandCursor)
-        self.btn_sim_no_ff.setToolTip("Simular commit de fusión explícito unificando ambas ramas")
-        self.btn_sim_no_ff.setEnabled(False)
+        self.btn_sim_no_ff.setToolTip("Commit de fusión explícito: preserva la bifurcación")
         self.btn_sim_no_ff.clicked.connect(lambda: self._set_merge_preview_style("no_ff"))
-        self.sim_btn_group.addButton(self.btn_sim_no_ff)
+        self.sim_btn_group.addButton(self.btn_sim_no_ff, 1)
         sim_ctrl_row.addWidget(self.btn_sim_no_ff)
 
-        self.lbl_sim_status = QLabel("-")
-        self.lbl_sim_status.setProperty("class", "badge_telemetry")
+        self.lbl_sim_status = QLabel("")
+        self.lbl_sim_status.setProperty("class", "sector_desc")
         sim_ctrl_row.addWidget(self.lbl_sim_status)
         sim_ctrl_row.addStretch()
 
@@ -1395,9 +1393,11 @@ class Sector12BranchesView(QWidget):
         self.btn_confirm_merge.setEnabled(False)
         self.txt_merge_title.clear()
         self.txt_merge_desc.clear()
-        self.btn_sim_ff.setEnabled(False)
-        self.btn_sim_no_ff.setEnabled(False)
-        self.lbl_sim_status.setText("-")
+        self.btn_sim_ff.setEnabled(True)
+        self.btn_sim_no_ff.setEnabled(True)
+        self.btn_sim_ff.setChecked(self.selected_merge_style == "ff")
+        self.btn_sim_no_ff.setChecked(self.selected_merge_style == "no_ff")
+        self.lbl_sim_status.setText("")
 
         # 1. Obtener rama activa
         res_active = run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=p_path)
@@ -1507,6 +1507,8 @@ class Sector12BranchesView(QWidget):
     def _set_merge_preview_style(self, style: str):
         """Alterna el estilo de proyección en vivo (FF vs No-FF)."""
         self.selected_merge_style = style
+        self.btn_sim_ff.setChecked(style == "ff")
+        self.btn_sim_no_ff.setChecked(style == "no_ff")
         if self.selected_merge_branch:
             self._apply_merge_preview(self.selected_merge_branch)
 
@@ -1526,9 +1528,7 @@ class Sector12BranchesView(QWidget):
             self.btn_confirm_merge.setEnabled(False)
             self.txt_merge_title.clear()
             self.txt_merge_desc.clear()
-            self.btn_sim_ff.setEnabled(False)
-            self.btn_sim_no_ff.setEnabled(False)
-            self.lbl_sim_status.setText("-")
+            self.lbl_sim_status.setText("(Rama activa actual)")
             # Restaurar grafo sin simulación
             self.git_graph.load_project_graph(str(p_path))
             self.log_emitted.emit(f"Rama seleccionada: <b>{branch_name}</b> (es la rama activa actual).")
@@ -1545,9 +1545,7 @@ class Sector12BranchesView(QWidget):
             self.btn_confirm_merge.setEnabled(False)
             self.txt_merge_title.clear()
             self.txt_merge_desc.clear()
-            self.btn_sim_ff.setEnabled(False)
-            self.btn_sim_no_ff.setEnabled(False)
-            self.lbl_sim_status.setText("● Ya Integrada")
+            self.lbl_sim_status.setText("● Rama ya integrada al 100% en la activa")
             self.git_graph.load_project_graph(str(p_path))
             self.log_emitted.emit(f"Rama <b>{branch_name}</b> ya está completamente integrada en <b>{active_branch}</b>.")
             return
@@ -1563,25 +1561,22 @@ class Sector12BranchesView(QWidget):
         if is_ff_possible:
             self.btn_sim_ff.setEnabled(True)
             self.btn_sim_no_ff.setEnabled(True)
-            self.btn_sim_ff.setToolTip("Simular avance rápido lineal (sin commit extra)")
-            self.btn_sim_no_ff.setToolTip("Simular commit de fusión explícito unificando ambas ramas")
+            self.btn_sim_ff.setToolTip("Avance rápido: integración lineal sin commit extra")
+            self.btn_sim_no_ff.setToolTip("Commit de fusión explícito: preserva la bifurcación")
             if self.selected_merge_style not in ("ff", "no_ff"):
                 self.selected_merge_style = "ff"
             self.btn_sim_ff.setChecked(self.selected_merge_style == "ff")
             self.btn_sim_no_ff.setChecked(self.selected_merge_style == "no_ff")
-            if self.selected_merge_style == "no_ff":
-                self.lbl_sim_status.setText("🔀 Commit (--no-ff)")
-            else:
-                self.lbl_sim_status.setText("⚡ Fast-Forward")
+            self.lbl_sim_status.setText("(Fast-Forward disponible)")
         else:
+            self.selected_merge_style = "no_ff"
             self.btn_sim_ff.setEnabled(False)
             self.btn_sim_no_ff.setEnabled(True)
             self.btn_sim_ff.setToolTip("Avance rápido no disponible: las ramas han divergido")
             self.btn_sim_no_ff.setToolTip("Commit de fusión explícito requerido por divergencia")
-            self.selected_merge_style = "no_ff"
             self.btn_sim_ff.setChecked(False)
             self.btn_sim_no_ff.setChecked(True)
-            self.lbl_sim_status.setText("🔀 Commit (--no-ff)")
+            self.lbl_sim_status.setText("(Divergente: requiere merge commit)")
 
         # Disparar simulación visual en el Grafo
         sim_title = (

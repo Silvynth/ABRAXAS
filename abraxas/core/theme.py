@@ -229,10 +229,16 @@ QPushButton.cyber_btn_toggle:hover {{
 }}
 
 QPushButton.cyber_btn_toggle:checked {{
-    background-color: rgba(255, 255, 255, 0.12);
-    color: {p["TEXT_TITLES"]};
-    border: 1px solid rgba(255, 255, 255, 0.28);
-    font-weight: 700;
+    background-color: rgba(255, 255, 255, 0.20);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    font-weight: 800;
+}}
+
+QPushButton.cyber_btn_toggle:disabled {{
+    background-color: transparent;
+    color: rgba(255, 255, 255, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.08);
 }}
 
 /* Botón en estado de carga animada */
