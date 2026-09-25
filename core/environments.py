@@ -432,20 +432,39 @@ def inspect_docker_status(project_path: str = None) -> Dict[str, Any]:
         "message": "Demonio activo y disponible" if daemon_running else "El servicio Docker (daemon) está inactivo o requiere permisos."
     }
 
-def list_docker_containers() -> List[Dict[str, str]]:
+def list_docker_containers(project_path: Optional[str] = None, include_all: bool = False) -> List[Dict[str, Any]]:
     """
-    Lista todos los contenedores Docker locales (activos e inactivos).
-    Retorna id, name, image, state, status, ports.
+    Lista los contenedores Docker locales aislados por el proyecto activo.
+    Si se especifica `project_path` y `include_all` es False:
+    - Si el proyecto no tiene definiciones de Docker, retorna lista vacía.
+    - Si el proyecto tiene Docker, filtra únicamente los contenedores que pertenezcan
+      al proyecto (por etiquetas compose com.docker.compose.project / working_dir o prefijo de nombre).
     """
     docker_bin = shutil.which("docker")
     if not docker_bin:
         return []
 
+    # Si se pide contexto de proyecto pero no tiene docker, retornar vacío
+    if project_path and not include_all:
+        d_status = inspect_docker_status(project_path)
+        if not d_status.get("has_compose") and not d_status.get("has_dockerfile"):
+            return []
+
     try:
-        fmt = "{{.ID}}||{{.Names}}||{{.Image}}||{{.State}}||{{.Status}}||{{.Ports}}"
+        fmt = "{{.ID}}||{{.Names}}||{{.Image}}||{{.State}}||{{.Status}}||{{.Ports}}||{{.Labels}}"
         proc = subprocess.run([docker_bin, "ps", "-a", "--format", fmt], capture_output=True, text=True, timeout=6)
         if proc.returncode != 0:
             return []
+
+        # Preparar identificadores del proyecto para filtrado
+        project_name = ""
+        project_slug = ""
+        abs_proj_path = ""
+        if project_path:
+            abs_proj_path = os.path.abspath(project_path).rstrip(os.sep)
+            project_name = os.path.basename(abs_proj_path).lower()
+            import re
+            project_slug = re.sub(r'[^a-z0-9]', '', project_name)
 
         containers = []
         for line in proc.stdout.strip().splitlines():
@@ -455,13 +474,42 @@ def list_docker_containers() -> List[Dict[str, str]]:
             parts = line.split("||")
             if len(parts) >= 6:
                 cid, name, img, state, status, ports = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
+                labels = parts[6] if len(parts) >= 7 else ""
+
+                # Filtrar si se requiere aislamiento por proyecto
+                if project_path and not include_all:
+                    matches = False
+
+                    # 1. Comprobar etiquetas de compose
+                    if labels:
+                        if f"com.docker.compose.project.working_dir={abs_proj_path}" in labels:
+                            matches = True
+                        elif f"com.docker.compose.project={project_name}" in labels or f"com.docker.compose.project={project_slug}" in labels:
+                            matches = True
+
+                    # 2. Comprobar nombre del contenedor (prefijo compose project_ o project-)
+                    low_name = name.lower()
+                    if (low_name.startswith(f"{project_name}_") or low_name.startswith(f"{project_name}-") or
+                        low_name.startswith(f"{project_slug}_") or low_name.startswith(f"{project_slug}-")):
+                        matches = True
+
+                    # 3. Comprobar si la imagen pertenece al proyecto
+                    low_img = img.lower()
+                    if low_img.startswith(f"{project_name}") or low_img.startswith(f"{project_slug}"):
+                        matches = True
+
+                    if not matches:
+                        continue
+
+                is_running = (state.lower() == "running")
                 containers.append({
                     "id": cid,
                     "name": name,
                     "image": img,
                     "state": state.lower(),
                     "status": status,
-                    "ports": ports if ports else "Sin puertos expuestos"
+                    "ports": ports if ports else "Sin puertos expuestos",
+                    "is_running": is_running
                 })
         return containers
     except Exception:

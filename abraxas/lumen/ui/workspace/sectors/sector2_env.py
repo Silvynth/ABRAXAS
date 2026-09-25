@@ -569,35 +569,79 @@ class Sector2EnvView(QWidget):
         self.lbl_docker_daemon.style().unpolish(self.lbl_docker_daemon)
         self.lbl_docker_daemon.style().polish(self.lbl_docker_daemon)
 
-        # Compose file
+        # Estado de Compose / Dockerfile en el proyecto
         has_compose = d_status.get("has_compose", False)
         compose_files = d_status.get("compose_files", [])
+        has_dockerfile = d_status.get("has_dockerfile", False)
+
         if has_compose and compose_files:
             c_name = compose_files[0]
             self.lbl_docker_compose_badge.setText(f"Compose: {c_name}")
+            self.lbl_docker_compose_badge.setProperty("class", "badge_staged")
             self.lbl_compose_file.setText(f"Archivo Compose detectado: <b>{c_name}</b>")
             self.compose_actions_box.setVisible(True)
+        elif has_dockerfile:
+            self.lbl_docker_compose_badge.setText("Dockerfile detectado")
+            self.lbl_docker_compose_badge.setProperty("class", "badge_telemetry")
+            self.compose_actions_box.setVisible(False)
         else:
-            self.lbl_docker_compose_badge.setText("Sin Compose")
+            self.lbl_docker_compose_badge.setText("Sin Docker")
+            self.lbl_docker_compose_badge.setProperty("class", "badge_pending")
             self.compose_actions_box.setVisible(False)
 
-        # Poblar contenedores
+        self.lbl_docker_compose_badge.style().unpolish(self.lbl_docker_compose_badge)
+        self.lbl_docker_compose_badge.style().polish(self.lbl_docker_compose_badge)
+
+        # Poblar contenedores pasando el path del proyecto para aislar el contexto
         self._populate_containers_list()
 
     def _populate_containers_list(self):
-        """Llena la lista de contenedores Docker en la vista vertical."""
+        """Llena la lista de contenedores Docker en la vista vertical aislando por el proyecto actual."""
         while self.containers_layout.count():
             item = self.containers_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        containers = list_docker_containers()
+        p_path = str(self.project.path) if self.project and self.project.path else None
+        d_status = inspect_docker_status(p_path) if p_path else {}
+        has_docker = d_status.get("has_compose", False) or d_status.get("has_dockerfile", False)
+
+        if not has_docker:
+            self.lbl_containers_count.setText("0 contenedores (Sin Docker)")
+
+            empty_card = QFrame()
+            empty_card.setProperty("class", "env_item_row")
+            ec_layout = QVBoxLayout(empty_card)
+            ec_layout.setContentsMargins(12, 12, 12, 12)
+            ec_layout.setSpacing(6)
+
+            lbl_title = QLabel("○ Sin entorno Docker en este proyecto")
+            lbl_title.setStyleSheet("font-weight: 700; color: #94a3b8; font-size: 11px;")
+            ec_layout.addWidget(lbl_title)
+
+            lbl_desc = QLabel(
+                "Este proyecto no contiene definiciones de Dockerfile ni docker-compose.yml.\n"
+                "Para no sobrecargar la vista, los contenedores de otros proyectos o globales del sistema se ocultan automáticamente."
+            )
+            lbl_desc.setProperty("class", "sector_desc")
+            lbl_desc.setWordWrap(True)
+            ec_layout.addWidget(lbl_desc)
+
+            self.containers_layout.addWidget(empty_card)
+            self.containers_layout.addStretch()
+            return
+
+        containers = list_docker_containers(p_path)
         running_count = sum(1 for c in containers if c.get("is_running"))
         self.lbl_containers_count.setText(f"{running_count} activos / {len(containers)} total")
 
         if not containers:
-            lbl_empty = QLabel("No hay contenedores Docker registrados.")
+            lbl_empty = QLabel(
+                "No hay contenedores registrados para este proyecto.\n"
+                "Usa 'Up' en Compose para levantar el stack de servicios."
+            )
             lbl_empty.setProperty("class", "sector_desc")
+            lbl_empty.setWordWrap(True)
             self.containers_layout.addWidget(lbl_empty)
             self.containers_layout.addStretch()
             return
