@@ -614,5 +614,27 @@ QCheckBox::indicator:checked {{
     background-color: {p["TEXT_TITLES"]};
     border: 3px solid {p["BG_CANVAS"]};
 }}
+
+/* -------------------------------------------------------------
+   15. FILAS DE ENTORNOS, CONTENEDORES Y PUERTOS (SECTOR 2)
+------------------------------------------------------------- */
+QFrame.env_item_row {{
+    background-color: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+    padding: 4px 8px;
+}}
+
+QFrame.env_item_row:hover {{
+    background-color: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.12);
+}}
+
+QFrame.env_item_row_active {{
+    background-color: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.20);
+    border-radius: 6px;
+    padding: 4px 8px;
+}}
 """
 
