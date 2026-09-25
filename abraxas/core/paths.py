@@ -46,9 +46,23 @@ def get_log_file_path() -> Path:
     """Devuelve la ruta del archivo de registro principal."""
     return get_cache_dir() / "abraxas.log"
 
+def get_package_root() -> Path:
+    """Devuelve la ruta absoluta al paquete interno abraxas."""
+    return Path(__file__).resolve().parent.parent
+
 def get_assets_dir() -> Path:
     """Devuelve el directorio de recursos visuales e iconos."""
+    pkg_assets = get_package_root() / "assets"
+    if pkg_assets.exists():
+        return pkg_assets
     return get_repo_root() / "assets"
+
+def get_skills_dir() -> Path:
+    """Devuelve el directorio de skills."""
+    pkg_skills = get_package_root() / "skills"
+    if pkg_skills.exists():
+        return pkg_skills
+    return get_repo_root() / "skills"
 
 def get_project_order_file() -> Path:
     """Devuelve la ruta del archivo de orden visual de proyectos (~/.config/abraxas/projects_order.json)."""
@@ -56,4 +70,4 @@ def get_project_order_file() -> Path:
 
 ROOT_DIR = str(get_repo_root())
 TEMPLATE_PATH = str(get_default_template_path())
-SKILLS_DIR = str(get_repo_root() / "skills")
+SKILLS_DIR = str(get_skills_dir())
