@@ -2,7 +2,7 @@
 #  ❖ ABRAXAS | GITIGNORE MAESTRO (SEGURIDAD Y PRIVACIDAD TOTAL)
 # =====================================================================
 
-# Configuración y Secretos Locales del Usuario
+# --- Configuración y Secretos Locales del Usuario ---
 config.toml
 *.local.toml
 config.local.toml
@@ -17,14 +17,17 @@ secrets/
 *.state
 .test/
 .sandbox/
-docs/
 scratch/
+projects_order.json
+preferred_editor.txt
 
-# Skills y Prompts de IA Privados del Usuario
+# --- Skills y Prompts de IA Privados del Usuario ---
+# Los archivos de prompts personalizados son privados del usuario.
+# Solo se versionan las plantillas .example.txt públicas.
 skills/*.txt
 !skills/*.example.txt
 
-# Certificados, Tokens y Claves Criptográficas
+# --- Certificados, Tokens y Claves Criptográficas ---
 *.pem
 *.key
 *.cert
@@ -37,54 +40,63 @@ id_ed25519*
 credentials.json
 service_account*.json
 
-# Bases de Datos Locales y Volcados
+# --- Bases de Datos Locales y Volcados ---
 *.sqlite
 *.sqlite3
 *.db
 *.sql
 *.dump
 
-# Cachés y Archivos de Sesión
+# --- Cachés, Logs y Archivos de Sesión ---
 cache/
 logs/
 *.log
 *.tmp
 last_result.txt
 current_dir.txt
+.cache/
 
-# Entornos y Bytecode de Python
+# --- Entornos Virtuales y Bytecode de Python ---
 __pycache__/
 *.py[cod]
 *$py.class
 venv/
 .venv/
+env/
+ENV/
+.env/
+pip-wheel-metadata/
 
-# Interfaz Gráfica (Tauri / Rust / Node)
-gui/target/
-gui/node_modules/
-gui/dist/
-gui/build/
+# --- Artefactos de Interfaz Gráfica (PySide6 / Qt) ---
+*.qmlc
+*.jsc
+.qtversion
 
-# Archivos de Sistema y Escritorio
+# --- Archivos de Sistema y Escritorio ---
 .DS_Store
 .directory
 Thumbs.db
+*.desktop.bak
 
-# Entornos de Pruebas y Cobertura
+# --- Entornos de Pruebas y Cobertura ---
 .test_home/
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+coverage.xml
 
-# Herramientas de Desarrollo, Compilación y Empaquetado Python
+# --- Herramientas de Desarrollo, Linters y Tipado ---
 .mypy_cache/
 .ruff_cache/
 .tox/
 dist/
 build/
 *.egg-info/
+*.egg
+*.whl
 
-# Editores y Entornos de Desarrollo (IDEs y Asistentes)
+# --- Editores y Entornos de Desarrollo (IDEs y Asistentes) ---
 .vscode/
 .idea/
 .gemini/
@@ -97,11 +109,8 @@ build/
 *.orig
 *.rej
 
-# Archivos Temporales y Empaquetados
+# --- Archivos Temporales y Empaquetados ---
 .version
 *.tar.gz
 *.zip
-
-# --- Preset aplicado: PYTHON ---
-env/
-ENV/
+*.tar.xz
