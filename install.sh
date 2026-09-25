@@ -481,10 +481,10 @@ if [[ "$HAS_DISPLAY" == "true" && "$HAS_PYSIDE" == "true" && "$CLI_MODE" == "fal
     fi
     echo -e "${C_GOLD}=====================================================================${RESET}\n"
     if [[ "$PREVIEW_MODE" == "true" ]]; then
-        python3 gui/installer_gui.py --preview
+        python3 -m abraxas.ui.installer_gui --preview
     else
         echo -e "  ${C_DIM}Abriendo ventana interactiva de configuración...${RESET}\n"
-        python3 gui/installer_gui.py
+        python3 -m abraxas.ui.installer_gui
     fi
 else
     echo -e "\n${C_GOLD}=====================================================================${RESET}"
@@ -497,16 +497,16 @@ else
 
     if [[ "$PREVIEW_MODE" == "true" ]]; then
         echo -e "  ${C_AMBER}🧪 MODO SIMULACIÓN ACTIVO (DRY-RUN) — Ningún archivo será modificado.${RESET}\n"
-        python3 core/setup.py --wizard --preview
+        python3 -m abraxas.core.setup --wizard --preview
         echo -e "\n  ${C_GOLD}Ejecutando diagnóstico del sistema en modo lectura...${RESET}"
-        python3 core/doctor.py
+        python3 -m abraxas.core.doctor
         echo -e "  ${C_GREEN}✔ Simulación de instalación completada exitosamente.${RESET}\n"
     else
         if [ ! -f "$CONFIG_FILE" ]; then
             echo -e "  ${C_TEXT}¿Deseas personalizar tus rutas y preferencias ahora con el asistente interactivo? [S/n]${RESET}"
             read -r resp_wiz
             if [[ -z "$resp_wiz" || "$resp_wiz" =~ ^[SsYy]$ ]]; then
-                python3 core/setup.py --wizard
+                python3 -m abraxas.core.setup --wizard
             else
                 cp config.default.toml "$CONFIG_FILE"
                 chmod 600 "$CONFIG_FILE"
@@ -523,7 +523,7 @@ else
 
         # Diagnóstico de integridad del sistema
         echo -e "\n  ${C_GOLD}Ejecutando diagnóstico inicial del sistema...${RESET}"
-        python3 core/doctor.py
+        python3 -m abraxas.core.doctor
 
         echo -e "  ${C_GREEN}✨ Instalación de ABRAXAS v${VERSION} completada exitosamente.${RESET}"
         echo -e "     ${C_CYAN}Inicia tu entorno ejecutando: ${BOLD}abx${RESET}\n"

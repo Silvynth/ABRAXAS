@@ -27,7 +27,7 @@ from abraxas import get_version
 from abraxas.core.paths import get_assets_dir, get_active_config_path
 from abraxas.core.config import load_config
 from abraxas.core.theme import generate_monochrome_stylesheet
-from gui.views.neos import ProjectsView, ConfigView
+from abraxas.neos.ui import ProjectsView, ConfigView
 from abraxas.umbra import UmbraView
 from abraxas.lumen.ui.lumen_view import LumenView
 

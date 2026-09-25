@@ -16,7 +16,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCursor
 
 from abraxas.lumen.models.project import Project
-from gui.views.lumen.git_graph_canvas import LumenHorizontalGitGraphView
+from abraxas.lumen.ui.git_graph_canvas import LumenHorizontalGitGraphView
 
 
 class ExpandableCommitCard(QFrame):

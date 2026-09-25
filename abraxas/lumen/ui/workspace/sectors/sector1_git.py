@@ -31,8 +31,8 @@ from abraxas.core.process import run_command
 from abraxas.core.semver import bump_semver
 from abraxas.lumen.models.project import Project
 from abraxas.ui.controls.switcher_pill import SectorSwitcherPill
-from gui.views.lumen.git_graph_canvas import LumenHorizontalGitGraphView
-from core.github import get_repo_visibility, change_repo_visibility, publish_repo_to_github
+from abraxas.lumen.ui.git_graph_canvas import LumenHorizontalGitGraphView
+from abraxas.core.github import get_repo_visibility, change_repo_visibility, publish_repo_to_github
 
 
 # =====================================================================

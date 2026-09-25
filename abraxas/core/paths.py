@@ -49,3 +49,11 @@ def get_log_file_path() -> Path:
 def get_assets_dir() -> Path:
     """Devuelve el directorio de recursos visuales e iconos."""
     return get_repo_root() / "assets"
+
+def get_project_order_file() -> Path:
+    """Devuelve la ruta del archivo de orden visual de proyectos (~/.config/abraxas/projects_order.json)."""
+    return get_config_dir() / "projects_order.json"
+
+ROOT_DIR = str(get_repo_root())
+TEMPLATE_PATH = str(get_default_template_path())
+SKILLS_DIR = str(get_repo_root() / "skills")

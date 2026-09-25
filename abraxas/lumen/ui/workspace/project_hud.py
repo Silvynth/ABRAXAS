@@ -16,8 +16,8 @@ from PySide6.QtCore import Qt, Signal, QTimer, QThread, QVariantAnimation, QEasi
 from PySide6.QtGui import QDesktopServices, QCursor
 
 from abraxas.lumen.models.project import Project
-from core.lumen_sync import get_full_project_sync
-from core.umbra_backend import UmbraHardwareCollector
+from abraxas.core.lumen_sync import get_full_project_sync
+from abraxas.core.umbra_backend import UmbraHardwareCollector
 
 
 class TelemetryFilamentBar(QProgressBar):

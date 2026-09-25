@@ -22,8 +22,8 @@ from PySide6.QtGui import QCursor, QTextCursor
 
 from abraxas.lumen.models.project import Project
 from abraxas.ui.controls.switcher_pill import SectorSwitcherPill
-from core.environments import launch_project_in_editor, get_preferred_editor
-from core.utilities import (
+from abraxas.core.environments import launch_project_in_editor, get_preferred_editor
+from abraxas.core.utilities import (
     inspect_gitignore_and_env, apply_gitignore_preset, add_custom_gitignore_rule,
     create_base_env_file, generate_env_example_file, scan_project_documentation,
     read_markdown_file, generate_ai_changelog, check_ollama_status,

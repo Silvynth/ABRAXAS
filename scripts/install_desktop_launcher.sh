@@ -27,7 +27,7 @@ EOF
 chmod +x "$TARGET_FILE"
 
 # Crear enlace simbólico en ~/.local/bin/abx para acceso rápido desde terminal
-ln -sf "$DIR/bin/abraxas-gui" "$BIN_DIR/abx"
+ln -sf "$DIR/bin/abx" "$BIN_DIR/abx"
 chmod +x "$BIN_DIR/abx"
 
 # Actualizar base de datos de escritorio si la herramienta existe

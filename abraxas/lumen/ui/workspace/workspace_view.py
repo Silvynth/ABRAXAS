@@ -276,7 +276,7 @@ class LumenWorkspaceView(QWidget):
 
         # 6. Desactivar venv de Python si estaba activo en la sesión
         try:
-            from core.environments import deactivate_python_venv
+            from abraxas.core.environments import deactivate_python_venv
             deactivate_python_venv()
         except Exception:
             pass

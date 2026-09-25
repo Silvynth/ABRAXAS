@@ -25,7 +25,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCursor, QTextCursor
 
 from abraxas.lumen.models.project import Project
-from core.environments import (
+from abraxas.core.environments import (
     detect_installed_editors, get_preferred_editor, set_preferred_editor, launch_project_in_editor,
     inspect_python_venv, activate_python_venv, deactivate_python_venv, create_python_venv,
     install_project_dependencies, install_custom_packages, uninstall_package, freeze_dependencies_to_file,
