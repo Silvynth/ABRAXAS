@@ -27,8 +27,8 @@ from abraxas import get_version
 from abraxas.core.paths import get_assets_dir, get_active_config_path
 from abraxas.core.config import load_config
 from abraxas.core.theme import generate_monochrome_stylesheet
-from gui.views.neos import ProjectsView
-from gui.views.umbra.main_view import UmbraView
+from gui.views.neos import ProjectsView, ConfigView
+from abraxas.umbra import UmbraView
 from abraxas.lumen.ui.lumen_view import LumenView
 
 class NeosShellWindow(QWidget):
@@ -144,7 +144,8 @@ class NeosShellWindow(QWidget):
         self.page_lumen = LumenView(self.cfg)
         self.page_proyectos = ProjectsView(str(get_active_config_path()))
         self.page_proyectos.set_theme("monochrome")
-        self.page_config = self._build_config_preview()
+        self.page_config = ConfigView(str(get_active_config_path()))
+        self.page_config.config_saved.connect(self._on_config_saved)
 
         self.stacked.addWidget(self.page_umbra)
         self.stacked.addWidget(self.page_lumen)
@@ -165,6 +166,12 @@ class NeosShellWindow(QWidget):
             self.page_lumen.reload()
         elif index == 2 and hasattr(self, "page_proyectos"):
             self.page_proyectos.load_projects()
+
+    def _on_config_saved(self, new_cfg_dict=None):
+        """Callback ejecutado al guardar config.toml desde la pestaña de configuración maestro."""
+        self.cfg = load_config()
+        if hasattr(self, "page_lumen") and self.page_lumen:
+            self.page_lumen.cfg = self.cfg
 
     def _build_umbra_preview(self) -> QWidget:
         """Página preliminar del dominio UMBRA."""
