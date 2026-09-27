@@ -987,6 +987,7 @@ class BranchListItemWidget(QFrame):
         is_selected: bool = False,
         is_published: bool = False,
         is_merge_mode: bool = False,
+        is_remote: bool = False,
         parent=None
     ):
         super().__init__(parent)
@@ -995,6 +996,7 @@ class BranchListItemWidget(QFrame):
         self.is_selected = is_selected
         self.is_published = is_published
         self.is_merge_mode = is_merge_mode
+        self.is_remote = is_remote
         self.setCursor(Qt.PointingHandCursor)
 
         self._apply_style()
@@ -1004,8 +1006,18 @@ class BranchListItemWidget(QFrame):
         layout.setSpacing(6)
 
         # Icono / Badge de estado
-        lbl_icon = QLabel("● HEAD" if is_active else ("🔀" if is_merge_mode else "🌿"))
-        lbl_icon.setProperty("class", "badge_staged" if is_active else "badge_pending")
+        if is_active:
+            lbl_icon = QLabel("● HEAD")
+            lbl_icon.setProperty("class", "badge_staged")
+        elif is_remote:
+            lbl_icon = QLabel("🌐")
+            lbl_icon.setProperty("class", "badge_telemetry")
+        elif is_merge_mode:
+            lbl_icon = QLabel("🔀")
+            lbl_icon.setProperty("class", "badge_pending")
+        else:
+            lbl_icon = QLabel("🌿")
+            lbl_icon.setProperty("class", "badge_pending")
         layout.addWidget(lbl_icon)
 
         # Nombre de la rama
@@ -1020,6 +1032,10 @@ class BranchListItemWidget(QFrame):
                 lbl_tag.setProperty("class", "badge_telemetry")
                 layout.addWidget(lbl_tag)
             else:
+                if is_remote:
+                    lbl_rem = QLabel("REMOTA")
+                    lbl_rem.setProperty("class", "badge_telemetry")
+                    layout.addWidget(lbl_rem)
                 self.lbl_merge_action = QLabel("● SELECCIONADA" if is_selected else "Seleccionar")
                 self.lbl_merge_action.setProperty("class", "badge_staged" if is_selected else "badge_telemetry")
                 layout.addWidget(self.lbl_merge_action)
@@ -1031,13 +1047,32 @@ class BranchListItemWidget(QFrame):
                 layout.addWidget(lbl_tag)
 
                 # Desplegar SOLO para ramas no publicadas
-                if not self.is_published:
+                if not self.is_published and not self.is_remote:
                     btn_push = QPushButton("Desplegar")
                     btn_push.setProperty("class", "cyber_btn_compact")
                     btn_push.setCursor(Qt.PointingHandCursor)
                     btn_push.setToolTip(f"Subir / publicar rama actual '{branch_name}' al repositorio remoto")
                     btn_push.clicked.connect(lambda: self.push_requested.emit(self.branch_name))
                     layout.addWidget(btn_push)
+            elif is_remote:
+                # Rama Remota no descargada
+                lbl_tag = QLabel("REMOTA")
+                lbl_tag.setProperty("class", "badge_telemetry")
+                layout.addWidget(lbl_tag)
+
+                btn_switch = QPushButton("Cambiar")
+                btn_switch.setProperty("class", "cyber_btn_compact")
+                btn_switch.setCursor(Qt.PointingHandCursor)
+                btn_switch.setToolTip(f"Descargar y activar rama remota '{branch_name}' (git checkout)")
+                btn_switch.clicked.connect(lambda: self.checkout_requested.emit(self.branch_name))
+                layout.addWidget(btn_switch)
+
+                btn_del = QPushButton("🗑")
+                btn_del.setProperty("class", "cyber_btn_danger_compact")
+                btn_del.setCursor(Qt.PointingHandCursor)
+                btn_del.setToolTip(f"Eliminar rama remota '{branch_name}' en origin")
+                btn_del.clicked.connect(lambda: self.delete_requested.emit(self.branch_name))
+                layout.addWidget(btn_del)
             else:
                 # Botón Cambiar (Checkout)
                 btn_switch = QPushButton("Cambiar")
@@ -1420,7 +1455,7 @@ class Sector12BranchesView(QWidget):
         self._populate_branch_list(p_path, active_branch)
 
     def _populate_branch_list(self, p_path: Path, active_branch: str):
-        """Llena la lista de ramas locales compacta (Ventana 2) y la lista de fusión (Ventana 3)."""
+        """Llena la lista de ramas locales y remotas (Ventana 2) y la lista de fusión (Ventana 3)."""
         # 1. Limpiar lista de la Ventana 2 (Control)
         while self.ctrl_branch_layout.count():
             item = self.ctrl_branch_layout.takeAt(0)
@@ -1439,35 +1474,36 @@ class Sector12BranchesView(QWidget):
         # 1. Obtener ramas locales y su upstream tracking
         res_upstream = run_command(["git", "for-each-ref", "--format=%(refname:short)|%(upstream:short)", "refs/heads/"], cwd=p_path)
         upstream_map = {}
-        branch_names = []
+        local_branch_names = []
         if res_upstream.success and res_upstream.stdout.strip():
             for line in res_upstream.stdout.splitlines():
                 parts = line.strip().split("|", 1)
                 b = parts[0].strip()
                 if b:
-                    branch_names.append(b)
+                    local_branch_names.append(b)
                     upstream_map[b] = parts[1].strip() if len(parts) > 1 else ""
 
-        # 2. Obtener nombres de ramas remotas existentes para verificar publicación
+        # 2. Obtener nombres de ramas remotas existentes para verificar publicación y listar remotas
         res_remotes = run_command(["git", "branch", "-r", "--format=%(refname:short)"], cwd=p_path)
-        remote_branches = set()
+        remote_branches = []
+        remote_clean_names = set()
         if res_remotes.success and res_remotes.stdout.strip():
             for line in res_remotes.stdout.splitlines():
                 b = line.strip()
-                if b:
-                    remote_branches.add(b)
-                    if b.startswith("origin/"):
-                        remote_branches.add(b[7:])
+                if b and not b.endswith("/HEAD") and b != "origin":
+                    remote_branches.append(b)
+                    clean = b.replace("origin/", "")
+                    remote_clean_names.add(clean)
 
         def _check_published(name: str) -> bool:
             if upstream_map.get(name):
                 return True
-            if name in remote_branches or f"origin/{name}" in remote_branches:
+            if name in remote_clean_names or f"origin/{name}" in remote_branches:
                 return True
             return False
 
-        if not branch_names:
-            lbl_empty1 = QLabel("No hay ramas locales.")
+        if not local_branch_names and not remote_branches:
+            lbl_empty1 = QLabel("No hay ramas disponibles.")
             lbl_empty1.setProperty("class", "sector_desc")
             self.ctrl_branch_layout.addWidget(lbl_empty1)
 
@@ -1476,12 +1512,12 @@ class Sector12BranchesView(QWidget):
             self.branch_list_layout.addWidget(lbl_empty2)
             return
 
-        for b_name in branch_names:
+        # 3. Poblar ramas locales
+        for b_name in local_branch_names:
             is_active = (b_name == active_branch)
             is_pub = _check_published(b_name)
 
-            # Item para Ventana 2 (Control: Ver, Cambiar, Desplegar si no publicada, Eliminar)
-            ctrl_item = BranchListItemWidget(b_name, is_active=is_active, is_published=is_pub, is_merge_mode=False)
+            ctrl_item = BranchListItemWidget(b_name, is_active=is_active, is_published=is_pub, is_merge_mode=False, is_remote=False)
             ctrl_item.clicked.connect(self._on_ctrl_branch_clicked)
             ctrl_item.checkout_requested.connect(self._checkout_branch)
             ctrl_item.push_requested.connect(self._push_branch)
@@ -1489,11 +1525,27 @@ class Sector12BranchesView(QWidget):
             self._ctrl_branch_widgets[b_name] = ctrl_item
             self.ctrl_branch_layout.addWidget(ctrl_item)
 
-            # Item para Ventana 3 (Merge: Selección para fusionar)
-            merge_item = BranchListItemWidget(b_name, is_active=is_active, is_published=is_pub, is_merge_mode=True)
+            merge_item = BranchListItemWidget(b_name, is_active=is_active, is_published=is_pub, is_merge_mode=True, is_remote=False)
             merge_item.clicked.connect(self._on_merge_branch_clicked)
             self._merge_branch_widgets[b_name] = merge_item
             self.branch_list_layout.addWidget(merge_item)
+
+        # 4. Poblar ramas remotas que NO existen aún en local
+        for r_name in remote_branches:
+            clean_name = r_name.replace("origin/", "")
+            if clean_name not in local_branch_names:
+                ctrl_item = BranchListItemWidget(r_name, is_active=False, is_published=True, is_merge_mode=False, is_remote=True)
+                ctrl_item.clicked.connect(self._on_ctrl_branch_clicked)
+                ctrl_item.checkout_requested.connect(self._checkout_branch)
+                ctrl_item.push_requested.connect(self._push_branch)
+                ctrl_item.delete_requested.connect(self._delete_branch)
+                self._ctrl_branch_widgets[r_name] = ctrl_item
+                self.ctrl_branch_layout.addWidget(ctrl_item)
+
+                merge_item = BranchListItemWidget(r_name, is_active=False, is_published=True, is_merge_mode=True, is_remote=True)
+                merge_item.clicked.connect(self._on_merge_branch_clicked)
+                self._merge_branch_widgets[r_name] = merge_item
+                self.branch_list_layout.addWidget(merge_item)
 
         self.ctrl_branch_layout.addStretch()
         self.branch_list_layout.addStretch()
@@ -1629,11 +1681,12 @@ class Sector12BranchesView(QWidget):
         if not self.project or not self.project.path or not branch_name:
             return
 
-        res = run_command(["git", "checkout", branch_name], cwd=self.project.path)
+        target_name = branch_name.replace("origin/", "") if branch_name.startswith("origin/") else branch_name
+        res = run_command(["git", "checkout", target_name], cwd=self.project.path)
         if res.success:
-            self.log_emitted.emit(f"🔀 Cambio de rama exitoso: Ahora estás en <b>{branch_name}</b>")
+            self.log_emitted.emit(f"🔀 Cambio de rama exitoso: Ahora estás en <b>{target_name}</b>")
             self.update_project(self.project)
-            self.action_requested.emit("git_branch_switched", {"branch": branch_name})
+            self.action_requested.emit("git_branch_switched", {"branch": target_name})
         else:
             self.log_emitted.emit(f"Error al cambiar a la rama: {res.output}")
 
@@ -1653,37 +1706,43 @@ class Sector12BranchesView(QWidget):
 
     def _delete_branch(self, branch_name: str):
         """
-        Elimina una rama local requiriendo una doble confirmación estricta:
+        Elimina una rama (local o remota en origin) requiriendo una doble confirmación estricta:
         El usuario DEBE escribir exactamente el nombre de la rama para confirmar.
         """
         if not self.project or not self.project.path or not branch_name:
             return
 
-        # Prevenir eliminar la rama activa
-        res_active = run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=self.project.path)
-        active_b = res_active.stdout.strip() if res_active.success else ""
-        if branch_name == active_b:
-            self.log_emitted.emit(f"Operación denegada: No puedes eliminar la rama activa actual (<b>{branch_name}</b>).")
-            return
+        is_remote = branch_name.startswith("origin/")
+        clean_name = branch_name.replace("origin/", "") if is_remote else branch_name
+
+        # Prevenir eliminar la rama activa si es local
+        if not is_remote:
+            res_active = run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=self.project.path)
+            active_b = res_active.stdout.strip() if res_active.success else ""
+            if branch_name == active_b:
+                self.log_emitted.emit(f"Operación denegada: No puedes eliminar la rama activa actual (<b>{branch_name}</b>).")
+                return
 
         # Diálogo modal de confirmación crítica
         dialog = QDialog(self)
         dialog.setWindowTitle("Confirmación Crítica de Eliminación")
         dialog.setModal(True)
-        dialog.setFixedWidth(440)
+        dialog.setFixedWidth(460)
         dialog.setProperty("class", "cyber_dialog")
 
         d_layout = QVBoxLayout(dialog)
         d_layout.setContentsMargins(20, 18, 20, 18)
         d_layout.setSpacing(12)
 
-        lbl_tag = QLabel("ACCION DESTRUCTIVA // ELIMINACION DE RAMA")
+        lbl_tag = QLabel("ACCION DESTRUCTIVA // ELIMINACION DE RAMA REMOTA" if is_remote else "ACCION DESTRUCTIVA // ELIMINACION DE RAMA LOCAL")
         lbl_tag.setProperty("class", "sector_micro_tag")
         d_layout.addWidget(lbl_tag)
 
+        prompt_str = clean_name if is_remote else branch_name
+        scope_str = "en el servidor remoto <b>origin</b>" if is_remote else "en tu máquina local"
         lbl_msg = QLabel(
-            f"¿Estás seguro de que deseas eliminar permanentemente la rama <b>{branch_name}</b>?<br><br>"
-            f"Para confirmar, escribe exactamente el nombre de la rama a continuación:"
+            f"¿Estás seguro de que deseas eliminar permanentemente la rama <b>{branch_name}</b> {scope_str}?<br><br>"
+            f"Para confirmar, escribe exactamente <b>'{prompt_str}'</b> a continuación:"
         )
         lbl_msg.setProperty("class", "sector_desc")
         lbl_msg.setWordWrap(True)
@@ -1691,7 +1750,7 @@ class Sector12BranchesView(QWidget):
 
         txt_confirm = QLineEdit()
         txt_confirm.setProperty("class", "cyber_input")
-        txt_confirm.setPlaceholderText(f"Escribe '{branch_name}' para confirmar...")
+        txt_confirm.setPlaceholderText(f"Escribe '{prompt_str}' para confirmar...")
         d_layout.addWidget(txt_confirm)
 
         btn_row = QHBoxLayout()
@@ -1709,7 +1768,7 @@ class Sector12BranchesView(QWidget):
         btn_confirm.setEnabled(False)  # Solo se habilita si el texto coincide exactamente
 
         def _check_text_match(text: str):
-            btn_confirm.setEnabled(text.strip() == branch_name)
+            btn_confirm.setEnabled(text.strip() == prompt_str)
 
         txt_confirm.textChanged.connect(_check_text_match)
         btn_confirm.clicked.connect(dialog.accept)
@@ -1720,22 +1779,32 @@ class Sector12BranchesView(QWidget):
             self.log_emitted.emit(f"Eliminación de rama <b>{branch_name}</b> cancelada por el usuario.")
             return
 
-        # Ejecutar eliminación segura (-d) primero
-        res = run_command(["git", "branch", "-d", branch_name], cwd=self.project.path)
-        if res.success:
-            self.log_emitted.emit(f"🗑 Rama eliminada con éxito: <b>{branch_name}</b>")
-            self.update_project(self.project)
-            self.action_requested.emit("git_branch_deleted", {"branch": branch_name})
+        if is_remote:
+            self.log_emitted.emit(f"Eliminando rama remota <b>{clean_name}</b> de origin...")
+            res = run_command(["git", "push", "origin", "--delete", clean_name], cwd=self.project.path)
+            if res.success:
+                self.log_emitted.emit(f"🗑 Rama remota eliminada con éxito de origin: <b>{clean_name}</b>")
+                self.update_project(self.project)
+                self.action_requested.emit("git_remote_branch_deleted", {"branch": clean_name})
+            else:
+                self.log_emitted.emit(f"Error al eliminar rama remota: {res.output}")
         else:
-            # Si tiene commits no fusionados, forzar con -D
-            self.log_emitted.emit(f"Aviso: La rama tiene commits no fusionados. Aplicando eliminación forzada confirmada...")
-            res_force = run_command(["git", "branch", "-D", branch_name], cwd=self.project.path)
-            if res_force.success:
-                self.log_emitted.emit(f"🗑 Rama eliminada definitivamente (forzada): <b>{branch_name}</b>")
+            # Ejecutar eliminación segura (-d) primero
+            res = run_command(["git", "branch", "-d", branch_name], cwd=self.project.path)
+            if res.success:
+                self.log_emitted.emit(f"🗑 Rama eliminada con éxito: <b>{branch_name}</b>")
                 self.update_project(self.project)
                 self.action_requested.emit("git_branch_deleted", {"branch": branch_name})
             else:
-                self.log_emitted.emit(f"Error al eliminar rama: {res_force.output}")
+                # Si tiene commits no fusionados, forzar con -D
+                self.log_emitted.emit(f"Aviso: La rama tiene commits no fusionados. Aplicando eliminación forzada confirmada...")
+                res_force = run_command(["git", "branch", "-D", branch_name], cwd=self.project.path)
+                if res_force.success:
+                    self.log_emitted.emit(f"🗑 Rama eliminada definitivamente (forzada): <b>{branch_name}</b>")
+                    self.update_project(self.project)
+                    self.action_requested.emit("git_branch_deleted", {"branch": branch_name})
+                else:
+                    self.log_emitted.emit(f"Error al eliminar rama: {res_force.output}")
 
     def _refresh_branches(self):
         """Recarga manualmente el estado de las ramas y el grafo."""

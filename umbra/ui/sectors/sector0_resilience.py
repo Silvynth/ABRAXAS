@@ -275,8 +275,32 @@ class Sector0ResilienceView(QWidget):
             self.l_snap_list.insertWidget(self.l_snap_list.count() - 1, row)
 
     def _scan_btrfs_snapshots(self) -> list[dict]:
-        """Detecta las snapshots reales de Snapper en /.snapshots."""
+        """Detecta las snapshots reales de Snapper en /.snapshots o snapshots.json de Limine."""
         results = []
+        import glob
+        import json
+
+        # 1. Leer desde cache Limine Snapper Sync (snapshots.json)
+        try:
+            json_candidates = glob.glob("/var/cache/boot/*/lss/snapshots.json")
+            if json_candidates and os.path.exists(json_candidates[0]):
+                with open(json_candidates[0], "r") as f:
+                    data = json.load(f)
+                    entries = data.get("snapshotEntries", [])
+                    for entry in reversed(entries):
+                        s_info = entry.get("snapperID", {})
+                        sid = s_info.get("snapshotID")
+                        date_str = s_info.get("timestamp", "")
+                        props = s_info.get("properties", {})
+                        desc = props.get("description", "Snapshot del sistema")
+                        stype = props.get("type", "single")
+                        results.append({"id": sid, "date": date_str, "desc": desc, "type": stype})
+                    if results:
+                        return results[:25]
+        except Exception:
+            pass
+
+        # 2. Fallback a escaneo directo de /.snapshots
         snap_base = "/.snapshots"
         if os.path.exists(snap_base):
             try:

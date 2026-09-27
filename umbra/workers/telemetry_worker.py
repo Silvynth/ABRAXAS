@@ -32,8 +32,24 @@ class UmbraRibbonWorker(QThread):
     """Worker asíncrono para métricas de Obsidian, Pacman y Btrfs."""
     ribbon_updated = Signal(dict)
 
-    def __init__(self, vault_dir="/home/silvynth/Vault/01_Obsidian", parent=None):
+    def __init__(self, parent=None, vault_dir=None):
         super().__init__(parent)
+        # Si el primer argumento posicional fue un string (vault_dir histórico)
+        if isinstance(parent, str) and vault_dir is None:
+            vault_dir = parent
+        if vault_dir is None or not isinstance(vault_dir, str):
+            from core.config import load_config
+            try:
+                cfg = load_config()
+                import os
+                v = str(cfg.paths.vault_dir)
+                if os.path.isdir(os.path.join(v, "01_Obsidian")):
+                    vault_dir = os.path.join(v, "01_Obsidian")
+                else:
+                    vault_dir = v
+            except Exception:
+                vault_dir = "/home/silvynth/Vault/01_Obsidian"
+
         self.collector = UmbraStatusRibbonCollector(vault_dir=vault_dir)
         self.running = True
 

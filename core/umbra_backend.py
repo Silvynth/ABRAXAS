@@ -338,8 +338,12 @@ class UmbraStatusRibbonCollector:
         today_cnt = 0
         today_date = datetime.date.today()
         
-        if os.path.exists(self.vault_dir):
-            for root, _, files in os.walk(self.vault_dir):
+        target_dir = self.vault_dir
+        if target_dir and os.path.isdir(os.path.join(target_dir, "01_Obsidian")):
+            target_dir = os.path.join(target_dir, "01_Obsidian")
+
+        if target_dir and os.path.exists(target_dir):
+            for root, _, files in os.walk(target_dir):
                 for f in files:
                     if f.endswith(".md"):
                         total += 1
@@ -380,24 +384,50 @@ class UmbraStatusRibbonCollector:
 
     def collect_btrfs_snapshots_status(self) -> tuple[int, str, bool]:
         """Verifica snapshots de Snapper y estado de sincronización."""
-        cnt = 12
-        desc = "Snapper activo · Limine Bootloader OK"
-        sync_ok = True
+        import glob
+        import json
 
+        cnt = 0
+        desc = "Snapper inactivo"
+        sync_ok = False
+
+        # 1. Leer desde cache Limine Snapper Sync (snapshots.json)
         try:
-            if os.path.exists("/.snapshots"):
-                mtime = datetime.datetime.fromtimestamp(os.stat("/.snapshots").st_mtime)
-                now = datetime.datetime.now()
-                if mtime.date() == now.date():
-                    time_str = f"Hoy {mtime.strftime('%H:%M')}"
-                else:
-                    time_str = mtime.strftime("%d/%m %H:%M")
-                desc = f"Último: {time_str} · Limine Bootloader OK"
+            json_candidates = glob.glob("/var/cache/boot/*/lss/snapshots.json")
+            if json_candidates and os.path.exists(json_candidates[0]):
+                with open(json_candidates[0], "r") as f:
+                    data = json.load(f)
+                    entries = data.get("snapshotEntries", [])
+                    cnt = len(entries)
+                    last_ts = data.get("lastTimestamp", "")
+                    if last_ts:
+                        desc = f"Último: {last_ts} · Limine OK"
+                    else:
+                        desc = "Sincronizado con Limine Bootloader"
+                    sync_ok = True
         except Exception:
             pass
 
-        has_snapper = subprocess.run(["which", "snapper"], capture_output=True).returncode == 0
-        return cnt, desc, has_snapper
+        # 2. Si no se pudo obtener del json, intentar escaneo directo de /.snapshots
+        if cnt == 0 and os.path.exists("/.snapshots"):
+            try:
+                dirs = [d for d in os.listdir("/.snapshots") if d.isdigit()]
+                cnt = len(dirs)
+                mtime = datetime.datetime.fromtimestamp(os.stat("/.snapshots").st_mtime)
+                now = datetime.datetime.now()
+                time_str = f"Hoy {mtime.strftime('%H:%M')}" if mtime.date() == now.date() else mtime.strftime("%d/%m %H:%M")
+                desc = f"Último: {time_str} · Limine Bootloader OK"
+                sync_ok = True
+            except Exception:
+                pass
+
+        if cnt == 0 and not sync_ok:
+            has_snapper = subprocess.run(["which", "snapper"], capture_output=True).returncode == 0
+            if has_snapper:
+                desc = "Snapper activo · Limine Bootloader OK"
+                sync_ok = True
+
+        return cnt, desc, sync_ok
 
     def collect_ribbon_snapshot(self) -> dict:
         total_notes, today_notes = self.collect_vault_metrics()
