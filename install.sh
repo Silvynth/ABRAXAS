@@ -21,7 +21,7 @@ RESET='\033[0m'
 if [ -f "$SCRIPT_DIR/VERSION" ]; then
     VERSION=$(tr -d '[:space:]' < "$SCRIPT_DIR/VERSION")
 else
-    VERSION="1.1.2"
+    VERSION="4.1.0"
 fi
 
 CONFIG_DIR="$SCRIPT_DIR"

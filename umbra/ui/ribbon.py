@@ -19,21 +19,16 @@ class DayCycleFilament(QProgressBar):
         self.setTextVisible(False)
         self.setFixedHeight(3)
         self.setRange(0, 100)
-        self.setStyleSheet(f"""
-            QProgressBar {{
-                background-color: {P["BG_HIGHLIGHT"]};
-                border: none;
-                border-radius: 1px;
-            }}
-            QProgressBar::chunk {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {P["TEXT_TITLES"]}, stop:1 {P["TEXT_MUTED"]});
-                border-radius: 1px;
-            }}
-        """)
+        self.setProperty("class", "filament_bar")
         self._anim = QVariantAnimation(self)
         self._anim.setDuration(750)
         self._anim.setEasingCurve(QEasingCurve.OutCubic)
         self._anim.valueChanged.connect(self._apply_val)
+
+    def refresh_theme(self):
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
 
     def _apply_val(self, val):
         super().setValue(int(val))
@@ -51,12 +46,13 @@ class RibbonBay(QWidget):
     def __init__(self, label: str, value_widget: QWidget, subtext_widget: QWidget, 
                  filament_widget: QWidget = None, parent=None):
         super().__init__(parent)
+        self.filament_widget = filament_widget
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(2)
 
-        lbl_tag = QLabel(label)
-        lbl_tag.setStyleSheet(f"""
+        self.lbl_tag = QLabel(label)
+        self.lbl_tag.setStyleSheet(f"""
             font-size: 9px;
             font-weight: 700;
             letter-spacing: 1.5px;
@@ -64,13 +60,28 @@ class RibbonBay(QWidget):
             text-transform: uppercase;
             font-family: 'JetBrains Mono', monospace;
         """)
-        layout.addWidget(lbl_tag)
+        layout.addWidget(self.lbl_tag)
         layout.addWidget(value_widget)
 
         if filament_widget:
             layout.addWidget(filament_widget)
 
         layout.addWidget(subtext_widget)
+
+    def refresh_theme(self):
+        from core.theme import get_theme_palette
+        p = get_theme_palette()
+        if hasattr(self, "lbl_tag"):
+            self.lbl_tag.setStyleSheet(f"""
+                font-size: 9px;
+                font-weight: 700;
+                letter-spacing: 1.5px;
+                color: {p["TEXT_MICRO"]};
+                text-transform: uppercase;
+                font-family: 'JetBrains Mono', monospace;
+            """)
+        if self.filament_widget and hasattr(self.filament_widget, "refresh_theme"):
+            self.filament_widget.refresh_theme()
 
 
 class UmbraStatusRibbon(QFrame):
@@ -84,13 +95,7 @@ class UmbraStatusRibbon(QFrame):
 
     def init_ui(self):
         self.setObjectName("umbra_status_ribbon")
-        self.setStyleSheet(f"""
-            QFrame#umbra_status_ribbon {{
-                background-color: {P["BG_SURFACE"]};
-                border: 1px solid {P["BORDER_SUBTLE"]};
-                border-radius: 10px;
-            }}
-        """)
+        self.setProperty("class", "top_hud_ribbon")
 
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(20)
@@ -123,8 +128,8 @@ class UmbraStatusRibbon(QFrame):
         """)
         l_vv.addWidget(self.lbl_n96)
 
-        badge_vault = QLabel("OBSIDIAN")
-        badge_vault.setStyleSheet(f"""
+        self.badge_vault = QLabel("OBSIDIAN")
+        self.badge_vault.setStyleSheet(f"""
             font-size: 9px;
             font-weight: 700;
             color: {P["TEXT_TITLES"]};
@@ -133,14 +138,14 @@ class UmbraStatusRibbon(QFrame):
             border-radius: 4px;
             padding: 1px 6px;
         """)
-        l_vv.addWidget(badge_vault)
+        l_vv.addWidget(self.badge_vault)
         l_vv.addStretch()
 
         self.lbl_vault_sub = QLabel("Fichas Técnicas")
         self.lbl_vault_sub.setStyleSheet(f"font-size: 10px; font-weight: 500; color: {P['TEXT_MUTED']}; margin-top: 2px;")
 
-        bay_vault = RibbonBay("S E G U N D O   C E R E B R O", w_vault_val, self.lbl_vault_sub)
-        main_layout.addWidget(bay_vault)
+        self.bay_vault = RibbonBay("S E G U N D O   C E R E B R O", w_vault_val, self.lbl_vault_sub)
+        main_layout.addWidget(self.bay_vault)
         main_layout.addWidget(make_divider())
 
         # 2. SISTEMA & PAQUETES
@@ -174,8 +179,8 @@ class UmbraStatusRibbon(QFrame):
         self.lbl_pkg_sub = QLabel("CachyOS / Arch al día")
         self.lbl_pkg_sub.setStyleSheet(f"font-size: 10px; font-weight: 500; color: {P['TEXT_MUTED']}; margin-top: 2px;")
 
-        bay_pkg = RibbonBay("S I S T E M A   &   P A Q U E T E S", w_pkg_val, self.lbl_pkg_sub)
-        main_layout.addWidget(bay_pkg)
+        self.bay_pkg = RibbonBay("S I S T E M A   &   P A Q U E T E S", w_pkg_val, self.lbl_pkg_sub)
+        main_layout.addWidget(self.bay_pkg)
         main_layout.addWidget(make_divider())
 
         # 3. ESCUDO TEMPORAL BTRFS
@@ -209,8 +214,8 @@ class UmbraStatusRibbon(QFrame):
         self.lbl_btrfs_sub = QLabel("Limine Bootloader OK")
         self.lbl_btrfs_sub.setStyleSheet(f"font-size: 10px; font-weight: 500; color: {P['TEXT_MUTED']}; margin-top: 2px;")
 
-        bay_btrfs = RibbonBay("E S C U D O   B T R F S", w_btrfs_val, self.lbl_btrfs_sub)
-        main_layout.addWidget(bay_btrfs)
+        self.bay_btrfs = RibbonBay("E S C U D O   B T R F S", w_btrfs_val, self.lbl_btrfs_sub)
+        main_layout.addWidget(self.bay_btrfs)
         main_layout.addWidget(make_divider())
 
         # 4. CICLO DIARIO & FECHA (24H)
@@ -253,13 +258,47 @@ class UmbraStatusRibbon(QFrame):
         self.lbl_time_sub = QLabel("Muestreando ciclo diario...")
         self.lbl_time_sub.setStyleSheet(f"font-size: 10px; font-weight: 500; color: {P['TEXT_MUTED']}; margin-top: 2px;")
 
-        bay_time = RibbonBay("C I C L O   D I A R I O   ( 2 4 H )", w_time_val, self.lbl_time_sub, self.day_bar)
-        main_layout.addWidget(bay_time)
+        self.bay_time = RibbonBay("C I C L O   D I A R I O   ( 2 4 H )", w_time_val, self.lbl_time_sub, self.day_bar)
+        main_layout.addWidget(self.bay_time)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._update_day_progress)
         self.timer.start(5000)
         self._update_day_progress()
+
+    def refresh_theme(self):
+        """Actualiza dinámicamente la cinta de estado al cambiar el tema en theme.py."""
+        from core.theme import get_theme_palette
+        p = get_theme_palette()
+        for bay in [getattr(self, "bay_vault", None), getattr(self, "bay_pkg", None), 
+                    getattr(self, "bay_btrfs", None), getattr(self, "bay_time", None)]:
+            if bay and hasattr(bay, "refresh_theme"):
+                bay.refresh_theme()
+        if hasattr(self, "lbl_n96"):
+            self.lbl_n96.setStyleSheet(f"font-size: 18px; font-weight: 800; color: {p['TEXT_TITLES']}; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "lbl_pkg_num"):
+            self.lbl_pkg_num.setStyleSheet(f"font-size: 16px; font-weight: 800; color: {p['TEXT_TITLES']}; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "lbl_btrfs_num"):
+            self.lbl_btrfs_num.setStyleSheet(f"font-size: 16px; font-weight: 800; color: {p['TEXT_TITLES']}; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "lbl_date"):
+            self.lbl_date.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {p['TEXT_TITLES']}; letter-spacing: 0.2px;")
+        if hasattr(self, "lbl_vault_sub"):
+            self.lbl_vault_sub.setStyleSheet(f"font-size: 10px; font-weight: 500; color: {p['TEXT_MUTED']}; margin-top: 2px;")
+        if hasattr(self, "lbl_pkg_sub"):
+            self.lbl_pkg_sub.setStyleSheet(f"font-size: 10px; font-weight: 500; color: {p['TEXT_MUTED']}; margin-top: 2px;")
+        if hasattr(self, "lbl_btrfs_sub"):
+            self.lbl_btrfs_sub.setStyleSheet(f"font-size: 10px; font-weight: 500; color: {p['TEXT_MUTED']}; margin-top: 2px;")
+        if hasattr(self, "lbl_time_sub"):
+            self.lbl_time_sub.setStyleSheet(f"font-size: 10px; font-weight: 500; color: {p['TEXT_MUTED']}; margin-top: 2px;")
+        for badge in [getattr(self, "badge_vault", None), getattr(self, "badge_pkg", None), 
+                      getattr(self, "badge_btrfs", None), getattr(self, "badge_day_pct", None)]:
+            if badge:
+                badge.setStyleSheet(f"font-size: 9px; font-weight: 700; color: {p['TEXT_TITLES']}; background-color: {p['BG_HIGHLIGHT']}; border: 1px solid {p['BORDER_SUBTLE']}; border-radius: 4px; padding: 1px 6px;")
+        if hasattr(self, "day_bar"):
+            self.day_bar.refresh_theme()
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
 
     def _update_day_progress(self):
         t = QTime.currentTime()

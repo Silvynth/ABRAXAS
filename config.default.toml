@@ -4,7 +4,8 @@
 
 [abraxas]
 schema_version = "0.1.0"
-theme = "dark_cyberpunk"
+# Temas: oscuros ("oscuro", "cyberpunk", "lavanda", "nord", "esmeralda") y claros ("claro", "pergamino", "nieve", "sakura", "menta")
+theme = "oscuro"
 
 [paths]
 projects_dir = ""
@@ -19,13 +20,11 @@ auto_sync_global = true
 enabled = false
 provider = "ollama"
 endpoint = "http://localhost:11434"
-chat_model = ""
 heavy_model = ""
 light_model = ""
 temperature = 0.2
 
 [ai.skills]
-chat_skill_path = "skills/chat_skill.txt"
 heavy_skill_path = "skills/heavy_skill.txt"
 light_skill_path = "skills/light_skill.txt"
 

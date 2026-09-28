@@ -15,7 +15,7 @@ from core.paths import get_active_config_path, get_default_template_path
 class AbraxasSettings:
     """Configuración general del núcleo Abraxas."""
     schema_version: str = "0.1.0"
-    theme: str = "system_sync"
+    theme: str = "oscuro"
 
 
 @dataclass
@@ -161,7 +161,7 @@ def load_config(custom_path: Optional[Path] = None) -> AppConfig:
     return AppConfig(
         abraxas=AbraxasSettings(
             schema_version=abx_data.get("schema_version", "0.1.0"),
-            theme=abx_data.get("theme", "system_sync")
+            theme=abx_data.get("theme", "oscuro")
         ),
         paths=PathsSettings(
             projects_dir=Path(paths_data.get("projects_dir", str(Path.home() / "Development"))),

@@ -22,6 +22,7 @@ from PySide6.QtGui import QCursor, QTextCursor
 
 from lumen.models.project import Project
 from ui.controls.switcher_pill import SectorSwitcherPill
+from core.theme import MONOCHROME_PALETTE as P, get_theme_palette
 from core.environments import launch_project_in_editor, get_preferred_editor
 from core.utilities import (
     inspect_gitignore_and_env, apply_gitignore_preset, add_custom_gitignore_rule,
@@ -294,10 +295,17 @@ class SubSector31GitignoreView(QWidget):
 
         self.txt_editor = QTextEdit()
         self.txt_editor.setProperty("class", "cyber_terminal")
-        self.txt_editor.setStyleSheet(
-            "background-color: #0c0d10; border: 1px solid rgba(255, 255, 255, 0.08); "
-            "border-radius: 6px; padding: 10px; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 11px;"
-        )
+        self.txt_editor.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {P['BG_INPUT']};
+                border: 1px solid {P['BORDER_SUBTLE']};
+                border-radius: 6px;
+                padding: 10px;
+                color: {P['TEXT_BODY']};
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 11px;
+            }}
+        """)
         r_layout.addWidget(self.txt_editor, 1)
 
         splitter.addWidget(right_card)
@@ -613,13 +621,9 @@ class SubSector32DocsView(QWidget):
 
         r_layout.addLayout(v_toolbar)
 
-        # Visor de documento
+        # Visor de documento (gobernado por clase markdown_viewer del tema activo)
         self.txt_doc_viewer = QTextEdit()
-        self.txt_doc_viewer.setProperty("class", "cyber_terminal")
-        self.txt_doc_viewer.setStyleSheet(
-            "background-color: #0c0d10; border: 1px solid rgba(255, 255, 255, 0.08); "
-            "border-radius: 6px; padding: 12px; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 11px;"
-        )
+        self.txt_doc_viewer.setProperty("class", "markdown_viewer")
         r_layout.addWidget(self.txt_doc_viewer, 1)
 
         splitter.addWidget(right_card)
@@ -952,10 +956,17 @@ class SubSector33AiAuditView(QWidget):
         self.txt_audit_display.setPlaceholderText(
             "Configura la profundidad y pulsa 'Iniciar Auditoría' para evaluar el código con IA local..."
         )
-        self.txt_audit_display.setStyleSheet(
-            "background-color: #0c0d10; border: 1px solid rgba(255, 255, 255, 0.08); "
-            "border-radius: 6px; padding: 12px; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 11px;"
-        )
+        self.txt_audit_display.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {P['BG_INPUT']};
+                border: 1px solid {P['BORDER_SUBTLE']};
+                border-radius: 6px;
+                padding: 12px;
+                color: {P['TEXT_BODY']};
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 11px;
+            }}
+        """)
         r_layout.addWidget(self.txt_audit_display, 1)
 
         splitter.addWidget(right_card)
@@ -1134,3 +1145,33 @@ class Sector3AiView(QWidget):
             self.sub32_view.teardown()
         if hasattr(self, "sub33_view") and hasattr(self.sub33_view, "teardown"):
             self.sub33_view.teardown()
+
+    def set_theme(self, theme_key: str = None):
+        """Propaga el cambio de tema a la barra de navegación y subsectores de IA."""
+        if hasattr(self, "sub_pill") and hasattr(self.sub_pill, "refresh_theme"):
+            self.sub_pill.refresh_theme()
+        p = get_theme_palette(theme_key)
+        if hasattr(self, "sub31_view") and hasattr(self.sub31_view, "txt_editor"):
+            self.sub31_view.txt_editor.setStyleSheet(f"""
+                QTextEdit {{
+                    background-color: {p['BG_INPUT']};
+                    border: 1px solid {p['BORDER_SUBTLE']};
+                    border-radius: 6px;
+                    padding: 10px;
+                    color: {p['TEXT_BODY']};
+                    font-family: 'JetBrains Mono', monospace;
+                    font-size: 11px;
+                }}
+            """)
+        if hasattr(self, "sub33_view") and hasattr(self.sub33_view, "txt_audit_display"):
+            self.sub33_view.txt_audit_display.setStyleSheet(f"""
+                QTextEdit {{
+                    background-color: {p['BG_INPUT']};
+                    border: 1px solid {p['BORDER_SUBTLE']};
+                    border-radius: 6px;
+                    padding: 12px;
+                    color: {p['TEXT_BODY']};
+                    font-family: 'JetBrains Mono', monospace;
+                    font-size: 11px;
+                }}
+            """)

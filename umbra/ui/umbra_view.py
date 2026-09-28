@@ -112,6 +112,13 @@ class UmbraView(QWidget):
         self.ribbon_worker.ribbon_updated.connect(self.ribbon.update_ribbon)
         self.ribbon_worker.start()
 
+    def set_active_view(self, active: bool):
+        """Ajusta la cadencia de sondeo de los workers según la visibilidad de la pestaña."""
+        if hasattr(self, "telemetry_worker") and self.telemetry_worker:
+            self.telemetry_worker.set_active_visibility(active)
+        if hasattr(self, "ribbon_worker") and self.ribbon_worker:
+            self.ribbon_worker.set_active_visibility(active)
+
     def _on_terminal_state_changed(self, mode: str):
         if mode == "maximized":
             self.main_stack.setVisible(False)
@@ -125,6 +132,21 @@ class UmbraView(QWidget):
 
     def _on_action_requested(self, action: str, data: dict):
         self.terminal.log_info("ACTION", f"Acción de sistema: <b>{action}</b> {data if data else ''}")
+
+    def set_theme(self, theme_key: str = None):
+        """Propaga el cambio de tema reactivo a todos los componentes de Umbra."""
+        if hasattr(self, "hud") and hasattr(self.hud, "refresh_theme"):
+            self.hud.refresh_theme()
+        if hasattr(self, "ribbon") and hasattr(self.ribbon, "refresh_theme"):
+            self.ribbon.refresh_theme()
+        if hasattr(self, "sector0") and hasattr(self.sector0, "set_theme"):
+            self.sector0.set_theme(theme_key)
+        if hasattr(self, "sector1") and hasattr(self.sector1, "set_theme"):
+            self.sector1.set_theme(theme_key)
+        if hasattr(self, "sector2") and hasattr(self.sector2, "set_theme"):
+            self.sector2.set_theme(theme_key)
+        if hasattr(self, "terminal") and hasattr(self.terminal, "refresh_theme"):
+            self.terminal.refresh_theme()
 
     def closeEvent(self, event):
         """Detención limpia de hilos."""

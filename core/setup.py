@@ -164,13 +164,11 @@ def write_toml_dict(filepath, cfg):
         f'enabled = {str(cfg.get("ai", {}).get("enabled", False)).lower()}',
         f'provider = "{cfg.get("ai", {}).get("provider", "ollama")}"',
         f'endpoint = "{cfg.get("ai", {}).get("endpoint", "http://localhost:11434")}"',
-        f'chat_model = "{cfg.get("ai", {}).get("chat_model", "")}"',
         f'heavy_model = "{cfg.get("ai", {}).get("heavy_model", "")}"',
         f'light_model = "{cfg.get("ai", {}).get("light_model", "")}"',
         f'temperature = {cfg.get("ai", {}).get("temperature", 0.2)}',
         "",
         "[ai.skills]",
-        f'chat_skill_path = "{cfg.get("ai", {}).get("skills", {}).get("chat_skill_path", "skills/chat_skill.txt")}"',
         f'heavy_skill_path = "{cfg.get("ai", {}).get("skills", {}).get("heavy_skill_path", "skills/heavy_skill.txt")}"',
         f'light_skill_path = "{cfg.get("ai", {}).get("skills", {}).get("light_skill_path", "skills/light_skill.txt")}"',
         "",
@@ -203,7 +201,7 @@ def ensure_default_skills():
     """Genera archivos de directivas de comportamiento (vacíos por defecto) en skills/ si no existen."""
     skills_dir = SKILLS_DIR
     os.makedirs(skills_dir, exist_ok=True)
-    for fname in ["chat_skill.txt", "heavy_skill.txt", "light_skill.txt"]:
+    for fname in ["heavy_skill.txt", "light_skill.txt"]:
         fpath = os.path.join(skills_dir, fname)
         if not os.path.exists(fpath):
             try:
@@ -343,22 +341,20 @@ def run_interactive_wizard(is_preview=False):
         if models:
             print(f"     {C_DIM}Modelos detectados en Ollama local:{RESET} {C_TEXT}{', '.join(models)}{RESET}")
             def_model = models[0]
-            chat_m = prompt_input(f"Modelo para Asistente/Chat [{def_model}]:", def_model)
             heavy_m = prompt_input(f"Modelo Pesado (Auditoría/Refactor) [{def_model}]:", def_model)
             light_m = prompt_input(f"Modelo Ligero (Commits/Quick) [{def_model}]:", def_model)
         else:
-            chat_m = prompt_input("Modelo para Asistente/Chat [llama3.1:8b]:", "llama3.1:8b")
             heavy_m = prompt_input("Modelo Pesado (Auditoría/Refactor) [deepseek-coder:6.7b]:", "deepseek-coder:6.7b")
             light_m = prompt_input("Modelo Ligero (Commits/Quick) [qwen2.5-coder:7b]:", "qwen2.5-coder:7b")
 
     if "ai" not in base_cfg: base_cfg["ai"] = {}
     base_cfg["ai"]["enabled"] = is_ai
-    base_cfg["ai"]["chat_model"] = chat_m
+    base_cfg["ai"].pop("chat_model", None)
     base_cfg["ai"]["heavy_model"] = heavy_m
     base_cfg["ai"]["light_model"] = light_m
 
     if "skills" not in base_cfg["ai"]: base_cfg["ai"]["skills"] = {}
-    base_cfg["ai"]["skills"]["chat_skill_path"] = "skills/chat_skill.txt"
+    base_cfg["ai"]["skills"].pop("chat_skill_path", None)
     base_cfg["ai"]["skills"]["heavy_skill_path"] = "skills/heavy_skill.txt"
     base_cfg["ai"]["skills"]["light_skill_path"] = "skills/light_skill.txt"
 
@@ -369,13 +365,33 @@ def run_interactive_wizard(is_preview=False):
 
     # 6. Tema Visual
     print(f"  {C_ACCENT}🎨 [6/6] TEMA VISUAL:{RESET}")
-    print(f"     1) Noctalia (Sincronizado con el sistema Wayland/Hyprland)")
-    print(f"     2) Dark Cyberpunk")
-    print(f"     3) Monocromo Minimalista")
-    t_choice = prompt_input("Selecciona tema (1-3):", "1")
-    t_map = {"1": "noctalia", "2": "dark_cyberpunk", "3": "monochrome"}
+    print(f"     {C_DIM}--- Temas Oscuros ---{RESET}")
+    print(f"     1) Oscuro (Monocromo Haute Horlogerie)")
+    print(f"     2) Cyberpunk (Asfalto Neón & Cian)")
+    print(f"     3) Lavanda (Violeta Noche Profunda)")
+    print(f"     4) Nord (Azul Ártico Polar & Frost)")
+    print(f"     5) Esmeralda (Obsidiana Táctica & Jade)")
+    print(f"     {C_DIM}--- Temas Claros ---{RESET}")
+    print(f"     6) Claro / Blanco (Titanio & Slate Puro Técnico)")
+    print(f"     7) Pergamino (Sepia Cálido & Marfil Clásico)")
+    print(f"     8) Nieve (Titanio Glacial Frost Ultra Nítido)")
+    print(f"     9) Sakura (Cuarzo & Flor de Cerezo Refinado)")
+    print(f"     10) Menta (Salvia & Menta Fresca Zen)")
+    t_choice = prompt_input("Selecciona tema (1-10):", "1")
+    t_map = {
+        "1": "oscuro",
+        "2": "cyberpunk",
+        "3": "lavanda",
+        "4": "nord",
+        "5": "esmeralda",
+        "6": "claro",
+        "7": "pergamino",
+        "8": "nieve",
+        "9": "sakura",
+        "10": "menta"
+    }
     if "abraxas" not in base_cfg: base_cfg["abraxas"] = {}
-    base_cfg["abraxas"]["theme"] = t_map.get(t_choice, "noctalia")
+    base_cfg["abraxas"]["theme"] = t_map.get(t_choice, "oscuro")
     print("")
 
     if is_preview:

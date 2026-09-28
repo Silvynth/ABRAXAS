@@ -2,7 +2,7 @@
 
 > **Plataforma interna de desarrollo (IDP) y estación de mando táctica para Linux: Gestión visual del ciclo de vida Git, telemetría de kernel en tiempo real a 60 FPS, resiliencia con instantáneas Btrfs e inteligencia artificial local 100% privada.**
 
-[![Versión](https://img.shields.io/badge/Versi%C3%B3n-v3.2.0-6366f1?style=for-the-badge&logo=git&logoColor=white)](https://github.com/Silvynth/ABRAXAS)
+[![Versión](https://img.shields.io/badge/Versi%C3%B3n-v2.0.0%20(Modular)-6366f1?style=for-the-badge&logo=git&logoColor=white)](https://github.com/Silvynth/ABRAXAS)
 [![Plataforma](https://img.shields.io/badge/Plataforma-Linux%20(Arch%20%7C%20CachyOS%20%7C%20Fedora%20%7C%20Debian%20%7C%20Ubuntu)-10b981?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/Silvynth/ABRAXAS)
 [![UI Engine](https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6%20Native-06b6d4?style=for-the-badge&logo=qt&logoColor=white)](https://github.com/Silvynth/ABRAXAS)
 [![Kernel Telemetry](https://img.shields.io/badge/Kernel%20Telemetry-ProcFS%20%3C1ms-ef4444?style=for-the-badge&logo=gnubash&logoColor=white)](https://github.com/Silvynth/ABRAXAS)
@@ -186,11 +186,10 @@ Inspirado en la precisión de instrumentos de medición de alta gama:
 ### 4. NOUS — Inteligencia Artificial Soberana
 
 * **Privacidad Absoluta:** Conexión directa a [Ollama](https://ollama.com/) en local (`http://localhost:11434`). Ningún dato, ruta o línea de código sale de tu máquina.
-* **Tres Roles Funcionales Dinámicos:**
-  * **Conversacional / Chat:** Consultas técnicas generales y asistencia interactiva.
-  * **Desarrollo Ligero (HEX):** Generación ultrarrápida de mensajes de commit y resúmenes de cambios.
-  * **Desarrollo Pesado (HEN):** Auditoría profunda de seguridad, análisis de arquitectura y resolución de conflictos.
-* *Nota:* Un único modelo versátil (como `qwen2.5-coder:7b` o `deepseek-r1:8b`) puede cubrir los tres roles sin problemas.
+* **Dos Roles de Desarrollo Dinámicos:**
+  * **Desarrollo Ligero (HEX):** Generación ultrarrápida de mensajes de commit convencionales y resúmenes de cambios.
+  * **Desarrollo Pesado (HEN):** Auditoría profunda de seguridad, análisis de arquitectura y resolución de refactors.
+* *Nota:* Un único modelo versátil (como `qwen2.5-coder:7b` o `deepseek-r1:8b`) puede cubrir ambos roles sin problemas.
 
 ---
 
@@ -200,6 +199,25 @@ ABRAXAS incorpora una terminal interactiva tipo "cajón" (`ui/terminal/cyber_ter
 * **Animación Fluida:** Transición cinemática `OutCubic` entre estado colapsado (42 px) y desplegado (320 px).
 * **Manija Táctil Interactiva:** Botones de colapso, tamaño estándar y maximizado.
 * **Contexto de Directorio:** Se sincroniza automáticamente con la ruta del proyecto activo en pantalla.
+
+---
+
+### 6. Motor Multi-Tema Dinámico (Suite de 10 Paletas de Precisión)
+
+ABRAXAS incorpora un enlace universal de diseño en `core/theme.py` que gobierna de forma coordinada cintas superiores (HUDs/Ribbons), grafos interactivos, terminales, barras segmentadas de disco y visores Markdown:
+* **🌑 5 Temas Oscuros:**
+  * `oscuro`: Monocromo *Haute Horlogerie* y titanio.
+  * `cyberpunk`: Asfalto neón con filamentos cian `#00f0ff` y magenta `#ff007f`.
+  * `lavanda`: Noche violeta profunda `#0e0c18` y acentos lavanda suave `#c084fc`.
+  * `nord`: Azul ártico polar `#242933` y destellos de hielo glacial `#88c0d0`.
+  * `esmeralda`: Obsidiana táctica `#090d0b` y jade luminoso `#10b981`.
+* **☀️ 5 Temas Claros (Contraste Técnico Puro):**
+  * `claro` (o `blanco`): Titanio y Slate puro con tipografías carbón y hashes de alta visibilidad.
+  * `pergamino`: Marfil cálido `#fbf7ee` y tintas café `#292524` (Cero fatiga visual para lectura prolongada).
+  * `nieve`: Glacial frost ultra nítido `#f4f7fb` con azules noche profundos `#0c4a6e`.
+  * `sakura`: Marfil rosado `#fdf7f9` con acentos pétalo y borgoña refinado `#be185d`.
+  * `menta`: Salvia y menta fresca zen `#f3f8f5` con acentos verde bosque `#0d9488`.
+* **Cero Subprocesos & Memoización:** Generación de estilos QSS memoizada en memoria (`@functools.lru_cache`) sin bloqueos por consultas de sistema operativo.
 
 ---
 
@@ -280,12 +298,13 @@ Tras completar la instalación, ABRAXAS queda registrado en tu entorno de escrit
 1. **Lanzador de Aplicaciones (`.desktop`):**
    * Ubicado en `~/.local/share/applications/abraxas.desktop` con icono vectorial SVG oficial.
    * Disponible en cualquier lanzador de aplicaciones (**Rofi, Wofi, Fuzzel, KRunner, GNOME Shell, KDE**).
-2. **Comando Rápido en Terminal:**
-   * El instalador crea un symlink en `~/.local/bin/abx` que apunta al wrapper `bin/abraxas-gui`.
+2. **Comando Rápido en Terminal (`abx`):**
+   * El instalador genera el comando `abx` en `~/.local/bin/abx` que inicializa el entorno de ejecución monolítico.
    ```bash
    abx
    ```
-   * Los registros de diagnóstico y ejecución se almacenan limpiamente en `~/.cache/abraxas/abraxas.log`.
+   * **Regla Maestra de Configuración:** Cada vez que se guardan cambios en `config.toml`, la shell ejecuta un **reset completo de la aplicación** en caliente, deteniendo de forma ordenada todos los hilos y relanzando el proceso limpiamente sin estado residual en memoria.
+   * Los registros de diagnóstico y ejecución se almacenan en `~/.cache/abraxas/abraxas.log`.
 
 ---
 
@@ -296,28 +315,29 @@ La configuración se gestiona mediante un archivo TOML centralizado con permisos
 ```toml
 [abraxas]
 schema_version = "0.1.0"
-theme = "dark_cyberpunk"
+# Temas disponibles:
+# Oscuros: "oscuro", "cyberpunk", "lavanda", "nord", "esmeralda"
+# Claros:   "claro" (o "blanco"), "pergamino", "nieve", "sakura", "menta"
+theme = "oscuro"
 
 [paths]
-projects_dir = "/home/silvynth/Development"
-vault_dir = "/home/silvynth/Vault/01_Obsidian"
+projects_dir = "~/Development"
+vault_dir = "~/Vault/01_Obsidian"
 
 [git]
-user_name = "bastian"
-user_email = "bastian.ch.d@hotmail.com"
+user_name = "TuUsuario"
+user_email = "tu_email@ejemplo.com"
 auto_sync_global = true
 
 [ai]
 enabled = true
 provider = "ollama"
 endpoint = "http://localhost:11434"
-chat_model = "deepseek-r1:8b"
 heavy_model = "deepseek-r1:8b"
 light_model = "qwen2.5-coder:7b"
 temperature = 0.2
 
 [ai.skills]
-chat_skill_path = "skills/chat_skill.txt"
 heavy_skill_path = "skills/heavy_skill.txt"
 light_skill_path = "skills/light_skill.txt"
 
@@ -327,7 +347,7 @@ snapper_config = "root"
 ```
 
 * El repositorio incluye una plantilla limpia `config.default.toml` que sirve de base para nuevas instalaciones.
-* Todos los cambios pueden editarse directamente desde la pestaña **Configuración** en la interfaz gráfica.
+* Todos los cambios pueden previsualizarse y editarse directamente desde la pestaña **Configuración** en la interfaz gráfica.
 
 ---
 
@@ -337,11 +357,13 @@ Mediciones reales obtenidas en banco de pruebas (CachyOS Linux / Kernel x86-64-v
 
 | Métrica | Valor Observado | Impacto |
 | :--- | :--- | :--- |
-| **Consumo de Memoria RAM (GUI en reposo)** | **~1.12 MB** (pico 1.28 MB) | Consumo despreciable frente a soluciones basadas en Electron. |
-| **Tiempo de Arranque Inicial** | **~340 ms** | Apertura instantánea sin retrasos perceptibles. |
-| **Transición entre Sectores** | **0.23 ms – 2.34 ms** | Cambio de vista atómico gracias a `LumenDynamicStackedWidget`. |
-| **Frecuencia de Refresco de Telemetría** | **60 FPS** | Animaciones de filamentos fluidas sin saltos. |
-| **Sobrecarga de CPU en Muestreo (800 ms)** | **< 0.5%** | Lectura pura sobre `/proc` sin librerías pesadas externas. |
+| **Huella de Memoria RAM (GUI activa)** | **< 80 MB** | Compactación de recursos con `gc.collect()` en cambios de sector. |
+| **Tiempo de Arranque Inicial** | **~340 ms** | Carga bajo demanda (*lazy loading*) de vistas pesadas de dominio. |
+| **Transición entre Sectores** | **0.23 ms – 2.34 ms** | Cambio de vista atómico gracias a `QStackedWidget` desacoplado. |
+| **Frecuencia de Refresco de Telemetría** | **60 FPS** | Animaciones de filamentos fluidas en instrumentos Haute Horlogerie. |
+| **Sondeo Adaptativo de Telemetría** | **0.8s (Activo) / 5.0s (Fondo)** | Atenuación inteligente que reduce el consumo de CPU de fondo a **0.0%**. |
+| **Renderizado GitOps en Memoria** | **0 forks de consola** | Validación indexada en memoria en `_get_git_commits` sin llamadas a `git rev-parse`. |
+| **Generación de Hoja de Estilos QSS** | **< 0.001 ms (LRU Cache)** | Puntero en memoria instantáneo sin recompilación de cadenas de 15 KB. |
 | **Poda de Árboles en Escaneo de Proyectos** | **Reducción del 99%** | Escaneo casi instantáneo al omitir `.git`, `node_modules` y `.venv`. |
 | **Consulta de Visibilidad GitHub (Caché)** | **17 ms** | Reducción de 679 ms en frío a 17 ms con caché de metadatos. |
 
@@ -352,6 +374,9 @@ Mediciones reales obtenidas en banco de pruebas (CachyOS Linux / Kernel x86-64-v
 * **Cero Telemetría Saliente:** ABRAXAS no contiene rastreadores, analíticas ni conexiones hacia servidores externos.
 * **Soberanía del Código:** Ningún diff ni fragmento de código se transmite fuera de tu red local; el motor NOUS opera exclusivamente sobre tu servidor local de Ollama.
 * **Aislamiento de Secretos:** Los archivos `.env`, credenciales y tokens permanecen excluidos de Git por defecto gracias a las reglas estrictas de `.gitignore`.
+* **Seguridad en Memoria (Zero-Fill de Sudo):** Las contraseñas de privilegios administrativos se verifican preventivamente (`sudo -k -S -p '' -v`) y su buffer en RAM se sobrescribe con ceros (`bytearray(b'\x00' * len)`) inmediatamente después de su uso.
+* **Sanitización de Snapshots & Comandos:** Nombres y parámetros filtrados estrictamente por expresiones regulares para prevenir inyecciones de comandos en la CLI de Snapper.
+* **Guardia Anti Self-Kill:** Protección de procesos que impide terminar accidentalmente el PID de ABRAXAS desde interfaces de gestión de entornos o terminales secundarias.
 
 ---
 

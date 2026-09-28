@@ -64,18 +64,25 @@ class TerminalCommandInput(QLineEdit):
         self.history: list[str] = []
         self.history_index: int = -1
         self.current_draft: str = ""
+        self.refresh_theme()
 
-        self.setStyleSheet("""
-            QLineEdit {
+    def refresh_theme(self):
+        from core.theme import get_theme_palette
+        p = get_theme_palette()
+        self.setStyleSheet(f"""
+            QLineEdit {{
                 background: transparent;
                 border: none;
-                color: #ffffff;
+                color: {p["TERMINAL_TEXT"]};
                 font-family: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', monospace;
                 font-size: 11px;
                 padding: 2px 4px;
                 selection-background-color: rgba(56, 189, 248, 0.35);
-                selection-color: #ffffff;
-            }
+                selection-color: {p["TERMINAL_TEXT"]};
+            }}
+            QLineEdit::placeholder {{
+                color: {p["TEXT_MUTED"]};
+            }}
         """)
 
     def add_history(self, cmd: str):
@@ -160,14 +167,7 @@ class CyberTerminal(QFrame):
         # -------------------------------------------------------------
         self.header_bar = QWidget()
         self.header_bar.setFixedHeight(38)
-        self.header_bar.setStyleSheet("""
-            QWidget {
-                background-color: #0c0d10;
-                border-top-left-radius: 10px;
-                border-top-right-radius: 10px;
-                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-            }
-        """)
+        self.header_bar.setProperty("class", "terminal_header")
         h_layout = QHBoxLayout(self.header_bar)
         h_layout.setContentsMargins(14, 6, 14, 6)
         h_layout.setSpacing(10)
@@ -178,10 +178,7 @@ class CyberTerminal(QFrame):
         h_layout.addWidget(lbl_dots)
 
         self.lbl_prompt = QLabel(self.prompt_text)
-        self.lbl_prompt.setStyleSheet(
-            "color: #94a3b8; font-family: 'JetBrains Mono', monospace; "
-            "font-size: 11px; font-weight: 700; letter-spacing: 0.5px;"
-        )
+        self.lbl_prompt.setProperty("class", "terminal_prompt")
         h_layout.addWidget(self.lbl_prompt)
 
         # Centro: Manija táctica interactiva
@@ -195,28 +192,24 @@ class CyberTerminal(QFrame):
         self.btn_copy = QPushButton("📋 Copiar")
         self.btn_copy.setProperty("class", "cyber_btn")
         self.btn_copy.setFixedHeight(24)
-        self.btn_copy.setStyleSheet("font-size: 10.5px; padding: 2px 8px;")
         self.btn_copy.clicked.connect(self.copy_output)
         h_layout.addWidget(self.btn_copy)
 
         self.btn_clear = QPushButton("🧹 Limpiar")
         self.btn_clear.setProperty("class", "cyber_btn")
         self.btn_clear.setFixedHeight(24)
-        self.btn_clear.setStyleSheet("font-size: 10.5px; padding: 2px 8px;")
         self.btn_clear.clicked.connect(self.clear)
         h_layout.addWidget(self.btn_clear)
 
         self.btn_toggle = QPushButton("▼ Minimizar")
         self.btn_toggle.setProperty("class", "cyber_btn")
         self.btn_toggle.setFixedHeight(24)
-        self.btn_toggle.setStyleSheet("font-size: 10.5px; padding: 2px 8px;")
         self.btn_toggle.clicked.connect(self.toggle_open_minimize)
         h_layout.addWidget(self.btn_toggle)
 
         self.btn_maximize = QPushButton("⛶ Maximizar")
         self.btn_maximize.setProperty("class", "cyber_btn")
         self.btn_maximize.setFixedHeight(24)
-        self.btn_maximize.setStyleSheet("font-size: 10.5px; padding: 2px 8px;")
         self.btn_maximize.clicked.connect(self.toggle_maximize)
         h_layout.addWidget(self.btn_maximize)
 
@@ -228,32 +221,6 @@ class CyberTerminal(QFrame):
         self.text_display = QTextEdit()
         self.text_display.setReadOnly(True)
         self.text_display.setProperty("class", "cyber_terminal")
-        self.text_display.setStyleSheet("""
-            QTextEdit {
-                background-color: #08090b;
-                color: #e2e8f0;
-                font-family: 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', monospace;
-                font-size: 11.5px;
-                line-height: 1.5;
-                border: none;
-                padding: 10px 14px;
-                selection-background-color: rgba(255, 255, 255, 0.20);
-                selection-color: #ffffff;
-            }
-            QScrollBar:vertical {
-                background: #08090b;
-                width: 6px;
-                border: none;
-            }
-            QScrollBar::handle:vertical {
-                background: #334155;
-                min-height: 20px;
-                border-radius: 3px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #64748b;
-            }
-        """)
         self.main_layout.addWidget(self.text_display)
 
         # -------------------------------------------------------------
@@ -261,23 +228,17 @@ class CyberTerminal(QFrame):
         # -------------------------------------------------------------
         self.input_bar = QWidget()
         self.input_bar.setFixedHeight(34)
-        self.input_bar.setStyleSheet("""
-            QWidget {
-                background-color: #0c0d10;
-                border-bottom-left-radius: 10px;
-                border-bottom-right-radius: 10px;
-                border-top: 1px solid rgba(255, 255, 255, 0.08);
-            }
-        """)
+        self.input_bar.setProperty("class", "terminal_input_bar")
         in_layout = QHBoxLayout(self.input_bar)
         in_layout.setContentsMargins(12, 4, 12, 4)
         in_layout.setSpacing(8)
 
         self.lbl_in_prompt = QLabel("❯")
-        self.lbl_in_prompt.setStyleSheet("color: #38bdf8; font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 900;")
+        self.lbl_in_prompt.setProperty("class", "hud_val_title")
         in_layout.addWidget(self.lbl_in_prompt)
 
         self.cmd_input = TerminalCommandInput(self)
+        self.cmd_input.setProperty("class", "cyber_input")
         self.cmd_input.setPlaceholderText("Escribe un comando... (ej: git status, ls, btrfs, cargo, help)")
         self.cmd_input.returnPressed.connect(self.execute_current_input)
         in_layout.addWidget(self.cmd_input, 1)
@@ -326,6 +287,9 @@ class CyberTerminal(QFrame):
         in_layout.addWidget(self.btn_run)
 
         self.main_layout.addWidget(self.input_bar)
+
+        # Aplicar estilos reactivos según tema activo
+        self.refresh_theme()
 
         # Aplicar altura normal inicial
         self.setFixedHeight(self.default_height)
@@ -405,44 +369,71 @@ class CyberTerminal(QFrame):
     # -------------------------------------------------------------
     def append_log(self, text: str):
         """Agrega una línea formateada con timestamp al visor."""
+        from core.theme import get_theme_palette
+        p = get_theme_palette()
         now = datetime.now().strftime("%H:%M:%S")
-        formatted = f"<span style='color: #64748b;'>[{now}]</span> <span style='color: #e2e8f0;'>{text}</span>"
+        formatted = f"<span style='color: {p['TEXT_MUTED']};'>[{now}]</span> <span style='color: {p['TERMINAL_TEXT']};'>{text}</span>"
         self.text_display.append(formatted)
         self._scroll_to_bottom()
 
-    def log(self, tag: str, message: str, tag_color: str = "#94a3b8", text_color: str = "#e2e8f0", prefix: str = "◈"):
+    def log(self, tag: str, message: str, tag_color: str = None, text_color: str = None, prefix: str = "◈"):
         """Inserta un registro con etiqueta categorizada y timestamp."""
+        from core.theme import get_theme_palette
+        p = get_theme_palette()
+        t_color = text_color or p["TERMINAL_TEXT"]
+        tg_color = tag_color or p["TERMINAL_PROMPT"]
         now = datetime.now().strftime("%H:%M:%S")
         html = (
             f"<div style='margin-bottom: 2px;'>"
-            f"<span style='color: #475569;'>[{now}]</span> "
-            f"<span style='color: {tag_color}; font-weight: bold;'>{prefix} [{tag}]</span> "
-            f"<span style='color: {text_color};'>{message}</span>"
+            f"<span style='color: {p['TEXT_MUTED']};'>[{now}]</span> "
+            f"<span style='color: {tg_color}; font-weight: bold;'>{prefix} [{tag}]</span> "
+            f"<span style='color: {t_color};'>{message}</span>"
             f"</div>"
         )
         self.text_display.append(html)
         self._scroll_to_bottom()
 
     def log_info(self, tag: str, message: str):
-        self.log(tag, message, tag_color="#94a3b8", text_color="#cbd5e1", prefix="ℹ")
+        from core.theme import get_theme_palette, is_light_theme
+        p = get_theme_palette()
+        color = "#0284c7" if is_light_theme() else "#38bdf8"
+        self.log(tag, message, tag_color=color, text_color=p["TERMINAL_TEXT"], prefix="ℹ")
 
     def log_success(self, tag: str, message: str):
-        self.log(tag, message, tag_color="#e2e8f0", text_color="#f8fafc", prefix="✔")
+        from core.theme import get_theme_palette, is_light_theme
+        p = get_theme_palette()
+        color = "#16a34a" if is_light_theme() else "#34d399"
+        self.log(tag, message, tag_color=color, text_color=p["TERMINAL_TEXT"], prefix="✔")
 
     def log_warn(self, tag: str, message: str):
-        self.log(tag, message, tag_color="#cbd5e1", text_color="#f1f5f9", prefix="⚠")
+        from core.theme import get_theme_palette, is_light_theme
+        p = get_theme_palette()
+        color = "#d97706" if is_light_theme() else "#fbbf24"
+        self.log(tag, message, tag_color=color, text_color=p["TERMINAL_TEXT"], prefix="⚠")
 
     def log_error(self, tag: str, message: str):
-        self.log(tag, message, tag_color="#f87171", text_color="#fca5a5", prefix="✖")
+        from core.theme import get_theme_palette, is_light_theme
+        p = get_theme_palette()
+        color = "#dc2626" if is_light_theme() else "#f87171"
+        self.log(tag, message, tag_color=color, text_color=color, prefix="✖")
 
     def log_git(self, tag: str, message: str):
-        self.log(tag, message, tag_color="#94a3b8", text_color="#e2e8f0", prefix="🌿")
+        from core.theme import get_theme_palette, is_light_theme
+        p = get_theme_palette()
+        color = "#4f46e5" if is_light_theme() else "#818cf8"
+        self.log(tag, message, tag_color=color, text_color=p["TERMINAL_TEXT"], prefix="🌿")
 
     def log_btrfs(self, tag: str, message: str):
-        self.log(tag, message, tag_color="#cbd5e1", text_color="#e2e8f0", prefix="🛡")
+        from core.theme import get_theme_palette, is_light_theme
+        p = get_theme_palette()
+        color = "#0d9488" if is_light_theme() else "#2dd4bf"
+        self.log(tag, message, tag_color=color, text_color=p["TERMINAL_TEXT"], prefix="🛡")
 
     def log_kernel(self, tag: str, message: str):
-        self.log(tag, message, tag_color="#94a3b8", text_color="#e2e8f0", prefix="⚡")
+        from core.theme import get_theme_palette, is_light_theme
+        p = get_theme_palette()
+        color = "#7c3aed" if is_light_theme() else "#c084fc"
+        self.log(tag, message, tag_color=color, text_color=p["TERMINAL_TEXT"], prefix="⚡")
 
     def _scroll_to_bottom(self):
         sb = self.text_display.verticalScrollBar()
@@ -519,13 +510,15 @@ class CyberTerminal(QFrame):
 
         self.command_submitted.emit(cmd)
 
+        from core.theme import get_theme_palette
+        p = get_theme_palette()
         now = datetime.now().strftime("%H:%M:%S")
         prompt_label = self.lbl_prompt.text()
         header_html = (
             f"<div style='margin-top: 6px; margin-bottom: 2px;'>"
-            f"<span style='color: #475569;'>[{now}]</span> "
-            f"<span style='color: #38bdf8; font-weight: bold;'>{html.escape(prompt_label)}</span> "
-            f"<span style='color: #ffffff; font-weight: 700;'>{html.escape(cmd)}</span>"
+            f"<span style='color: {p['TEXT_MUTED']};'>[{now}]</span> "
+            f"<span style='color: {p['TERMINAL_PROMPT']}; font-weight: bold;'>{html.escape(prompt_label)}</span> "
+            f"<span style='color: {p['TERMINAL_TEXT']}; font-weight: 700;'>{html.escape(cmd)}</span>"
             f"</div>"
         )
         self.text_display.append(header_html)
@@ -564,7 +557,7 @@ class CyberTerminal(QFrame):
 
         if first_token in ("help", "--help", "-h") and len(tokens) == 1:
             help_text = (
-                "<div style='color: #cbd5e1; font-family: monospace; font-size: 10.5px; padding: 4px; line-height: 1.4;'>"
+                f"<div style='color: {p['TERMINAL_TEXT']}; font-family: monospace; font-size: 10.5px; padding: 4px; line-height: 1.4;'>"
                 "<b>❖ CYBERTERMINAL // COMANDOS RÁPIDOS & AYUDA:</b><br>"
                 "• <b>clear</b> / <b>cls</b>: Limpiar buffer de la terminal<br>"
                 "• <b>cd &lt;ruta&gt;</b>: Cambiar directorio de trabajo<br>"
@@ -598,8 +591,13 @@ class CyberTerminal(QFrame):
             self._append_formatted_output(data, is_error=True)
 
     def _append_formatted_output(self, raw_text: str, is_error: bool = False):
+        from core.theme import get_theme_palette, is_light_theme
+        p = get_theme_palette()
         formatted = self._ansi_to_html(raw_text)
-        color = "#fca5a5" if is_error else "#cbd5e1"
+        if is_error:
+            color = "#dc2626" if is_light_theme() else "#fca5a5"
+        else:
+            color = p["TERMINAL_TEXT"]
         html_block = f"<div style='color: {color}; white-space: pre-wrap; font-family: monospace; font-size: 11px;'>{formatted}</div>"
         self.text_display.append(html_block)
         self._scroll_to_bottom()
@@ -614,27 +612,72 @@ class CyberTerminal(QFrame):
             self._scroll_to_bottom()
 
     def append_raw_line(self, line: str):
-        html_line = f"<div style='color: #cbd5e1; font-family: monospace; font-size: 11px;'>{html.escape(line)}</div>"
+        from core.theme import get_theme_palette
+        p = get_theme_palette()
+        html_line = f"<div style='color: {p['TERMINAL_TEXT']}; font-family: monospace; font-size: 11px;'>{html.escape(line)}</div>"
         self.text_display.append(html_line)
         self._scroll_to_bottom()
 
+    def refresh_theme(self):
+        """Refresca todos los estilos y componentes internos de la terminal al cambiar de tema."""
+        from core.theme import get_theme_palette
+        p = get_theme_palette()
+
+        self.style().unpolish(self)
+        self.style().polish(self)
+        if hasattr(self, "text_display"):
+            self.text_display.style().unpolish(self.text_display)
+            self.text_display.style().polish(self.text_display)
+        if hasattr(self, "header_bar"):
+            self.header_bar.style().unpolish(self.header_bar)
+            self.header_bar.style().polish(self.header_bar)
+        if hasattr(self, "input_bar"):
+            self.input_bar.style().unpolish(self.input_bar)
+            self.input_bar.style().polish(self.input_bar)
+        if hasattr(self, "lbl_prompt"):
+            self.lbl_prompt.style().unpolish(self.lbl_prompt)
+            self.lbl_prompt.style().polish(self.lbl_prompt)
+        if hasattr(self, "cmd_input") and hasattr(self.cmd_input, "refresh_theme"):
+            self.cmd_input.refresh_theme()
+        if hasattr(self, "btn_run"):
+            self.btn_run.setStyleSheet(f"""
+                QPushButton {{
+                    background: {p["BG_HIGHLIGHT"]};
+                    color: {p["TEXT_BODY"]};
+                    border: 1px solid {p["BORDER_SUBTLE"]};
+                    border-radius: 3px;
+                    font-size: 11px;
+                    font-weight: 700;
+                }}
+                QPushButton:hover {{
+                    background: {p["BG_SURFACE_HOVER"]};
+                    color: {p["TEXT_TITLES"]};
+                    border-color: {p["BORDER_STRONG"]};
+                }}
+            """)
+        if hasattr(self, "handle_pill"):
+            self.handle_pill.set_glow(self.current_state != 0)
+        self.update()
+
     @staticmethod
     def _ansi_to_html(text: str) -> str:
+        from core.theme import is_light_theme
+        light = is_light_theme()
         escaped = html.escape(text)
         ansi_replacements = [
-            (r'\033\[30m', '<span style="color:#64748b;">'),
-            (r'\033\[31m', '<span style="color:#f87171;">'),
-            (r'\033\[32m', '<span style="color:#34d399;">'),
-            (r'\033\[33m', '<span style="color:#fbbf24;">'),
-            (r'\033\[34m', '<span style="color:#60a5fa;">'),
-            (r'\033\[35m', '<span style="color:#c084fc;">'),
-            (r'\033\[36m', '<span style="color:#38bdf8;">'),
-            (r'\033\[37m', '<span style="color:#f1f5f9;">'),
-            (r'\033\[90m', '<span style="color:#94a3b8;">'),
-            (r'\033\[91m', '<span style="color:#fca5a5;">'),
-            (r'\033\[92m', '<span style="color:#6ee7b7;">'),
-            (r'\033\[93m', '<span style="color:#fde047;">'),
-            (r'\033\[94m', '<span style="color:#93c5fd;">'),
+            (r'\033\[30m', '<span style="color:#0f172a;">' if light else '<span style="color:#64748b;">'),
+            (r'\033\[31m', '<span style="color:#dc2626;">' if light else '<span style="color:#f87171;">'),
+            (r'\033\[32m', '<span style="color:#16a34a;">' if light else '<span style="color:#34d399;">'),
+            (r'\033\[33m', '<span style="color:#d97706;">' if light else '<span style="color:#fbbf24;">'),
+            (r'\033\[34m', '<span style="color:#2563eb;">' if light else '<span style="color:#60a5fa;">'),
+            (r'\033\[35m', '<span style="color:#9333ea;">' if light else '<span style="color:#c084fc;">'),
+            (r'\033\[36m', '<span style="color:#0284c7;">' if light else '<span style="color:#38bdf8;">'),
+            (r'\033\[37m', '<span style="color:#334155;">' if light else '<span style="color:#f1f5f9;">'),
+            (r'\033\[90m', '<span style="color:#64748b;">' if light else '<span style="color:#94a3b8;">'),
+            (r'\033\[91m', '<span style="color:#b91c1c;">' if light else '<span style="color:#fca5a5;">'),
+            (r'\033\[92m', '<span style="color:#15803d;">' if light else '<span style="color:#6ee7b7;">'),
+            (r'\033\[93m', '<span style="color:#b45309;">' if light else '<span style="color:#fde047;">'),
+            (r'\033\[94m', '<span style="color:#1d4ed8;">' if light else '<span style="color:#93c5fd;">'),
             (r'\033\[1m', '<b>'),
             (r'\033\[22m', '</b>'),
             (r'\033\[0m', '</span>'),

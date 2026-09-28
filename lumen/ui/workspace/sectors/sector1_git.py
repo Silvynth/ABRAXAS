@@ -3738,3 +3738,14 @@ class Sector1GitView(QWidget):
         if hasattr(self, "reset_view") and hasattr(self.reset_view, "teardown"):
             self.reset_view.teardown()
 
+    def set_theme(self, theme_key: str = None):
+        """Propaga el cambio de tema a la barra de navegación de sub-sectores y sub-vistas."""
+        if hasattr(self, "sub_pill") and hasattr(self.sub_pill, "refresh_theme"):
+            self.sub_pill.refresh_theme()
+        for v in [self.workflow_view, self.branches_view, self.sync_view, self.reset_view]:
+            if v:
+                if hasattr(v, "set_theme"):
+                    v.set_theme(theme_key)
+                elif hasattr(v, "git_graph") and hasattr(v.git_graph, "set_theme"):
+                    v.git_graph.set_theme(theme_key)
+

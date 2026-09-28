@@ -17,6 +17,7 @@ from PySide6.QtGui import QCursor
 
 from lumen.models.project import Project
 from lumen.ui.git_graph_canvas import LumenHorizontalGitGraphView
+from core.theme import MONOCHROME_PALETTE as P, get_theme_palette, is_light_theme
 
 
 class ExpandableCommitCard(QFrame):
@@ -35,17 +36,18 @@ class ExpandableCommitCard(QFrame):
         self.body = body.strip()
         self.is_expanded = False
 
+        p = get_theme_palette()
         self.setObjectName("ExpandableCommitCard")
-        self.setStyleSheet("""
-            QFrame#ExpandableCommitCard {
-                background: rgba(255, 255, 255, 0.02);
-                border: 1px solid rgba(255, 255, 255, 0.05);
+        self.setStyleSheet(f"""
+            QFrame#ExpandableCommitCard {{
+                background: {p['BG_SURFACE']};
+                border: 1px solid {p['BORDER_SUBTLE']};
                 border-radius: 6px;
-            }
-            QFrame#ExpandableCommitCard:hover {
-                background: rgba(255, 255, 255, 0.04);
-                border-color: rgba(255, 255, 255, 0.09);
-            }
+            }}
+            QFrame#ExpandableCommitCard:hover {{
+                background: {p['BG_SURFACE_HOVER']};
+                border-color: {p['BORDER_MEDIUM']};
+            }}
         """)
 
         layout = QVBoxLayout(self)
@@ -58,20 +60,20 @@ class ExpandableCommitCard(QFrame):
         header_row.setSpacing(6)
 
         lbl_h = QLabel(self.c_hash)
-        lbl_h.setStyleSheet("""
+        lbl_h.setStyleSheet(f"""
             font-family: 'JetBrains Mono', monospace;
             font-size: 10px;
             font-weight: 700;
-            color: #38bdf8;
-            background: rgba(56, 189, 248, 0.08);
-            border: 1px solid rgba(56, 189, 248, 0.20);
+            color: {p['GRAPH_HASH']};
+            background: {p['GRAPH_HASH_BG']};
+            border: 1px solid {p['GRAPH_HASH_BORDER']};
             border-radius: 3px;
             padding: 1px 5px;
         """)
         header_row.addWidget(lbl_h)
 
         lbl_s = QLabel(self.subject)
-        lbl_s.setStyleSheet("color: #ffffff; font-size: 10.5px; font-weight: 600;")
+        lbl_s.setStyleSheet(f"color: {p['TEXT_TITLES']}; font-size: 10.5px; font-weight: 600;")
         lbl_s.setWordWrap(True)
         header_row.addWidget(lbl_s, 1)
 
@@ -80,21 +82,21 @@ class ExpandableCommitCard(QFrame):
         self.btn_toggle.setFixedSize(20, 20)
         self.btn_toggle.setCursor(Qt.PointingHandCursor)
         self.btn_toggle.setToolTip("Desplegar commit completo y mensajes detallados")
-        self.btn_toggle.setStyleSheet("""
-            QPushButton {
-                background: rgba(255, 255, 255, 0.05);
-                color: #94a3b8;
-                border: 1px solid rgba(255, 255, 255, 0.08);
+        self.btn_toggle.setStyleSheet(f"""
+            QPushButton {{
+                background: {p['BG_HIGHLIGHT']};
+                color: {p['TEXT_MUTED']};
+                border: 1px solid {p['BORDER_SUBTLE']};
                 border-radius: 3px;
                 font-size: 8px;
                 font-weight: 800;
                 padding: 0px;
-            }
-            QPushButton:hover {
+            }}
+            QPushButton:hover {{
                 background: rgba(56, 189, 248, 0.20);
                 color: #38bdf8;
                 border-color: rgba(56, 189, 248, 0.40);
-            }
+            }}
         """)
         self.btn_toggle.clicked.connect(self.toggle_expanded)
         header_row.addWidget(self.btn_toggle)
@@ -102,15 +104,15 @@ class ExpandableCommitCard(QFrame):
 
         # 2. Metadatos (Autor y Fecha relativa)
         lbl_meta = QLabel(f"👤 {self.author} • 🕒 {self.date_rel}")
-        lbl_meta.setStyleSheet("color: #64748b; font-size: 9px;")
+        lbl_meta.setStyleSheet(f"color: {p['TEXT_MUTED']}; font-size: 9px;")
         layout.addWidget(lbl_meta)
 
         # 3. Contenedor Desplegable con Detalles (Oculto por defecto)
         self.details_container = QFrame()
         self.details_container.setVisible(False)
-        self.details_container.setStyleSheet("""
-            background: rgba(0, 0, 0, 0.40);
-            border: 1px solid rgba(255, 255, 255, 0.06);
+        self.details_container.setStyleSheet(f"""
+            background: {p['BG_INPUT']};
+            border: 1px solid {p['BORDER_SUBTLE']};
             border-radius: 5px;
         """)
         d_layout = QVBoxLayout(self.details_container)
@@ -121,12 +123,12 @@ class ExpandableCommitCard(QFrame):
         sha_box = QHBoxLayout()
         sha_box.setSpacing(6)
         lbl_sha_tag = QLabel("SHA:")
-        lbl_sha_tag.setStyleSheet("color: #64748b; font-size: 8.5px; font-weight: 800; font-family: monospace;")
+        lbl_sha_tag.setStyleSheet(f"color: {p['TEXT_MUTED']}; font-size: 8.5px; font-weight: 800; font-family: monospace;")
         sha_box.addWidget(lbl_sha_tag)
 
         lbl_sha_val = QLabel(self.full_hash)
         lbl_sha_val.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        lbl_sha_val.setStyleSheet("color: #94a3b8; font-family: 'JetBrains Mono', monospace; font-size: 8.5px;")
+        lbl_sha_val.setStyleSheet(f"color: {p['TEXT_BODY']}; font-family: 'JetBrains Mono', monospace; font-size: 8.5px;")
         sha_box.addWidget(lbl_sha_val, 1)
         d_layout.addLayout(sha_box)
 
@@ -139,20 +141,20 @@ class ExpandableCommitCard(QFrame):
             lbl_body_text = QLabel(self.body)
             lbl_body_text.setWordWrap(True)
             lbl_body_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            lbl_body_text.setStyleSheet("""
-                color: #e2e8f0;
+            lbl_body_text.setStyleSheet(f"""
+                color: {p['TEXT_BODY']};
                 font-family: 'JetBrains Mono', 'Inter', monospace;
                 font-size: 9.5px;
                 line-height: 1.4;
-                background: rgba(255, 255, 255, 0.02);
-                border: 1px solid rgba(255, 255, 255, 0.04);
+                background: {p['BG_HIGHLIGHT']};
+                border: 1px solid {p['BORDER_SUBTLE']};
                 border-radius: 4px;
                 padding: 6px 8px;
             """)
             d_layout.addWidget(lbl_body_text)
         else:
             lbl_no_body = QLabel("(Sin cuerpo o descripción adicional en este commit)")
-            lbl_no_body.setStyleSheet("color: #475569; font-size: 9px; font-style: italic;")
+            lbl_no_body.setStyleSheet(f"color: {p['TEXT_MUTED']}; font-size: 9px; font-style: italic;")
             d_layout.addWidget(lbl_no_body)
 
         layout.addWidget(self.details_container)
@@ -235,13 +237,6 @@ class Sector0OverviewView(QWidget):
         # =============================================================
         self.left_card = QFrame()
         self.left_card.setProperty("class", "sector_card")
-        self.left_card.setStyleSheet("""
-            QFrame {
-                background-color: #0c0d10;
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 10px;
-            }
-        """)
         left_layout = QVBoxLayout(self.left_card)
         left_layout.setContentsMargins(14, 12, 14, 12)
         left_layout.setSpacing(8)
@@ -251,15 +246,15 @@ class Sector0OverviewView(QWidget):
         g_header.setSpacing(8)
 
         lbl_g_tag = QLabel("SECTOR 00 // TOPOLOGÍA DE RED")
-        lbl_g_tag.setStyleSheet("color: #64748b; font-size: 9px; font-weight: 800; letter-spacing: 1.5px;")
+        lbl_g_tag.setStyleSheet(f"color: {P['TEXT_MUTED']}; font-size: 9px; font-weight: 800; letter-spacing: 1.5px;")
         
-        lbl_g_title = QLabel("🌿 Grafo de Ramas & Bifurcaciones")
-        lbl_g_title.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: 800; letter-spacing: 0.3px;")
+        self.lbl_g_title = QLabel("🌿 Grafo de Ramas & Bifurcaciones")
+        self.lbl_g_title.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-size: 13px; font-weight: 800; letter-spacing: 0.3px;")
         
         g_title_box = QVBoxLayout()
         g_title_box.setSpacing(2)
         g_title_box.addWidget(lbl_g_tag)
-        g_title_box.addWidget(lbl_g_title)
+        g_title_box.addWidget(self.lbl_g_title)
         g_header.addLayout(g_title_box)
 
         g_header.addStretch()
@@ -312,13 +307,7 @@ class Sector0OverviewView(QWidget):
         # Lienzo del grafo horizontal expandiéndose a toda la altura vertical
         self.git_graph = LumenHorizontalGitGraphView(self.left_card)
         self.git_graph.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.git_graph.setStyleSheet("""
-            QGraphicsView {
-                background-color: #08090b;
-                border: 1px solid rgba(255, 255, 255, 0.05);
-                border-radius: 8px;
-            }
-        """)
+        self.git_graph.setProperty("class", "git_graph_view")
         left_layout.addWidget(self.git_graph, 1)
 
         self.main_splitter.addWidget(self.left_card)
@@ -354,23 +343,16 @@ class Sector0OverviewView(QWidget):
         # Sub-Card 1: Historial de los Commits
         self.commits_card = QFrame()
         self.commits_card.setProperty("class", "sector_card")
-        self.commits_card.setStyleSheet("""
-            QFrame {
-                background-color: #0c0d10;
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 10px;
-            }
-        """)
         c_layout = QVBoxLayout(self.commits_card)
         c_layout.setContentsMargins(12, 10, 12, 10)
         c_layout.setSpacing(6)
 
         lbl_c_tag = QLabel("TIMELINE DE VERSIONES")
-        lbl_c_tag.setStyleSheet("color: #64748b; font-size: 8.5px; font-weight: 800; letter-spacing: 1.2px;")
-        lbl_c_title = QLabel("📜 Historial de Commits")
-        lbl_c_title.setStyleSheet("color: #ffffff; font-size: 12px; font-weight: 800;")
+        lbl_c_tag.setStyleSheet(f"color: {P['TEXT_MUTED']}; font-size: 8.5px; font-weight: 800; letter-spacing: 1.2px;")
+        self.lbl_c_title = QLabel("📜 Historial de Commits")
+        self.lbl_c_title.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-size: 12px; font-weight: 800;")
         c_layout.addWidget(lbl_c_tag)
-        c_layout.addWidget(lbl_c_title)
+        c_layout.addWidget(self.lbl_c_title)
 
         scroll_c = QScrollArea()
         scroll_c.setWidgetResizable(True)
@@ -387,23 +369,16 @@ class Sector0OverviewView(QWidget):
         # Sub-Card 2: Autores del Proyecto
         self.authors_card = QFrame()
         self.authors_card.setProperty("class", "sector_card")
-        self.authors_card.setStyleSheet("""
-            QFrame {
-                background-color: #0c0d10;
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 10px;
-            }
-        """)
         a_layout = QVBoxLayout(self.authors_card)
         a_layout.setContentsMargins(12, 10, 12, 10)
         a_layout.setSpacing(6)
 
         lbl_a_tag = QLabel("CONTRIBUIDORES")
-        lbl_a_tag.setStyleSheet("color: #64748b; font-size: 8.5px; font-weight: 800; letter-spacing: 1.2px;")
-        lbl_a_title = QLabel("👥 Autores del Proyecto")
-        lbl_a_title.setStyleSheet("color: #ffffff; font-size: 12px; font-weight: 800;")
+        lbl_a_tag.setStyleSheet(f"color: {P['TEXT_MUTED']}; font-size: 8.5px; font-weight: 800; letter-spacing: 1.2px;")
+        self.lbl_a_title = QLabel("👥 Autores del Proyecto")
+        self.lbl_a_title.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-size: 12px; font-weight: 800;")
         a_layout.addWidget(lbl_a_tag)
-        a_layout.addWidget(lbl_a_title)
+        a_layout.addWidget(self.lbl_a_title)
 
         scroll_a = QScrollArea()
         scroll_a.setWidgetResizable(True)
@@ -424,13 +399,6 @@ class Sector0OverviewView(QWidget):
         # -------------------------------------------------------------
         self.files_card = QFrame()
         self.files_card.setProperty("class", "sector_card")
-        self.files_card.setStyleSheet("""
-            QFrame {
-                background-color: #0c0d10;
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 10px;
-            }
-        """)
         f_layout = QVBoxLayout(self.files_card)
         f_layout.setContentsMargins(14, 10, 14, 10)
         f_layout.setSpacing(6)
@@ -439,18 +407,18 @@ class Sector0OverviewView(QWidget):
         f_title_box = QVBoxLayout()
         f_title_box.setSpacing(2)
         lbl_f_tag = QLabel("ESTADO DEL WORKSPACE // CAMBIOS ACTIVOS")
-        lbl_f_tag.setStyleSheet("color: #64748b; font-size: 8.5px; font-weight: 800; letter-spacing: 1.2px;")
-        lbl_f_title = QLabel("📂 Archivos Modificados, Añadidos y Eliminados")
-        lbl_f_title.setStyleSheet("color: #ffffff; font-size: 12px; font-weight: 800;")
+        lbl_f_tag.setStyleSheet(f"color: {P['TEXT_MUTED']}; font-size: 8.5px; font-weight: 800; letter-spacing: 1.2px;")
+        self.lbl_f_title = QLabel("📂 Archivos Modificados, Añadidos y Eliminados")
+        self.lbl_f_title.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-size: 12px; font-weight: 800;")
         f_title_box.addWidget(lbl_f_tag)
-        f_title_box.addWidget(lbl_f_title)
+        f_title_box.addWidget(self.lbl_f_title)
         f_header.addLayout(f_title_box)
         f_header.addStretch()
 
         self.lbl_files_summary = QLabel("0 cambios detectados")
-        self.lbl_files_summary.setStyleSheet("""
-            color: #94a3b8; font-size: 10.5px; font-weight: 700;
-            background: rgba(255, 255, 255, 0.04); border-radius: 4px; padding: 2px 8px;
+        self.lbl_files_summary.setStyleSheet(f"""
+            color: {P['TEXT_MUTED']}; font-size: 10.5px; font-weight: 700;
+            background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 4px; padding: 2px 8px;
         """)
         f_header.addWidget(self.lbl_files_summary)
         f_layout.addLayout(f_header)
@@ -462,9 +430,9 @@ class Sector0OverviewView(QWidget):
         # Columna 1: Modificados
         col_mod = QVBoxLayout()
         col_mod.setSpacing(4)
-        lbl_col_m = QLabel("📝 Modificados")
-        lbl_col_m.setStyleSheet("color: #cbd5e1; font-size: 11px; font-weight: 700;")
-        col_mod.addWidget(lbl_col_m)
+        self.lbl_col_m = QLabel("📝 Modificados")
+        self.lbl_col_m.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-size: 11px; font-weight: 700;")
+        col_mod.addWidget(self.lbl_col_m)
 
         scroll_m = QScrollArea()
         scroll_m.setWidgetResizable(True)
@@ -481,9 +449,9 @@ class Sector0OverviewView(QWidget):
         # Columna 2: Añadidos
         col_add = QVBoxLayout()
         col_add.setSpacing(4)
-        lbl_col_a = QLabel("➕ Añadidos")
-        lbl_col_a.setStyleSheet("color: #e2e8f0; font-size: 11px; font-weight: 700;")
-        col_add.addWidget(lbl_col_a)
+        self.lbl_col_a = QLabel("➕ Añadidos")
+        self.lbl_col_a.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-size: 11px; font-weight: 700;")
+        col_add.addWidget(self.lbl_col_a)
 
         scroll_add = QScrollArea()
         scroll_add.setWidgetResizable(True)
@@ -500,9 +468,9 @@ class Sector0OverviewView(QWidget):
         # Columna 3: Eliminados
         col_del = QVBoxLayout()
         col_del.setSpacing(4)
-        lbl_col_d = QLabel("🗑️ Eliminados")
-        lbl_col_d.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 700;")
-        col_del.addWidget(lbl_col_d)
+        self.lbl_col_d = QLabel("🗑️ Eliminados")
+        self.lbl_col_d.setStyleSheet(f"color: {P['TEXT_MUTED']}; font-size: 11px; font-weight: 700;")
+        col_del.addWidget(self.lbl_col_d)
 
         scroll_del = QScrollArea()
         scroll_del.setWidgetResizable(True)
@@ -626,8 +594,8 @@ class Sector0OverviewView(QWidget):
 
         for author_name in authors:
             lbl_item = QLabel(f"•  {author_name}")
-            lbl_item.setStyleSheet("""
-                color: #e2e8f0;
+            lbl_item.setStyleSheet(f"""
+                color: {P['TEXT_TITLES']};
                 font-size: 11px;
                 font-weight: 500;
                 padding: 3px 2px;
@@ -672,17 +640,18 @@ class Sector0OverviewView(QWidget):
         def populate(files: list, target_layout: QVBoxLayout, empty_msg: str):
             if not files:
                 lbl_e = QLabel(empty_msg)
-                lbl_e.setStyleSheet("color: #475569; font-size: 10px; font-style: italic; padding: 2px;")
+                lbl_e.setStyleSheet(f"color: {P['TEXT_MUTED']}; font-size: 10px; font-style: italic; padding: 2px;")
                 target_layout.addWidget(lbl_e)
                 return
             for f in files:
                 lbl_f = QLabel(f)
                 lbl_f.setWordWrap(True)
-                lbl_f.setStyleSheet("""
-                    color: #cbd5e1;
+                lbl_f.setStyleSheet(f"""
+                    color: {P['TEXT_BODY']};
                     font-family: 'JetBrains Mono', monospace;
                     font-size: 10.5px;
-                    background: rgba(255, 255, 255, 0.02);
+                    background: {P['BG_HIGHLIGHT']};
+                    border: 1px solid {P['BORDER_SUBTLE']};
                     border-radius: 3px;
                     padding: 2px 4px;
                 """)
@@ -713,3 +682,30 @@ class Sector0OverviewView(QWidget):
                     self.btn_orient.setText("↕ Vertical")
                 else:
                     self.btn_orient.setText("↔ Horizontal")
+
+    def set_theme(self, theme_key: str = None):
+        """Propaga el cambio de tema reactivo a todos los componentes del Sector 0."""
+        p = get_theme_palette(theme_key)
+        if hasattr(self, "git_graph") and hasattr(self.git_graph, "set_theme"):
+            self.git_graph.set_theme(theme_key)
+
+        if hasattr(self, "lbl_g_title"):
+            self.lbl_g_title.setStyleSheet(f"color: {p['TEXT_TITLES']}; font-size: 13px; font-weight: 800; letter-spacing: 0.3px;")
+        if hasattr(self, "lbl_c_title"):
+            self.lbl_c_title.setStyleSheet(f"color: {p['TEXT_TITLES']}; font-size: 12px; font-weight: 800;")
+        if hasattr(self, "lbl_a_title"):
+            self.lbl_a_title.setStyleSheet(f"color: {p['TEXT_TITLES']}; font-size: 12px; font-weight: 800;")
+        if hasattr(self, "lbl_f_title"):
+            self.lbl_f_title.setStyleSheet(f"color: {p['TEXT_TITLES']}; font-size: 12px; font-weight: 800;")
+        if hasattr(self, "lbl_col_m"):
+            self.lbl_col_m.setStyleSheet(f"color: {p['TEXT_TITLES']}; font-size: 11px; font-weight: 700;")
+        if hasattr(self, "lbl_col_a"):
+            self.lbl_col_a.setStyleSheet(f"color: {p['TEXT_TITLES']}; font-size: 11px; font-weight: 700;")
+        if hasattr(self, "lbl_col_d"):
+            self.lbl_col_d.setStyleSheet(f"color: {p['TEXT_MUTED']}; font-size: 11px; font-weight: 700;")
+
+        # Recargar datos para regenerar tarjetas con la nueva paleta
+        if self.project and self.project.path:
+            self._load_commits(str(self.project.path))
+            self._load_authors(str(self.project.path))
+            self._load_files_status(str(self.project.path))

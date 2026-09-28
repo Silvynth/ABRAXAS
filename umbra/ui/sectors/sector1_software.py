@@ -51,11 +51,11 @@ class CompactPackageRow(QFrame):
         self.lbl_crit.setAlignment(Qt.AlignCenter)
 
         if prio == 1:
-            self.lbl_crit.setStyleSheet(f"color: #ffffff; background: rgba(255, 255, 255, 0.12); border: 1px solid {P['BORDER_STRONG']}; border-radius: 3px; font-size: 8px; font-weight: 800; font-family: 'JetBrains Mono', monospace;")
+            self.lbl_crit.setStyleSheet(f"color: {P['TEXT_TITLES']}; background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_STRONG']}; border-radius: 3px; font-size: 8px; font-weight: 800; font-family: 'JetBrains Mono', monospace;")
         elif prio == 2:
-            self.lbl_crit.setStyleSheet(f"color: #e2e8f0; background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_MEDIUM']}; border-radius: 3px; font-size: 8px; font-weight: 700; font-family: 'JetBrains Mono', monospace;")
+            self.lbl_crit.setStyleSheet(f"color: {P['TEXT_BODY']}; background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_MEDIUM']}; border-radius: 3px; font-size: 8px; font-weight: 700; font-family: 'JetBrains Mono', monospace;")
         elif prio == 5:
-            self.lbl_crit.setStyleSheet(f"color: #9ca3af; background: rgba(255, 255, 255, 0.04); border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 3px; font-size: 8px; font-weight: 700; font-family: 'JetBrains Mono', monospace;")
+            self.lbl_crit.setStyleSheet(f"color: {P['TEXT_MUTED']}; background: {P['BG_INPUT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 3px; font-size: 8px; font-weight: 700; font-family: 'JetBrains Mono', monospace;")
         else:
             self.lbl_crit.setStyleSheet(f"color: {P['TEXT_MUTED']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 3px; font-size: 8px; font-weight: 600; font-family: 'JetBrains Mono', monospace;")
         layout.addWidget(self.lbl_crit)
@@ -69,7 +69,7 @@ class CompactPackageRow(QFrame):
         # 3. Transición de Versión (Expansible)
         self.old_v = self.pkg_data.get("old_version", "")
         self.new_v = self.pkg_data.get("new_version", "")
-        self.lbl_vers = QLabel(f"<span style='color:{P['TEXT_MUTED']};'>{self.old_v}</span> <span style='color:{P['BORDER_MEDIUM']};'>➔</span> <span style='color:#ffffff; font-weight:700;'>{self.new_v}</span>")
+        self.lbl_vers = QLabel(f"<span style='color:{P['TEXT_MUTED']};'>{self.old_v}</span> <span style='color:{P['BORDER_MEDIUM']};'>➔</span> <span style='color:{P['TEXT_TITLES']}; font-weight:700;'>{self.new_v}</span>")
         self.lbl_vers.setStyleSheet("font-size: 10px; font-family: 'JetBrains Mono', monospace;")
         layout.addWidget(self.lbl_vers, 1)
 
@@ -109,6 +109,32 @@ class CompactPackageRow(QFrame):
                 }}
             """)
 
+    def refresh_theme(self):
+        self._apply_style()
+        prio = self.pkg_data.get("priority", 4)
+        if self.status == "completed":
+            self.lbl_crit.setStyleSheet(f"color: {P['TEXT_TITLES']}; background: {P['ACCENT_PILL']}; border: 1px solid {P['BORDER_STRONG']}; border-radius: 3px; font-size: 8px; font-weight: 800; font-family: 'JetBrains Mono', monospace;")
+        elif prio == 1:
+            self.lbl_crit.setStyleSheet(f"color: {P['TEXT_TITLES']}; background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_STRONG']}; border-radius: 3px; font-size: 8px; font-weight: 800; font-family: 'JetBrains Mono', monospace;")
+        elif prio == 2:
+            self.lbl_crit.setStyleSheet(f"color: {P['TEXT_BODY']}; background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_MEDIUM']}; border-radius: 3px; font-size: 8px; font-weight: 700; font-family: 'JetBrains Mono', monospace;")
+        elif prio == 5:
+            self.lbl_crit.setStyleSheet(f"color: {P['TEXT_MUTED']}; background: {P['BG_INPUT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 3px; font-size: 8px; font-weight: 700; font-family: 'JetBrains Mono', monospace;")
+        else:
+            self.lbl_crit.setStyleSheet(f"color: {P['TEXT_MUTED']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 3px; font-size: 8px; font-weight: 600; font-family: 'JetBrains Mono', monospace;")
+
+        self.lbl_name.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-size: 11px; font-weight: 700; font-family: 'JetBrains Mono', monospace;")
+        if self.status == "completed":
+            self.lbl_vers.setText(f"<span style='color:{P['TEXT_MUTED']};'>{self.old_v}</span> <span style='color:{P['TEXT_TITLES']}; font-weight:800;'>✔</span> <span style='color:{P['TEXT_TITLES']}; font-weight:700;'>{self.new_v}</span>")
+        elif self.status == "updating":
+            self.lbl_vers.setText(f"<span style='color:{P['TEXT_TITLES']};'>{self.old_v}</span> <span style='color:{P['TEXT_TITLES']};'>⟳</span> <span style='color:{P['TEXT_TITLES']}; font-weight:700;'>{self.new_v}</span>")
+        else:
+            self.lbl_vers.setText(f"<span style='color:{P['TEXT_MUTED']};'>{self.old_v}</span> <span style='color:{P['BORDER_MEDIUM']};'>➔</span> <span style='color:{P['TEXT_TITLES']}; font-weight:700;'>{self.new_v}</span>")
+        self.lbl_vers.setStyleSheet("font-size: 10px; font-family: 'JetBrains Mono', monospace;")
+        self.lbl_size.setStyleSheet(f"color: {P['TEXT_BODY']}; font-size: 10px; font-family: 'JetBrains Mono', monospace;")
+        self.lbl_date.setStyleSheet(f"color: {P['TEXT_MUTED']}; font-size: 9.5px; font-family: 'JetBrains Mono', monospace;")
+        self.update()
+
     def set_selected(self, selected: bool):
         self.is_selected = selected
         self._apply_style()
@@ -129,7 +155,7 @@ class CompactPackageRow(QFrame):
         """Inicia el barrido progresivo de cristal platino para este paquete."""
         self.status = "updating"
         self._target_progress = 0.95
-        self.lbl_vers.setText(f"<span style='color:{P['TEXT_TITLES']};'>{self.old_v}</span> <span style='color:#ffffff;'>⟳</span> <span style='color:#ffffff; font-weight:700;'>{self.new_v}</span>")
+        self.lbl_vers.setText(f"<span style='color:{P['TEXT_TITLES']};'>{self.old_v}</span> <span style='color:{P['TEXT_TITLES']};'>⟳</span> <span style='color:{P['TEXT_TITLES']}; font-weight:700;'>{self.new_v}</span>")
         if not hasattr(self, "_anim_timer") or self._anim_timer is None:
             self._anim_timer = QTimer(self)
             self._anim_timer.setInterval(25)
@@ -151,8 +177,8 @@ class CompactPackageRow(QFrame):
         self.progress = 1.0
         if hasattr(self, "_anim_timer") and self._anim_timer and self._anim_timer.isActive():
             self._anim_timer.stop()
-        self.lbl_vers.setText(f"<span style='color:{P['TEXT_MUTED']};'>{self.old_v}</span> <span style='color:#ffffff; font-weight:800;'>✔</span> <span style='color:#ffffff; font-weight:700;'>{self.new_v}</span>")
-        self.lbl_crit.setStyleSheet(f"color: #ffffff; background: {P['ACCENT_PILL']}; border: 1px solid {P['BORDER_STRONG']}; border-radius: 3px; font-size: 8px; font-weight: 800; font-family: 'JetBrains Mono', monospace;")
+        self.lbl_vers.setText(f"<span style='color:{P['TEXT_MUTED']};'>{self.old_v}</span> <span style='color:{P['TEXT_TITLES']}; font-weight:800;'>✔</span> <span style='color:{P['TEXT_TITLES']}; font-weight:700;'>{self.new_v}</span>")
+        self.lbl_crit.setStyleSheet(f"color: {P['TEXT_TITLES']}; background: {P['ACCENT_PILL']}; border: 1px solid {P['BORDER_STRONG']}; border-radius: 3px; font-size: 8px; font-weight: 800; font-family: 'JetBrains Mono', monospace;")
         self.update()
 
     def paintEvent(self, event):
@@ -162,19 +188,21 @@ class CompactPackageRow(QFrame):
             painter.setRenderHint(QPainter.Antialiasing)
             w = int(self.width() * self.progress)
             h = self.height()
+            accent_col = QColor(P["TEXT_TITLES"])
+            r, g, b = accent_col.red(), accent_col.green(), accent_col.blue()
 
             if self.status == "completed":
-                painter.fillRect(0, 0, self.width(), h, QColor(255, 255, 255, 14))
-                painter.setPen(QColor(255, 255, 255, 40))
+                painter.fillRect(0, 0, self.width(), h, QColor(r, g, b, 14))
+                painter.setPen(QColor(r, g, b, 40))
                 painter.drawRect(0, 0, self.width() - 1, h - 1)
             else:
                 grad = QLinearGradient(0, 0, w, 0)
-                grad.setColorAt(0.0, QColor(255, 255, 255, 10))
-                grad.setColorAt(0.7, QColor(255, 255, 255, 30))
-                grad.setColorAt(1.0, QColor(255, 255, 255, 65))
+                grad.setColorAt(0.0, QColor(r, g, b, 10))
+                grad.setColorAt(0.7, QColor(r, g, b, 30))
+                grad.setColorAt(1.0, QColor(r, g, b, 65))
                 painter.fillRect(0, 0, w, h, grad)
                 # Haz de luz conductor en el borde de avance
-                painter.fillRect(max(0, w - 2), 0, 2, h, QColor(255, 255, 255, 220))
+                painter.fillRect(max(0, w - 2), 0, 2, h, QColor(r, g, b, 220))
             painter.end()
 
     def mousePressEvent(self, event):
@@ -237,13 +265,13 @@ class PasswordAuthDialog(QDialog):
                 background-color: {P["BG_HIGHLIGHT"]};
                 border: 1px solid {P["BORDER_MEDIUM"]};
                 border-radius: 4px;
-                color: #ffffff;
+                color: {P["TEXT_TITLES"]};
                 font-family: 'JetBrains Mono', monospace;
                 font-size: 12px;
                 padding: 8px 10px;
             }}
             QLineEdit:focus {{
-                border-color: #ffffff;
+                border-color: {P["BORDER_STRONG"]};
             }}
         """)
         self.txt_pass.returnPressed.connect(self._verify_and_accept)
@@ -284,17 +312,18 @@ class PasswordAuthDialog(QDialog):
         btn_ok.setCursor(QCursor(Qt.PointingHandCursor))
         btn_ok.setStyleSheet(f"""
             QPushButton {{
-                background-color: #ffffff;
-                border: 1px solid #ffffff;
+                background-color: {P["BTN_PRIMARY_BG"]};
+                border: 1px solid {P["BTN_PRIMARY_BG"]};
                 border-radius: 4px;
-                color: #0a0b0e;
+                color: {P["BTN_PRIMARY_TEXT"]};
                 font-family: 'JetBrains Mono', monospace;
                 font-size: 9.5px;
                 font-weight: 800;
                 padding: 7px 16px;
             }}
             QPushButton:hover {{
-                background-color: #e2e8f0;
+                background-color: {P["BTN_PRIMARY_HOVER_BG"]};
+                border-color: {P["BTN_PRIMARY_HOVER_BG"]};
             }}
         """)
         btn_ok.clicked.connect(self._verify_and_accept)
@@ -310,8 +339,33 @@ class PasswordAuthDialog(QDialog):
             self.lbl_error.setVisible(True)
             return
 
+        # Verificación segura no destructiva de credenciales con sudo
+        try:
+            import subprocess
+            proc = subprocess.run(
+                ["sudo", "-k", "-S", "-p", "", "-v"],
+                input=f"{pwd}\n",
+                text=True,
+                capture_output=True,
+                timeout=5
+            )
+            if proc.returncode != 0:
+                self.lbl_error.setText("❌ Contraseña incorrecta. Inténtalo de nuevo.")
+                self.lbl_error.setVisible(True)
+                self.txt_pass.clear()
+                self.txt_pass.setFocus()
+                return
+        except Exception:
+            pass
+
         self.password = pwd
+        self.txt_pass.clear()
         self.accept()
+
+    def reject(self):
+        self.password = ""
+        self.txt_pass.clear()
+        super().reject()
 
 
 class CheckUpdatesWorker(QThread):
@@ -444,13 +498,6 @@ class Sector1SoftwareView(QWidget):
         # =============================================================
         col1 = QFrame()
         col1.setProperty("class", "sector_card")
-        col1.setStyleSheet(f"""
-            QFrame {{
-                background-color: {P["BG_SURFACE"]};
-                border: 1px solid {P["BORDER_SUBTLE"]};
-                border-radius: 8px;
-            }}
-        """)
         l1 = QVBoxLayout(col1)
         l1.setContentsMargins(14, 12, 14, 12)
         l1.setSpacing(8)
@@ -494,10 +541,10 @@ class Sector1SoftwareView(QWidget):
         l1.addWidget(self.txt_search)
 
         # Cabecera Fija de Tabla
-        h_table = QFrame()
-        h_table.setFixedHeight(20)
-        h_table.setStyleSheet(f"background: {P['BG_HIGHLIGHT']}; border-radius: 3px;")
-        l_th = QHBoxLayout(h_table)
+        self.h_table = QFrame()
+        self.h_table.setFixedHeight(20)
+        self.h_table.setStyleSheet(f"background: {P['BG_HIGHLIGHT']}; border-radius: 3px;")
+        l_th = QHBoxLayout(self.h_table)
         l_th.setContentsMargins(6, 0, 6, 0)
         l_th.setSpacing(8)
 
@@ -528,7 +575,7 @@ class Sector1SoftwareView(QWidget):
         l_th.addWidget(th_ver, 1)
         l_th.addWidget(th_size)
         l_th.addWidget(th_date)
-        l1.addWidget(h_table)
+        l1.addWidget(self.h_table)
 
         # Lista de Filas Compactas (Scroll Area)
         self.scroll_pkgs = QScrollArea()
@@ -551,13 +598,6 @@ class Sector1SoftwareView(QWidget):
         # =============================================================
         col2 = QFrame()
         col2.setProperty("class", "sector_card")
-        col2.setStyleSheet(f"""
-            QFrame {{
-                background-color: {P["BG_SURFACE"]};
-                border: 1px solid {P["BORDER_SUBTLE"]};
-                border-radius: 8px;
-            }}
-        """)
         l2 = QVBoxLayout(col2)
         l2.setContentsMargins(14, 12, 14, 12)
         l2.setSpacing(12)
@@ -570,9 +610,9 @@ class Sector1SoftwareView(QWidget):
         l2.addWidget(title2)
 
         # Panel de Acciones Tácticas
-        card_actions = QFrame()
-        card_actions.setStyleSheet(f"background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 6px; padding: 10px;")
-        l_act = QVBoxLayout(card_actions)
+        self.card_actions = QFrame()
+        self.card_actions.setStyleSheet(f"QFrame {{ background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 6px; }}")
+        l_act = QVBoxLayout(self.card_actions)
         l_act.setContentsMargins(10, 10, 10, 10)
         l_act.setSpacing(8)
 
@@ -632,12 +672,12 @@ class Sector1SoftwareView(QWidget):
         self.lbl_stats_summary.setStyleSheet(f"color: {P['TEXT_MUTED']}; font-size: 10px; font-family: 'JetBrains Mono', monospace; margin-top: 2px;")
         l_act.addWidget(self.lbl_stats_summary)
 
-        l2.addWidget(card_actions)
+        l2.addWidget(self.card_actions)
 
         # Panel Inspector de Detalle (Nombre, Fecha de update, Peso, Categoría)
-        card_inspector = QFrame()
-        card_inspector.setStyleSheet(f"background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 6px; padding: 12px;")
-        l_insp = QVBoxLayout(card_inspector)
+        self.card_inspector = QFrame()
+        self.card_inspector.setStyleSheet(f"QFrame {{ background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 6px; }}")
+        l_insp = QVBoxLayout(self.card_inspector)
         l_insp.setContentsMargins(12, 10, 12, 10)
         l_insp.setSpacing(10)
 
@@ -690,7 +730,7 @@ class Sector1SoftwareView(QWidget):
         l_insp.addLayout(v_cat)
 
         l_insp.addStretch()
-        l2.addWidget(card_inspector, 1)
+        l2.addWidget(self.card_inspector, 1)
 
         main_layout.addWidget(col2, 2)
 
@@ -900,6 +940,9 @@ class Sector1SoftwareView(QWidget):
         # Iniciar sudo con flag -S para suministrar el password por stdin
         self.update_proc.start("sudo", ["-S", "-p", "", "pacman", "-Syu", "--noconfirm"])
         self.update_proc.write(f"{user_password}\n".encode())
+        # Limpieza de memoria táctica: evitar retención de credenciales
+        user_password = ""
+        auth_dlg.password = ""
 
     def _on_proc_stdout(self):
         if not self.update_proc:
@@ -1035,3 +1078,26 @@ class Sector1SoftwareView(QWidget):
         except Exception:
             pass
         self.action_requested.emit("system_reboot", {})
+
+    def set_theme(self, theme_key: str = None):
+        """Actualiza dinámicamente los estilos y colores del Sector 01 según la paleta activa."""
+        if hasattr(self, "h_table") and self.h_table:
+            self.h_table.setStyleSheet(f"background: {P['BG_HIGHLIGHT']}; border-radius: 3px;")
+        if hasattr(self, "card_actions") and self.card_actions:
+            self.card_actions.setStyleSheet(f"QFrame {{ background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 6px; }}")
+        if hasattr(self, "card_inspector") and self.card_inspector:
+            self.card_inspector.setStyleSheet(f"QFrame {{ background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 6px; }}")
+        if hasattr(self, "lbl_stats_summary") and self.lbl_stats_summary:
+            self.lbl_stats_summary.setStyleSheet(f"color: {P['TEXT_MUTED']}; font-size: 10px; font-family: 'JetBrains Mono', monospace; margin-top: 2px;")
+        if hasattr(self, "val_name") and self.val_name:
+            self.val_name.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-size: 13px; font-weight: 800; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "val_date") and self.val_date:
+            self.val_date.setStyleSheet(f"color: {P['TEXT_BODY']}; font-size: 12px; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "val_size") and self.val_size:
+            self.val_size.setStyleSheet(f"color: {P['TEXT_BODY']}; font-size: 12px; font-weight: 700; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "val_cat") and self.val_cat:
+            self.val_cat.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-size: 11px; font-family: 'JetBrains Mono', monospace;")
+
+        for row in self.rows_map.values():
+            if hasattr(row, "refresh_theme"):
+                row.refresh_theme()

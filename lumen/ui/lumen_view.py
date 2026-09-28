@@ -39,9 +39,19 @@ class LumenView(QWidget):
         self._purge_workspace()
 
         self.workspace_page = LumenWorkspaceView(project)
+        if hasattr(self, "active_theme") and self.active_theme:
+            self.workspace_page.set_theme(self.active_theme)
         self.workspace_page.back_to_selector_requested.connect(self.return_to_selector)
         self.stack.addWidget(self.workspace_page)
         self.stack.setCurrentWidget(self.workspace_page)
+
+    def set_theme(self, theme_key: str):
+        """Aplica el tema al selector y al espacio de trabajo actual si está instanciado."""
+        self.active_theme = theme_key
+        if hasattr(self, "selector_page") and self.selector_page and hasattr(self.selector_page, "set_theme"):
+            self.selector_page.set_theme(theme_key)
+        if self.workspace_page and hasattr(self.workspace_page, "set_theme"):
+            self.workspace_page.set_theme(theme_key)
 
     def return_to_selector(self):
         """Regresa a la cuadrícula de proyectos finalizando todos los procesos y liberando memoria."""

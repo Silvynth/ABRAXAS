@@ -101,7 +101,7 @@ def launch_project_in_editor(editor_bin: str, project_path: str) -> Tuple[bool, 
                 elif term_bin == "gnome-terminal":
                     subprocess.Popen([term_bin, "--", bin_path, project_path], cwd=project_path, start_new_session=True)
                 elif term_bin == "konsole":
-                    subprocess.Popen([term_bin, "-e", f"{bin_path} {project_path}"], cwd=project_path, start_new_session=True)
+                    subprocess.Popen([term_bin, "-e", bin_path, project_path], cwd=project_path, start_new_session=True)
                 else:
                     subprocess.Popen([term_bin, "-e", bin_path, project_path], cwd=project_path, start_new_session=True)
                 return True, f"Abierto con {editor_bin} en terminal {term_bin}."
@@ -725,9 +725,11 @@ def kill_process_by_pid(pid: str) -> Tuple[bool, str]:
         return False, "PID no válido para terminar."
     try:
         target_pid = int(pid)
-        # Evitar matar init o root de forma accidental
+        # Evitar matar init o root de forma accidental, o el propio proceso de ABRAXAS
         if target_pid <= 1:
             return False, "Prohibido aniquilar proceso de sistema fundamental (PID <= 1)."
+        if target_pid == os.getpid():
+            return False, "Prohibido aniquilar el proceso de la propia aplicación ABRAXAS."
 
         import signal
         os.kill(target_pid, signal.SIGKILL)

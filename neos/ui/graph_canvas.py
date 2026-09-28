@@ -15,6 +15,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtCore import Qt, QPointF, QRectF
 
+from core.theme import MONOCHROME_PALETTE as P, get_theme_palette, is_light_theme
+
 # Paletas de carriles según el tema activo (Sincronización con Primario, Secundario o Monocromo)
 MONOCHROME_LANE_COLORS = [
     QColor("#ffffff"),  # Blanco puro (Root / Nivel 0)
@@ -27,23 +29,12 @@ MONOCHROME_LANE_COLORS = [
     QColor("#78716c"),  # Piedra
 ]
 
-def get_theme_lane_colors(theme_key="monochrome"):
+def get_theme_lane_colors(theme_key="oscuro"):
     """Resuelve la paleta de colores para los carriles del grafo sincronizada con el tema."""
-    if theme_key == "monochrome":
-        return MONOCHROME_LANE_COLORS
     try:
-        from core.theme import get_system_theme_palette, THEMES
-        pal = get_system_theme_palette() or THEMES.get(theme_key, THEMES.get("noctalia", {}))
-        return [
-            QColor(pal.get("ACCENT", "#6366f1")),
-            QColor(pal.get("CYAN", "#06b6d4")),
-            QColor(pal.get("SUCCESS", "#10b981")),
-            QColor(pal.get("WARNING", "#f59e0b")),
-            QColor(pal.get("ACCENT_HOVER", "#4f46e5")),
-            QColor(pal.get("ACCENT_LIGHT", "#e0e7ff")),
-            QColor(pal.get("TEXT_PRIMARY", "#ffffff")),
-            QColor(pal.get("TEXT_SECONDARY", "#9ca3af")),
-        ]
+        from core.theme import get_theme_lane_colors as _gtlc
+        raw = _gtlc(theme_key)
+        return [QColor(c) for c in raw]
     except Exception:
         return MONOCHROME_LANE_COLORS
 
@@ -291,7 +282,7 @@ class ProjectGraphCanvas(QGraphicsView):
         self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.setStyleSheet("background-color: #0a0b0e; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px;")
+        self.setStyleSheet(f"background-color: {P['GRAPH_CANVAS_BG']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 8px;")
 
         self.current_path = ""
         self.depth_level = 2
@@ -308,9 +299,13 @@ class ProjectGraphCanvas(QGraphicsView):
     def set_theme(self, theme_key="monochrome"):
         """Actualiza la paleta de colores del grafo según el tema."""
         self.theme_key = theme_key
+        p = get_theme_palette(theme_key)
+        self.setStyleSheet(f"background-color: {p['GRAPH_CANVAS_BG']}; border: 1px solid {p['BORDER_SUBTLE']}; border-radius: 8px;")
         self.lane_colors = get_theme_lane_colors(theme_key)
         if self.current_path:
             self.build_graph_from_directory(self.current_path, depth=self.depth_level)
+        else:
+            self.viewport().update()
 
     def toggle_orientation(self) -> str:
         """Alterna entre orientación 'horizontal' (izq a der) y 'vertical' (arriba a abajo)."""
@@ -322,10 +317,14 @@ class ProjectGraphCanvas(QGraphicsView):
     def drawBackground(self, painter, rect):
         """Fondo con líneas fijas de cuadrícula y carriles de alineación."""
         super().drawBackground(painter, rect)
-        painter.fillRect(rect, QColor("#0a0b0e"))
+        theme = getattr(self, "theme_key", None)
+        p = get_theme_palette(theme)
+        painter.fillRect(rect, QColor(p["GRAPH_CANVAS_BG"]))
 
         # Líneas de cuadrícula horizontal
-        pen_line = QPen(QColor(255, 255, 255, 7), 1, Qt.DashLine)
+        is_light = is_light_theme(theme)
+        line_color = QColor(15, 23, 42, 20) if is_light else QColor(255, 255, 255, 7)
+        pen_line = QPen(line_color, 1, Qt.DashLine)
         painter.setPen(pen_line)
         y_step = 48
         start_y = int(rect.top()) - (int(rect.top()) % y_step)
@@ -335,7 +334,8 @@ class ProjectGraphCanvas(QGraphicsView):
             curr_y += y_step
 
         # Cuadrícula de puntos ortogonales
-        pen_dot = QPen(QColor(255, 255, 255, 18), 1.2)
+        dot_color = QColor(15, 23, 42, 35) if is_light else QColor(255, 255, 255, 18)
+        pen_dot = QPen(dot_color, 1.2)
         painter.setPen(pen_dot)
         grid_size = 24
         left = int(rect.left()) - (int(rect.left()) % grid_size)

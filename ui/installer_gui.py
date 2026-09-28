@@ -507,6 +507,11 @@ class AbraxasInstallerGUI(QWidget):
         self.btn_next.setCursor(Qt.PointingHandCursor)
         self.btn_next.clicked.connect(self.next_page)
 
+        self.lbl_bot_ver = QLabel(f"v{self.app_version}")
+        self.lbl_bot_ver.setProperty("class", "version_tag")
+        self.lbl_bot_ver.setAlignment(Qt.AlignCenter)
+
+        self.nav_layout.addWidget(self.lbl_bot_ver)
         self.nav_layout.addWidget(self.btn_back)
         self.nav_layout.addStretch()
         self.nav_layout.addWidget(self.btn_next)

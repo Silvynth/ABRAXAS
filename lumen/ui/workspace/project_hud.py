@@ -23,27 +23,43 @@ from core.umbra_backend import UmbraHardwareCollector
 class TelemetryFilamentBar(QProgressBar):
     """Barra filamento de precisión (4px) con animación fluida analógica."""
     
-    def __init__(self, color_start: str = "#64748b", color_end: str = "#cbd5e1", parent=None):
+    def __init__(self, color_start: str = None, color_end: str = None, parent=None):
         super().__init__(parent)
         self.setTextVisible(False)
         self.setFixedHeight(4)
         self.setRange(0, 100)
         self.setValue(0)
-        self.setStyleSheet(f"""
-            QProgressBar {{
-                background-color: rgba(255, 255, 255, 0.06);
-                border: none;
-                border-radius: 2px;
-            }}
-            QProgressBar::chunk {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {color_start}, stop:1 {color_end});
-                border-radius: 2px;
-            }}
-        """)
+        self.setProperty("class", "filament_bar")
+        
+        self.color_start = color_start
+        self.color_end = color_end
+
         self._anim = QVariantAnimation(self)
         self._anim.setDuration(400)
         self._anim.setEasingCurve(QEasingCurve.OutCubic)
         self._anim.valueChanged.connect(self._apply_val)
+        self.refresh_theme(color_start, color_end)
+
+    def refresh_theme(self, color_start: str = None, color_end: str = None):
+        c_start = color_start or self.color_start
+        c_end = color_end or self.color_end
+        if c_start or c_end:
+            from core.theme import get_theme_palette
+            p = get_theme_palette()
+            bg_col = p.get("PROGRESS_BG", "rgba(255, 255, 255, 0.06)")
+            self.setStyleSheet(f"""
+                QProgressBar {{
+                    background-color: {bg_col};
+                    border: none;
+                    border-radius: 2px;
+                }}
+                QProgressBar::chunk {{
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {c_start}, stop:1 {c_end});
+                    border-radius: 2px;
+                }}
+            """)
+        else:
+            self.setStyleSheet("")
 
     def _apply_val(self, val):
         super().setValue(int(val))
@@ -174,25 +190,25 @@ class ProjectHud(QFrame):
         row1.setSpacing(6)
 
         lbl_p_tag = QLabel("📁 Proyecto:")
-        lbl_p_tag.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 12px;")
+        lbl_p_tag.setProperty("class", "hud_tag")
         self.lbl_proj_title = QLabel("Cargando...")
-        self.lbl_proj_title.setStyleSheet("color: #ffffff; font-weight: 800; font-size: 13px;")
+        self.lbl_proj_title.setProperty("class", "hud_val_title")
 
         sep1 = QLabel(" | ")
-        sep1.setStyleSheet("color: #475569; font-weight: 700;")
+        sep1.setProperty("class", "hud_sep")
 
         lbl_b_tag = QLabel("🌿 Rama:")
-        lbl_b_tag.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 12px;")
+        lbl_b_tag.setProperty("class", "hud_tag")
         self.lbl_proj_branch = QLabel("main")
-        self.lbl_proj_branch.setStyleSheet("color: #e2e8f0; font-weight: 800; font-size: 12px;")
+        self.lbl_proj_branch.setProperty("class", "hud_val_title")
 
         sep2 = QLabel(" | ")
-        sep2.setStyleSheet("color: #475569; font-weight: 700;")
+        sep2.setProperty("class", "hud_sep")
 
         lbl_r_tag = QLabel("🌐 Remoto:")
-        lbl_r_tag.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 12px;")
+        lbl_r_tag.setProperty("class", "hud_tag")
         self.lbl_proj_remote = QLabel("Local")
-        self.lbl_proj_remote.setStyleSheet("color: #cbd5e1; font-weight: 700; font-size: 12px;")
+        self.lbl_proj_remote.setProperty("class", "hud_val_title")
 
         row1.addWidget(lbl_p_tag)
         row1.addWidget(self.lbl_proj_title)
@@ -210,27 +226,25 @@ class ProjectHud(QFrame):
         row2.setSpacing(6)
 
         lbl_e_tag = QLabel("⚡ Entorno:")
-        lbl_e_tag.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 12px;")
+        lbl_e_tag.setProperty("class", "hud_tag")
         self.lbl_env_status = QLabel("Sin Entorno")
-        self.lbl_env_status.setStyleSheet("color: #e2e8f0; font-weight: 800; font-size: 12px;")
+        self.lbl_env_status.setProperty("class", "hud_val_title")
 
         sep3 = QLabel(" | ")
-        sep3.setStyleSheet("color: #475569; font-weight: 700;")
+        sep3.setProperty("class", "hud_sep")
 
         lbl_d_tag = QLabel("🐳 Contenedores Docker:")
-        lbl_d_tag.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 12px;")
+        lbl_d_tag.setProperty("class", "hud_tag")
         self.lbl_docker_status = QLabel("0 activos")
-        self.lbl_docker_status.setStyleSheet("color: #cbd5e1; font-weight: 700; font-size: 12px;")
+        self.lbl_docker_status.setProperty("class", "hud_val_title")
 
         sep4 = QLabel(" | ")
-        sep4.setStyleSheet("color: #475569; font-weight: 700;")
+        sep4.setProperty("class", "hud_sep")
 
         lbl_h_tag = QLabel("🕒 Hora:")
-        lbl_h_tag.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 12px;")
+        lbl_h_tag.setProperty("class", "hud_tag")
         self.lbl_current_time = QLabel("--:--:--")
-        self.lbl_current_time.setStyleSheet(
-            "font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #ffffff; font-size: 12px;"
-        )
+        self.lbl_current_time.setProperty("class", "hud_val_title")
 
         row2.addWidget(lbl_e_tag)
         row2.addWidget(self.lbl_env_status)
@@ -248,28 +262,28 @@ class ProjectHud(QFrame):
         row3.setSpacing(6)
 
         lbl_hud_title = QLabel("📊 Git HUD: | ")
-        lbl_hud_title.setStyleSheet("color: #64748b; font-weight: 800; font-size: 12px;")
+        lbl_hud_title.setProperty("class", "hud_tag")
 
         lbl_m_tag = QLabel("📝 Git Mod:")
-        lbl_m_tag.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 12px;")
+        lbl_m_tag.setProperty("class", "hud_tag")
         self.lbl_git_mod = QLabel("0 modificados")
-        self.lbl_git_mod.setStyleSheet("color: #e2e8f0; font-weight: 700; font-size: 12px;")
+        self.lbl_git_mod.setProperty("class", "hud_val_title")
 
         sep5 = QLabel(" | ")
-        sep5.setStyleSheet("color: #475569; font-weight: 700;")
+        sep5.setProperty("class", "hud_sep")
 
         lbl_u_tag = QLabel("❓ Untracked:")
-        lbl_u_tag.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 12px;")
+        lbl_u_tag.setProperty("class", "hud_tag")
         self.lbl_git_untracked = QLabel("0 no rastreados")
-        self.lbl_git_untracked.setStyleSheet("color: #cbd5e1; font-weight: 700; font-size: 12px;")
+        self.lbl_git_untracked.setProperty("class", "hud_val_title")
 
         sep6 = QLabel(" | ")
-        sep6.setStyleSheet("color: #475569; font-weight: 700;")
+        sep6.setProperty("class", "hud_sep")
 
         lbl_del_tag = QLabel("🗑️ Deleted:")
-        lbl_del_tag.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 12px;")
+        lbl_del_tag.setProperty("class", "hud_tag")
         self.lbl_git_deleted = QLabel("0")
-        self.lbl_git_deleted.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 12px;")
+        self.lbl_git_deleted.setProperty("class", "hud_val_title")
 
         row3.addWidget(lbl_hud_title)
         row3.addWidget(lbl_m_tag)
@@ -314,21 +328,21 @@ class ProjectHud(QFrame):
         cpu_box.setSpacing(2)
 
         self.lbl_cpu_head = QLabel("⚡ PROCESADOR (CPU)")
-        self.lbl_cpu_head.setStyleSheet("color: #94a3b8; font-size: 9.5px; font-weight: 800; letter-spacing: 1px;")
+        self.lbl_cpu_head.setProperty("class", "hud_tag")
         cpu_box.addWidget(self.lbl_cpu_head)
 
         cpu_val_row = QHBoxLayout()
         self.lbl_cpu_usage = QLabel("0%")
-        self.lbl_cpu_usage.setStyleSheet("color: #ffffff; font-weight: 800; font-size: 12.5px; font-family: 'JetBrains Mono', monospace;")
+        self.lbl_cpu_usage.setProperty("class", "hud_val_title")
         self.lbl_cpu_temp = QLabel("🌡 0°C")
-        self.lbl_cpu_temp.setStyleSheet("color: #cbd5e1; font-weight: 700; font-size: 11px;")
+        self.lbl_cpu_temp.setProperty("class", "hud_sub")
         cpu_val_row.addWidget(self.lbl_cpu_usage)
         cpu_val_row.addStretch()
         cpu_val_row.addWidget(self.lbl_cpu_temp)
         cpu_box.addLayout(cpu_val_row)
 
-        self.bar_cpu_usage = TelemetryFilamentBar(color_start="#64748b", color_end="#e2e8f0")
-        self.bar_cpu_temp = TelemetryFilamentBar(color_start="#475569", color_end="#94a3b8")
+        self.bar_cpu_usage = TelemetryFilamentBar()
+        self.bar_cpu_temp = TelemetryFilamentBar()
         cpu_box.addWidget(self.bar_cpu_usage)
         cpu_box.addWidget(self.bar_cpu_temp)
         grid.addLayout(cpu_box, 0, 0)
@@ -340,21 +354,21 @@ class ProjectHud(QFrame):
         gpu_box.setSpacing(2)
 
         self.lbl_gpu_head = QLabel("🎮 GRÁFICA (GPU)")
-        self.lbl_gpu_head.setStyleSheet("color: #94a3b8; font-size: 9.5px; font-weight: 800; letter-spacing: 1px;")
+        self.lbl_gpu_head.setProperty("class", "hud_tag")
         gpu_box.addWidget(self.lbl_gpu_head)
 
         gpu_val_row = QHBoxLayout()
         self.lbl_gpu_usage = QLabel("0%")
-        self.lbl_gpu_usage.setStyleSheet("color: #ffffff; font-weight: 800; font-size: 12.5px; font-family: 'JetBrains Mono', monospace;")
+        self.lbl_gpu_usage.setProperty("class", "hud_val_title")
         self.lbl_gpu_temp = QLabel("🌡 0°C")
-        self.lbl_gpu_temp.setStyleSheet("color: #cbd5e1; font-weight: 700; font-size: 11px;")
+        self.lbl_gpu_temp.setProperty("class", "hud_sub")
         gpu_val_row.addWidget(self.lbl_gpu_usage)
         gpu_val_row.addStretch()
         gpu_val_row.addWidget(self.lbl_gpu_temp)
         gpu_box.addLayout(gpu_val_row)
 
-        self.bar_gpu_usage = TelemetryFilamentBar(color_start="#64748b", color_end="#e2e8f0")
-        self.bar_gpu_temp = TelemetryFilamentBar(color_start="#475569", color_end="#94a3b8")
+        self.bar_gpu_usage = TelemetryFilamentBar()
+        self.bar_gpu_temp = TelemetryFilamentBar()
         gpu_box.addWidget(self.bar_gpu_usage)
         gpu_box.addWidget(self.bar_gpu_temp)
         grid.addLayout(gpu_box, 0, 1)
@@ -366,20 +380,20 @@ class ProjectHud(QFrame):
         ram_box.setSpacing(2)
 
         self.lbl_ram_head = QLabel("💾 MEMORIA RAM")
-        self.lbl_ram_head.setStyleSheet("color: #94a3b8; font-size: 9.5px; font-weight: 800; letter-spacing: 1px;")
+        self.lbl_ram_head.setProperty("class", "hud_tag")
         ram_box.addWidget(self.lbl_ram_head)
 
         ram_val_row = QHBoxLayout()
         self.lbl_ram_usage = QLabel("0%")
-        self.lbl_ram_usage.setStyleSheet("color: #ffffff; font-weight: 800; font-size: 12.5px; font-family: 'JetBrains Mono', monospace;")
+        self.lbl_ram_usage.setProperty("class", "hud_val_title")
         self.lbl_ram_detail = QLabel("0.0 / 0.0 GB")
-        self.lbl_ram_detail.setStyleSheet("color: #cbd5e1; font-weight: 600; font-size: 10.5px;")
+        self.lbl_ram_detail.setProperty("class", "hud_sub")
         ram_val_row.addWidget(self.lbl_ram_usage)
         ram_val_row.addStretch()
         ram_val_row.addWidget(self.lbl_ram_detail)
         ram_box.addLayout(ram_val_row)
 
-        self.bar_ram_usage = TelemetryFilamentBar(color_start="#475569", color_end="#cbd5e1")
+        self.bar_ram_usage = TelemetryFilamentBar()
         ram_box.addWidget(self.bar_ram_usage)
         grid.addLayout(ram_box, 1, 0)
 
@@ -390,20 +404,20 @@ class ProjectHud(QFrame):
         net_box.setSpacing(2)
 
         self.lbl_net_head = QLabel("🌐 ENLACE DE RED")
-        self.lbl_net_head.setStyleSheet("color: #94a3b8; font-size: 9.5px; font-weight: 800; letter-spacing: 1px;")
+        self.lbl_net_head.setProperty("class", "hud_tag")
         net_box.addWidget(self.lbl_net_head)
 
         net_val_row = QHBoxLayout()
         self.lbl_net_speed = QLabel("↓ 0 MB/s  ↑ 0 MB/s")
-        self.lbl_net_speed.setStyleSheet("color: #ffffff; font-weight: 700; font-size: 11px; font-family: 'JetBrains Mono', monospace;")
+        self.lbl_net_speed.setProperty("class", "hud_val_title")
         self.lbl_net_ping = QLabel("● 0 ms")
-        self.lbl_net_ping.setStyleSheet("color: #94a3b8; font-weight: 600; font-size: 10.5px;")
+        self.lbl_net_ping.setProperty("class", "hud_sub")
         net_val_row.addWidget(self.lbl_net_speed)
         net_val_row.addStretch()
         net_val_row.addWidget(self.lbl_net_ping)
         net_box.addLayout(net_val_row)
 
-        self.bar_net_usage = TelemetryFilamentBar(color_start="#334155", color_end="#94a3b8")
+        self.bar_net_usage = TelemetryFilamentBar()
         net_box.addWidget(self.bar_net_usage)
         grid.addLayout(net_box, 1, 1)
 
@@ -524,6 +538,20 @@ class ProjectHud(QFrame):
         if self.project:
             self.update_project(self.project)
         self.refresh_requested.emit()
+
+    def set_theme(self, theme_key: str = None):
+        """Actualiza reactivamente las barras de filamento de telemetría."""
+        bars = [
+            getattr(self, "bar_cpu_usage", None),
+            getattr(self, "bar_cpu_temp", None),
+            getattr(self, "bar_gpu_usage", None),
+            getattr(self, "bar_gpu_temp", None),
+            getattr(self, "bar_ram_usage", None),
+            getattr(self, "bar_net_usage", None)
+        ]
+        for bar in bars:
+            if bar and hasattr(bar, "refresh_theme"):
+                bar.refresh_theme()
 
     def teardown(self):
         """Detiene de forma limpia el worker de hardware y temporizadores."""

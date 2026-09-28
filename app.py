@@ -5,6 +5,7 @@
 
 import sys
 import os
+import gc
 from pathlib import Path
 
 # Resolver la raíz monolítica del repositorio Abraxas
@@ -17,12 +18,12 @@ from PySide6.QtWidgets import (
     QPushButton, QStackedWidget, QFrame, QScrollArea, QGridLayout
 )
 from PySide6.QtGui import QIcon
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 
 from core import get_version
 from core.paths import get_assets_dir, get_active_config_path
 from core.config import load_config
-from core.theme import generate_monochrome_stylesheet
+from core.theme import generate_theme_stylesheet, generate_monochrome_stylesheet
 from neos.ui import ProjectsView, ConfigView
 from umbra import UmbraView
 from lumen.ui.lumen_view import LumenView
@@ -36,7 +37,8 @@ class NeosShellWindow(QWidget):
         self.cfg = load_config()
         self.app_version = get_version()
         
-        self.setWindowTitle(f"ABRAXAS 2.0 | Neos Shell (v{self.app_version}) [Monochrome Mode]")
+        active_theme = getattr(self.cfg.abraxas, "theme", "oscuro") if hasattr(self.cfg, "abraxas") else "oscuro"
+        self.setWindowTitle(f"ABRAXAS 2.0 | Neos Shell (v{self.app_version})")
         self.setMinimumSize(1000, 680)
 
         # Icono de la ventana
@@ -44,8 +46,8 @@ class NeosShellWindow(QWidget):
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 
-        # Aplicar diseño puramente monocromático (Haute Horlogerie / Cero distracciones)
-        self.setStyleSheet(generate_monochrome_stylesheet())
+        # Aplicar diseño con el tema visual configurado
+        self.setStyleSheet(generate_theme_stylesheet(active_theme))
 
         self.init_ui()
         self.center_window()
@@ -119,9 +121,10 @@ class NeosShellWindow(QWidget):
 
         sb_layout.addStretch()
 
-        # Badge de arquitectura
-        lbl_badge = QLabel(f"v{self.app_version} (Modular)")
+        # Badge de versión en la esquina inferior
+        lbl_badge = QLabel(f"v{self.app_version}")
         lbl_badge.setProperty("class", "version_badge")
+        lbl_badge.setAlignment(Qt.AlignCenter)
         sb_layout.addWidget(lbl_badge)
 
         root_layout.addWidget(sidebar)
@@ -162,17 +165,21 @@ class NeosShellWindow(QWidget):
         # Instanciar en caliente bajo demanda para velocidad cero fricción al inicio
         if index == 1 and self.page_lumen is None:
             self.page_lumen = LumenView(self.cfg)
+            active_t = getattr(self.cfg.abraxas, "theme", "oscuro") if hasattr(self.cfg, "abraxas") else "oscuro"
+            self.page_lumen.set_theme(active_t)
             self.stacked.removeWidget(self.placeholder_lumen)
             self.placeholder_lumen.deleteLater()
             self.stacked.insertWidget(1, self.page_lumen)
         elif index == 2 and self.page_proyectos is None:
             self.page_proyectos = ProjectsView(str(get_active_config_path()))
-            self.page_proyectos.set_theme("monochrome")
+            active_t = getattr(self.cfg.abraxas, "theme", "oscuro") if hasattr(self.cfg, "abraxas") else "oscuro"
+            self.page_proyectos.set_theme(active_t)
             self.stacked.removeWidget(self.placeholder_proyectos)
             self.placeholder_proyectos.deleteLater()
             self.stacked.insertWidget(2, self.page_proyectos)
         elif index == 3 and self.page_config is None:
             self.page_config = ConfigView(str(get_active_config_path()))
+            self.page_config.theme_changed.connect(self._on_theme_changed)
             self.page_config.config_saved.connect(self._on_config_saved)
             self.stacked.removeWidget(self.placeholder_config)
             self.placeholder_config.deleteLater()
@@ -181,16 +188,51 @@ class NeosShellWindow(QWidget):
         self.stacked.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
+
+        # Optimización de Telemetría: Atenuar sondeo en segundo plano cuando Umbra no está visible
+        if hasattr(self, "page_umbra") and self.page_umbra and hasattr(self.page_umbra, "set_active_view"):
+            self.page_umbra.set_active_view(index == 0)
+
         if index == 1 and hasattr(self, "page_lumen") and self.page_lumen:
             self.page_lumen.reload()
         elif index == 2 and hasattr(self, "page_proyectos") and self.page_proyectos:
             self.page_proyectos.load_projects()
 
+        # Recolección de basura ligera tras cambio de vista
+        gc.collect()
+
+    def _on_theme_changed(self, theme_key: str):
+        """Aplica el tema seleccionado de forma reactiva en toda la aplicación."""
+        self.setStyleSheet(generate_theme_stylesheet(theme_key))
+        if hasattr(self, "page_lumen") and self.page_lumen and hasattr(self.page_lumen, "set_theme"):
+            self.page_lumen.set_theme(theme_key)
+        if hasattr(self, "page_proyectos") and self.page_proyectos and hasattr(self.page_proyectos, "set_theme"):
+            self.page_proyectos.set_theme(theme_key)
+        if hasattr(self, "page_umbra") and self.page_umbra and hasattr(self.page_umbra, "set_theme"):
+            self.page_umbra.set_theme(theme_key)
+
+        gc.collect()
+
     def _on_config_saved(self, new_cfg_dict=None):
-        """Callback ejecutado al guardar config.toml desde la pestaña de configuración maestro."""
-        self.cfg = load_config()
-        if hasattr(self, "page_lumen") and self.page_lumen:
-            self.page_lumen.cfg = self.cfg
+        """
+        Regla Maestra: Cada vez que se guarde la configuración, ABRAXAS (abx)
+        debe tratarse como un reset completo de la aplicación.
+        Detiene ordenadamente hilos de telemetría, watchers y relanza el proceso.
+        """
+        QTimer.singleShot(250, self.restart_application)
+
+    def restart_application(self):
+        """Ejecuta el reinicio completo de ABRAXAS (reset limpio de proceso)."""
+        try:
+            self.close()
+        except Exception:
+            pass
+        QApplication.processEvents()
+
+        python = sys.executable
+        app_script = os.path.abspath(sys.argv[0])
+        args = [python, app_script] + sys.argv[1:]
+        os.execv(python, args)
 
     def _build_umbra_preview(self) -> QWidget:
         """Página preliminar del dominio UMBRA."""
@@ -305,7 +347,10 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("ABRAXAS 2.0")
     app.setApplicationDisplayName("ABRAXAS 2.0 (Preview)")
-    app.setStyleSheet(generate_monochrome_stylesheet())
+
+    cfg = load_config()
+    active_theme = getattr(cfg.abraxas, "theme", "oscuro") if hasattr(cfg, "abraxas") else "oscuro"
+    app.setStyleSheet(generate_theme_stylesheet(active_theme))
     
     icon_path = get_assets_dir() / "abraxas_icon.svg"
     if icon_path.exists():

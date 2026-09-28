@@ -99,17 +99,12 @@ class SnapshotTimelineRow(QFrame):
         layout.addWidget(self.lbl_id)
 
         # 3. Tipo de Snapshot (PRE / POST / SINGLE)
+        self.snap_type = snap_type
         stype = snap_type.upper()
         self.lbl_type = QLabel(stype)
         self.lbl_type.setFixedWidth(44)
         self.lbl_type.setAlignment(Qt.AlignCenter)
-        if stype == "PRE":
-            t_style = f"color: #e2e8f0; border: 1px solid {P['BORDER_MEDIUM']}; background: rgba(255, 255, 255, 0.05);"
-        elif stype == "POST":
-            t_style = f"color: #9ca3af; border: 1px solid {P['BORDER_SUBTLE']}; background: transparent;"
-        else:
-            t_style = f"color: #ffffff; border: 1px solid {P['BORDER_STRONG']}; background: {P['ACCENT_PILL']}; font-weight: 800;"
-        self.lbl_type.setStyleSheet(f"{t_style} font-family: 'JetBrains Mono', monospace; font-size: 8px; border-radius: 3px; padding: 1px 3px;")
+        self._apply_type_style()
         layout.addWidget(self.lbl_type)
 
         # 4. Descripción
@@ -191,6 +186,74 @@ class SnapshotTimelineRow(QFrame):
                 border: 1px solid {P["BORDER_SUBTLE"]};
             }}
         """)
+
+    def _apply_type_style(self):
+        stype = getattr(self, "snap_type", "SINGLE").upper()
+        if stype == "PRE":
+            t_style = f"color: {P['TEXT_TITLES']}; border: 1px solid {P['BORDER_MEDIUM']}; background: {P['BG_HIGHLIGHT']};"
+        elif stype == "POST":
+            t_style = f"color: {P['TEXT_MUTED']}; border: 1px solid {P['BORDER_SUBTLE']}; background: transparent;"
+        else:
+            t_style = f"color: {P['TEXT_TITLES']}; border: 1px solid {P['BORDER_STRONG']}; background: {P['ACCENT_PILL']}; font-weight: 800;"
+        if hasattr(self, "lbl_type"):
+            self.lbl_type.setStyleSheet(f"{t_style} font-family: 'JetBrains Mono', monospace; font-size: 8px; border-radius: 3px; padding: 1px 3px;")
+
+    def refresh_theme(self):
+        self._set_default_style()
+        if hasattr(self, "lbl_id"):
+            self.lbl_id.setStyleSheet(f"""
+                color: {P["TEXT_TITLES"]};
+                background-color: {P["BG_HIGHLIGHT"]};
+                border: 1px solid {P["BORDER_SUBTLE"]};
+                border-radius: 3px;
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 9.5px;
+                font-weight: 800;
+                padding: 1px 4px;
+            """)
+        self._apply_type_style()
+        if hasattr(self, "lbl_node"):
+            self.lbl_node.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 700;")
+        if hasattr(self, "lbl_date"):
+            self.lbl_date.setStyleSheet(f"color: {P['TEXT_MUTED']}; font-size: 9.5px; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "lbl_desc"):
+            self.lbl_desc.setStyleSheet(f"color: {P['TEXT_BODY']}; font-size: 11px; font-weight: 500;")
+        if hasattr(self, "btn_diff"):
+            self.btn_diff.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent;
+                    border: 1px solid {P["BORDER_SUBTLE"]};
+                    border-radius: 3px;
+                    color: {P["TEXT_MUTED"]};
+                    font-family: 'JetBrains Mono', monospace;
+                    font-size: 8.5px;
+                    font-weight: 700;
+                    padding: 2px 7px;
+                }}
+                QPushButton:hover {{
+                    border-color: {P["BORDER_STRONG"]};
+                    color: {P["TEXT_TITLES"]};
+                    background: {P["BG_HIGHLIGHT"]};
+                }}
+            """)
+        if hasattr(self, "btn_rollback"):
+            self.btn_rollback.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent;
+                    border: 1px solid {P["BORDER_SUBTLE"]};
+                    border-radius: 3px;
+                    color: {P["TEXT_MUTED"]};
+                    font-family: 'JetBrains Mono', monospace;
+                    font-size: 8.5px;
+                    font-weight: 700;
+                    padding: 2px 7px;
+                }}
+                QPushButton:hover {{
+                    border-color: {P["BORDER_STRONG"]};
+                    color: {P["TEXT_TITLES"]};
+                    background: {P["BG_HIGHLIGHT"]};
+                }}
+            """)
 
     def set_purge_mode(self, enabled: bool):
         self.is_purge_mode = enabled
@@ -333,7 +396,7 @@ class PurgeRetentionDialog(QDialog):
             QPushButton:hover {{
                 border-color: {P["BORDER_STRONG"]};
                 background: {P["BG_SURFACE_HOVER"]};
-                color: #ffffff;
+                color: {P["TEXT_TITLES"]};
             }}
         """)
         btn_5.clicked.connect(lambda: self._select_retention(5))
@@ -357,7 +420,7 @@ class PurgeRetentionDialog(QDialog):
             QPushButton:hover {{
                 border-color: {P["BORDER_STRONG"]};
                 background: {P["BG_SURFACE_HOVER"]};
-                color: #ffffff;
+                color: {P["TEXT_TITLES"]};
             }}
         """)
         btn_10.clicked.connect(lambda: self._select_retention(10))
@@ -425,7 +488,7 @@ class PurgeConfirmationDialog(QDialog):
         c_layout.addWidget(lbl_tag)
 
         lbl_title = QLabel(f"Eliminar {len(selected_ids)} Instantáneas Btrfs")
-        lbl_title.setStyleSheet("color: #ffffff; font-size: 15px; font-weight: 800;")
+        lbl_title.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-size: 15px; font-weight: 800;")
         c_layout.addWidget(lbl_title)
 
         preview_ids = ", ".join(f"#{x}" for x in selected_ids[:14])
@@ -519,7 +582,7 @@ class SnapshotStorageAperture(QFrame):
         lbl_tag.setStyleSheet(f"color: {P['TEXT_MICRO']}; font-size: 8.5px; font-weight: 800; letter-spacing: 1.2px; font-family: 'JetBrains Mono', monospace;")
         
         self.badge_status = QLabel("✔ CONSUMO EFICIENTE (CoW)")
-        self.badge_status.setStyleSheet(f"color: #ffffff; background: {P['ACCENT_PILL']}; border: 1px solid {P['BORDER_MEDIUM']}; border-radius: 3px; font-size: 8px; font-weight: 800; padding: 1px 6px; font-family: 'JetBrains Mono', monospace;")
+        self.badge_status.setStyleSheet(f"color: {P['TEXT_TITLES']}; background: {P['ACCENT_PILL']}; border: 1px solid {P['BORDER_MEDIUM']}; border-radius: 3px; font-size: 8px; font-weight: 800; padding: 1px 6px; font-family: 'JetBrains Mono', monospace;")
         
         h_top.addWidget(lbl_tag)
         h_top.addStretch()
@@ -607,14 +670,29 @@ class SnapshotStorageAperture(QFrame):
             self.lbl_count.setText(f"{count} / 50 Snaps")
             self.lbl_sub_count.setText("Límite de rotación alcanzado")
             self.badge_status.setText("● LÍMITE DE POLÍTICA (50)")
-            self.badge_status.setStyleSheet(f"color: #ffffff; background: {P['ACCENT_PILL']}; border: 1px solid {P['BORDER_STRONG']}; border-radius: 3px; font-size: 8px; font-weight: 800; padding: 1px 6px; font-family: 'JetBrains Mono', monospace;")
+            self.badge_status.setStyleSheet(f"color: {P['TEXT_TITLES']}; background: {P['ACCENT_PILL']}; border: 1px solid {P['BORDER_STRONG']}; border-radius: 3px; font-size: 8px; font-weight: 800; padding: 1px 6px; font-family: 'JetBrains Mono', monospace;")
         else:
             self.lbl_count.setText(f"{count} / 50 Snaps")
             self.lbl_sub_count.setText("Cuota máx: 50% de disco (~930 GB)")
             self.badge_status.setText("✔ ESPACIO ÓPTIMO (CoW)")
-            self.badge_status.setStyleSheet(f"color: #e2e8f0; background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 3px; font-size: 8px; font-weight: 700; padding: 1px 6px; font-family: 'JetBrains Mono', monospace;")
+            self.badge_status.setStyleSheet(f"color: {P['TEXT_TITLES']}; background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 3px; font-size: 8px; font-weight: 700; padding: 1px 6px; font-family: 'JetBrains Mono', monospace;")
 
         self.lbl_pct.setText(f"{pct:.2f}%")
+
+    def refresh_theme(self):
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {P["BG_HIGHLIGHT"]};
+                border: 1px solid {P["BORDER_SUBTLE"]};
+                border-radius: 6px;
+            }}
+        """)
+        if hasattr(self, "badge_status"):
+            self.badge_status.setStyleSheet(f"color: {P['TEXT_TITLES']}; background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 3px; font-size: 8px; font-weight: 700; padding: 1px 6px; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "lbl_size"):
+            self.lbl_size.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-size: 15px; font-weight: 800; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "lbl_count"):
+            self.lbl_count.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-size: 13.5px; font-weight: 700; font-family: 'JetBrains Mono', monospace;")
 
 
 class Sector0ResilienceView(QWidget):
@@ -633,6 +711,23 @@ class Sector0ResilienceView(QWidget):
         self.refresh_snapshots()
         self.refresh_kernels()
 
+    def set_theme(self, theme_key: str = None):
+        """Propaga el cambio de tema a las filas de snapshots y apertura de almacenamiento."""
+        for row in self.snapshot_rows:
+            if hasattr(row, "refresh_theme"):
+                row.refresh_theme()
+            elif hasattr(row, "_set_default_style"):
+                row._set_default_style()
+        if hasattr(self, "storage_aperture") and hasattr(self.storage_aperture, "refresh_theme"):
+            self.storage_aperture.refresh_theme()
+        if hasattr(self, "card_create") and self.card_create:
+            self.card_create.setStyleSheet(f"QFrame {{ background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 6px; }}")
+        if hasattr(self, "refresh_kernels"):
+            self.refresh_kernels()
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
     def init_ui(self):
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -643,13 +738,6 @@ class Sector0ResilienceView(QWidget):
         # =============================================================
         col1 = QFrame()
         col1.setProperty("class", "sector_card")
-        col1.setStyleSheet(f"""
-            QFrame {{
-                background-color: {P["BG_SURFACE"]};
-                border: 1px solid {P["BORDER_SUBTLE"]};
-                border-radius: 8px;
-            }}
-        """)
         l1 = QVBoxLayout(col1)
         l1.setContentsMargins(14, 12, 14, 12)
         l1.setSpacing(8)
@@ -666,10 +754,10 @@ class Sector0ResilienceView(QWidget):
         l1.addWidget(self.storage_aperture)
 
         # Contenedor Fresado de Creación Táctica
-        card_create = QFrame()
-        card_create.setStyleSheet(f"background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 6px; padding: 4px 6px;")
-        r_create = QHBoxLayout(card_create)
-        r_create.setContentsMargins(4, 2, 4, 2)
+        self.card_create = QFrame()
+        self.card_create.setStyleSheet(f"QFrame {{ background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_SUBTLE']}; border-radius: 6px; }}")
+        r_create = QHBoxLayout(self.card_create)
+        r_create.setContentsMargins(6, 4, 6, 4)
         r_create.setSpacing(6)
 
         self.txt_snap_name = QLineEdit()
@@ -692,7 +780,7 @@ class Sector0ResilienceView(QWidget):
         btn_create.clicked.connect(self.create_snapshot)
         r_create.addWidget(btn_create)
 
-        l1.addWidget(card_create)
+        l1.addWidget(self.card_create)
 
         # Cabecera de la Timeline
         h_th = QFrame()
@@ -896,13 +984,6 @@ class Sector0ResilienceView(QWidget):
         # =============================================================
         col2 = QFrame()
         col2.setProperty("class", "sector_card")
-        col2.setStyleSheet(f"""
-            QFrame {{
-                background-color: {P["BG_SURFACE"]};
-                border: 1px solid {P["BORDER_SUBTLE"]};
-                border-radius: 8px;
-            }}
-        """)
         l2 = QVBoxLayout(col2)
         l2.setContentsMargins(14, 12, 14, 12)
         l2.setSpacing(10)
@@ -1120,7 +1201,7 @@ class Sector0ResilienceView(QWidget):
 
             if is_active:
                 badge = QLabel("EN LÍNEA [ACTIVO]")
-                badge.setStyleSheet(f"color: #ffffff; font-size: 8px; font-weight: 800; background: {P['ACCENT_PILL']}; border: 1px solid {P['BORDER_STRONG']}; padding: 1px 5px; border-radius: 3px; font-family: 'JetBrains Mono', monospace;")
+                badge.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-size: 8px; font-weight: 800; background: {P['ACCENT_PILL']}; border: 1px solid {P['BORDER_STRONG']}; padding: 1px 5px; border-radius: 3px; font-family: 'JetBrains Mono', monospace;")
                 bx.addWidget(badge)
             elif "lts" in k.lower():
                 badge_lts = QLabel("RESPALDO [LTS]")
@@ -1130,7 +1211,10 @@ class Sector0ResilienceView(QWidget):
             self.l_k_list.insertWidget(self.l_k_list.count() - 1, box)
 
     def create_snapshot(self):
-        name = self.txt_snap_name.text().strip() or "Snapshot Táctico UMBRA"
+        raw_name = self.txt_snap_name.text().strip() or "Snapshot Táctico UMBRA"
+        name = re.sub(r'[\r\n\x00]', '', raw_name).strip()
+        if name.startswith("-"):
+            name = f"snap_{name}"
         self.txt_snap_name.clear()
         self.log_emitted.emit(f"📸 Creando snapshot Btrfs: '{name}'...")
         try:
@@ -1230,15 +1314,20 @@ class Sector0ResilienceView(QWidget):
 
     def _execute_purge(self, ids: list[int]):
         """Ejecuta 'pkexec snapper -c root delete -s' con las snapshots seleccionadas."""
-        str_ids = [str(x) for x in ids]
-        preview_str = ", ".join(f"#{x}" for x in ids[:10])
-        if len(ids) > 10:
-            preview_str += f" (+{len(ids)-10} más)"
+        valid_ids = [str(int(x)) for x in ids if str(x).isdigit() and int(x) >= 0]
+        if not valid_ids:
+            self.log_emitted.emit("⚠ No hay IDs de snapshot válidos para purgar.")
+            self.exit_purge_mode()
+            return
 
-        self.log_emitted.emit(f"🧹 Purgando {len(ids)} snapshots Btrfs: {preview_str}...")
+        preview_str = ", ".join(f"#{x}" for x in valid_ids[:10])
+        if len(valid_ids) > 10:
+            preview_str += f" (+{len(valid_ids)-10} más)"
+
+        self.log_emitted.emit(f"🧹 Purgando {len(valid_ids)} snapshots Btrfs: {preview_str}...")
 
         try:
-            cmd = ["pkexec", "snapper", "-c", "root", "delete", "-s", *str_ids]
+            cmd = ["pkexec", "snapper", "-c", "root", "delete", "-s", *valid_ids]
             res = run_command(cmd)
             if res.returncode == 0:
                 self.log_emitted.emit(f"✔ Purga completada exitosamente. Se eliminaron {len(ids)} snapshots y se sincronizó el almacenamiento CoW.")

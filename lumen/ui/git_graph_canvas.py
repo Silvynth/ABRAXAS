@@ -27,16 +27,28 @@ from PySide6.QtGui import (
 )
 from PySide6.QtCore import Qt, QPointF, QRectF, Signal, Slot, QTimer
 
+from core.theme import get_theme_palette, is_light_theme, get_theme_lane_colors
 
-# Paletas de colores establecidas de Abraxas
-MONOCHROME_LANE_COLORS = [
-    QColor("#e2e8f0"),  # Platinum
-    QColor("#94a3b8"),  # Slate / Titanium
-    QColor("#64748b"),  # Medium Titanium
-    QColor("#cbd5e1"),  # Light Platinum
-    QColor("#475569"),  # Deep Titanium
-    QColor("#334155"),  # Dark Steel
-]
+# Paletas de colores dinámicas enlazadas a core.theme
+def get_monochrome_lane_colors():
+    if is_light_theme():
+        return [
+            QColor("#1e293b"),
+            QColor("#334155"),
+            QColor("#475569"),
+            QColor("#0f172a"),
+            QColor("#64748b"),
+        ]
+    return [
+        QColor("#e2e8f0"),
+        QColor("#cbd5e1"),
+        QColor("#94a3b8"),
+        QColor("#64748b"),
+        QColor("#475569"),
+        QColor("#334155"),
+    ]
+
+MONOCHROME_LANE_COLORS = get_monochrome_lane_colors()
 
 LUMEN_BRANCH_PALETTE = [
     QColor("#38bdf8"),  # 0: Sky Cyan (Lumen / Active HEAD)
@@ -178,6 +190,8 @@ class GitGraphCommitNode(QGraphicsItem):
     def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setRenderHint(QPainter.TextAntialiasing)
+        p = get_theme_palette()
+        is_light = str(p.get("IS_LIGHT", "false")).lower() == "true"
 
         if self.orientation == "vertical":
             # -------------------------------------------------------------
@@ -225,11 +239,11 @@ class GitGraphCommitNode(QGraphicsItem):
                 painter.setPen(QPen(b_color, 1))
                 painter.setBrush(QBrush(bg_b))
                 painter.drawRoundedRect(rect_b, 4, 4)
-                painter.setPen(QColor("#ffffff"))
+                painter.setPen(QColor(p["TEXT_TITLES"]))
                 painter.drawText(rect_b, Qt.AlignCenter, b_text)
                 cur_x += tw + 6.0
             elif self.refs:
-                for ref in self.refs[:2]:
+                for ref in self.refs:
                     b_text = ref
                     b_color = self.lane_color
                     if "HEAD" in ref:
@@ -251,7 +265,7 @@ class GitGraphCommitNode(QGraphicsItem):
                     painter.setPen(QPen(b_color, 1))
                     painter.setBrush(QBrush(bg_b))
                     painter.drawRoundedRect(rect_b, 4, 4)
-                    painter.setPen(QColor("#ffffff"))
+                    painter.setPen(QColor(p["TEXT_TITLES"]))
                     painter.drawText(rect_b, Qt.AlignCenter, b_text)
                     cur_x += tw + 6.0
 
@@ -260,10 +274,10 @@ class GitGraphCommitNode(QGraphicsItem):
             painter.setFont(f_hash)
             hw = painter.fontMetrics().horizontalAdvance(self.hash) + 8
             rect_h = QRectF(cur_x, -8, hw, 16)
-            painter.setPen(QPen(QColor(255, 255, 255, 25), 1))
-            painter.setBrush(QBrush(QColor(255, 255, 255, 10)))
+            painter.setPen(QPen(QColor(p["GRAPH_HASH_BORDER"]), 1))
+            painter.setBrush(QBrush(QColor(p["GRAPH_HASH_BG"])))
             painter.drawRoundedRect(rect_h, 3, 3)
-            painter.setPen(QColor("#fbbf24") if self.is_hovered else QColor("#cbd5e1"))
+            painter.setPen(QColor(p["ACCENT_ACTIVE"]) if self.is_hovered else QColor(p["GRAPH_HASH"]))
             painter.drawText(rect_h, Qt.AlignCenter, self.hash)
             cur_x += hw + 8.0
 
@@ -271,7 +285,7 @@ class GitGraphCommitNode(QGraphicsItem):
             subj_clean = re.sub(r"^(?:HEX|SIL|HEN|AGY|MAN):\d{4}(?:\s*\[v?[0-9.]+\])?\s*\|\s*", "", self.subject).strip()
             f_subj = QFont("Inter, sans-serif", 8.2)
             painter.setFont(f_subj)
-            painter.setPen(QColor("#ffffff") if self.is_hovered else QColor("#e2e8f0"))
+            painter.setPen(QColor(p["TEXT_TITLES"]) if self.is_hovered else QColor(p["GRAPH_TEXT_TITLE"]))
             avail_w = 260.0
             elided = painter.fontMetrics().elidedText(subj_clean, Qt.ElideRight, int(avail_w))
             painter.drawText(QRectF(cur_x, -9, avail_w, 18), Qt.AlignVCenter | Qt.AlignLeft, elided)
@@ -280,7 +294,7 @@ class GitGraphCommitNode(QGraphicsItem):
             # Autor y fecha relativa
             f_meta = QFont("Inter, sans-serif", 7.2)
             painter.setFont(f_meta)
-            painter.setPen(QColor("#64748b"))
+            painter.setPen(QColor(p["GRAPH_TEXT_MUTED"]))
             meta_str = f"👤 {self.author} • {self.date}"
             painter.drawText(QRectF(cur_x, -9, 200, 18), Qt.AlignVCenter | Qt.AlignLeft, meta_str)
 
@@ -321,7 +335,7 @@ class GitGraphCommitNode(QGraphicsItem):
             if is_sim:
                 painter.setPen(QColor("#c084fc"))
             else:
-                painter.setPen(QColor("#fbbf24") if self.is_hovered else QColor("#bae6fd"))
+                painter.setPen(QColor(p["ACCENT_ACTIVE"]) if self.is_hovered else QColor(p["GRAPH_HASH"]))
             painter.drawText(QRectF(-45, -22, 90, 14), Qt.AlignCenter, self.hash)
 
             # Badges de Ramas o Tags
@@ -336,7 +350,7 @@ class GitGraphCommitNode(QGraphicsItem):
 
                 f_b = QFont("Inter, sans-serif", 7.5, QFont.Bold)
                 painter.setFont(f_b)
-                painter.setPen(QColor(255, 255, 255))
+                painter.setPen(QColor(255, 255, 255) if not is_light else QColor(p["TEXT_TITLES"]))
                 painter.drawText(b_rect, Qt.AlignCenter, "🧪 SIMULACIÓN")
             elif self.refs:
                 top_ref = self.refs[0]
@@ -364,7 +378,7 @@ class GitGraphCommitNode(QGraphicsItem):
 
                 f_b = QFont("Inter, sans-serif", 7.5, QFont.Bold)
                 painter.setFont(f_b)
-                painter.setPen(QColor(255, 255, 255))
+                painter.setPen(QColor(255, 255, 255) if not is_light else QColor(p["TEXT_TITLES"]))
                 painter.drawText(b_rect, Qt.AlignCenter, badge_text)
 
             # Título resumido
@@ -375,13 +389,13 @@ class GitGraphCommitNode(QGraphicsItem):
 
             f_subj = QFont("Inter, sans-serif", 7.8)
             painter.setFont(f_subj)
-            painter.setPen(QColor("#f3f4f6") if self.is_hovered else QColor("#9ca3af"))
+            painter.setPen(QColor(p["TEXT_TITLES"]) if self.is_hovered else QColor(p["GRAPH_TEXT"]))
             painter.drawText(QRectF(-60, 10, 120, 15), Qt.AlignCenter, subj_clean)
 
             # Autor y fecha
             f_sub = QFont("Inter, sans-serif", 6.8)
             painter.setFont(f_sub)
-            painter.setPen(QColor("#6b7280"))
+            painter.setPen(QColor(p["GRAPH_TEXT_MUTED"]))
             painter.drawText(QRectF(-60, 24, 120, 13), Qt.AlignCenter, f"{self.author} • {self.date}")
 
     def _resolve_graph_view(self):
@@ -426,16 +440,22 @@ class CommitHoverCard(QFrame):
         self.graph_view = graph_view
         self.setVisible(False)
         self.setObjectName("CommitHoverCard")
-        self.setStyleSheet("""
-            QFrame#CommitHoverCard {
-                background-color: rgba(12, 13, 16, 0.96);
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 8px;
-            }
-        """)
+        self.lbl_dot = QLabel("●")
+        self.lbl_hash = QLabel("")
+        self.badges_container = QWidget()
+        self.badges_layout = QHBoxLayout(self.badges_container)
+        self.badges_layout.setContentsMargins(0, 0, 0, 0)
+        self.badges_layout.setSpacing(4)
+        self.lbl_subject = QLabel("")
+        self.lbl_subject.setWordWrap(True)
+        self.lbl_subject.setMaximumWidth(320)
+        self.lbl_author = QLabel("")
+        self.lbl_sep = QLabel("•")
+        self.lbl_date = QLabel("")
+
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(20)
-        shadow.setColor(QColor(0, 0, 0, 200))
+        shadow.setColor(QColor(0, 0, 0, 160))
         shadow.setOffset(0, 4)
         self.setGraphicsEffect(shadow)
 
@@ -447,66 +467,60 @@ class CommitHoverCard(QFrame):
         self.header_row = QHBoxLayout()
         self.header_row.setContentsMargins(0, 0, 0, 0)
         self.header_row.setSpacing(6)
-
-        self.lbl_dot = QLabel("●")
-        self.lbl_dot.setStyleSheet("font-size: 11px;")
         self.header_row.addWidget(self.lbl_dot)
-
-        self.lbl_hash = QLabel("")
-        self.lbl_hash.setStyleSheet("""
-            color: #38bdf8;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 10.5px;
-            font-weight: 700;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.09);
-            border-radius: 3px;
-            padding: 1px 5px;
-        """)
         self.header_row.addWidget(self.lbl_hash)
-
-        self.badges_container = QWidget()
-        self.badges_layout = QHBoxLayout(self.badges_container)
-        self.badges_layout.setContentsMargins(0, 0, 0, 0)
-        self.badges_layout.setSpacing(4)
         self.header_row.addWidget(self.badges_container)
-
         self.header_row.addStretch()
         layout.addLayout(self.header_row)
 
         # 2. Asunto / Mensaje
-        self.lbl_subject = QLabel("")
-        self.lbl_subject.setWordWrap(True)
-        self.lbl_subject.setMaximumWidth(320)
-        self.lbl_subject.setStyleSheet("""
-            color: #ffffff;
-            font-size: 11px;
-            font-weight: 600;
-            line-height: 1.35;
-        """)
         layout.addWidget(self.lbl_subject)
 
         # 3. Metadatos (Autor y Fecha)
         meta_row = QHBoxLayout()
         meta_row.setContentsMargins(0, 0, 0, 0)
         meta_row.setSpacing(6)
-
-        self.lbl_author = QLabel("")
-        self.lbl_author.setStyleSheet("color: #94a3b8; font-size: 9.5px; font-weight: 500;")
         meta_row.addWidget(self.lbl_author)
-
-        lbl_sep = QLabel("•")
-        lbl_sep.setStyleSheet("color: #475569; font-size: 9.5px;")
-        meta_row.addWidget(lbl_sep)
-
-        self.lbl_date = QLabel("")
-        self.lbl_date.setStyleSheet("color: #64748b; font-size: 9.5px;")
+        meta_row.addWidget(self.lbl_sep)
         meta_row.addWidget(self.lbl_date)
-
         meta_row.addStretch()
         layout.addLayout(meta_row)
 
+        self.refresh_theme()
+
+    def refresh_theme(self):
+        p = get_theme_palette()
+        self.setStyleSheet(f"""
+            QFrame#CommitHoverCard {{
+                background-color: {p["BG_SURFACE"]};
+                border: 1px solid {p["BORDER_MEDIUM"]};
+                border-radius: 8px;
+            }}
+        """)
+        self.lbl_dot.setStyleSheet("font-size: 11px;")
+        self.lbl_hash.setStyleSheet(f"""
+            color: {p["GRAPH_HASH"]};
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10.5px;
+            font-weight: 700;
+            background: {p["GRAPH_HASH_BG"]};
+            border: 1px solid {p["GRAPH_HASH_BORDER"]};
+            border-radius: 3px;
+            padding: 1px 5px;
+        """)
+        self.lbl_subject.setStyleSheet(f"""
+            color: {p["GRAPH_TEXT_TITLE"]};
+            font-size: 11px;
+            font-weight: 600;
+            line-height: 1.35;
+        """)
+        self.lbl_author.setStyleSheet(f"color: {p['GRAPH_TEXT']}; font-size: 9.5px; font-weight: 500;")
+        self.lbl_sep.setStyleSheet(f"color: {p['TEXT_MUTED']}; font-size: 9.5px;")
+        self.lbl_date.setStyleSheet(f"color: {p['GRAPH_TEXT_MUTED']}; font-size: 9.5px;")
+
     def set_commit(self, node):
+        self.refresh_theme()
+        p = get_theme_palette()
         self.lbl_dot.setStyleSheet(f"color: {node.lane_color.name()}; font-size: 11px;")
         self.lbl_hash.setText(node.hash)
 
@@ -548,8 +562,8 @@ class CommitHoverCard(QFrame):
                     color: {color};
                     font-size: 8px;
                     font-weight: 700;
-                    background: rgba(255, 255, 255, 0.05);
-                    border: 1px solid rgba(255, 255, 255, 0.10);
+                    background: {p["BG_HIGHLIGHT"]};
+                    border: 1px solid {p["BORDER_SUBTLE"]};
                     border-radius: 3px;
                     padding: 1px 4px;
                 """)
@@ -597,27 +611,26 @@ class LumenHorizontalGitGraphView(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
-        # Diseño limpio y translúcido sin recuadro negro ni sombras duras
+        self.setProperty("class", "git_graph_view")
+        self.setObjectName("git_graph_view")
+
+        # Scrollbars estéticos integrados con el tema
         self.setStyleSheet("""
-            QGraphicsView {
-                background: transparent;
-                border: none;
-            }
             QScrollBar:horizontal, QScrollBar:vertical {
-                background: rgba(255, 255, 255, 0.02);
+                background: transparent;
                 height: 8px;
                 width: 8px;
                 border-radius: 4px;
                 margin: 0px;
             }
             QScrollBar::handle:horizontal, QScrollBar::handle:vertical {
-                background: rgba(255, 255, 255, 0.12);
+                background: rgba(148, 163, 184, 0.25);
                 border-radius: 4px;
                 min-width: 24px;
                 min-height: 24px;
             }
             QScrollBar::handle:horizontal:hover, QScrollBar::handle:vertical:hover {
-                background: #38bdf8;
+                background: rgba(148, 163, 184, 0.45);
             }
             QScrollBar::add-line, QScrollBar::sub-line {
                 width: 0px;
@@ -731,16 +744,19 @@ class LumenHorizontalGitGraphView(QGraphicsView):
                 self._update_hover_card_pos(self.hovered_node)
 
     def get_palette(self) -> List[QColor]:
-        """Retorna la paleta de colores establecida según el tema activo."""
-        if getattr(self, "theme_mode", "monochrome") == "monochrome":
-            return MONOCHROME_LANE_COLORS
-        return LUMEN_BRANCH_PALETTE
+        """Retorna la paleta de colores de carriles/canales sincronizada con core.theme."""
+        colors = get_theme_lane_colors(getattr(self, "theme_mode", None))
+        return [QColor(c) for c in colors]
 
-    def set_theme(self, theme_mode: str):
-        """Aplica la paleta de color establecida (monochrome o lumen)."""
+    def set_theme(self, theme_mode: str = None):
+        """Aplica la paleta de color establecida (monochrome, lumen, claro, etc.)."""
         self.theme_mode = theme_mode
+        p = get_theme_palette(theme_mode)
+        self.scene.setBackgroundBrush(QColor(p["GRAPH_CANVAS_BG"]))
         if self.current_project_path:
             self.load_project_graph(self.current_project_path)
+        else:
+            self.viewport().update()
 
     def set_orientation(self, orientation: str):
         """Configura la orientación ('vertical' estilo Git Graph o 'horizontal')."""
@@ -756,14 +772,18 @@ class LumenHorizontalGitGraphView(QGraphicsView):
         return self.orientation
 
     def drawBackground(self, painter: QPainter, rect: QRectF):
-        """Cuadrícula de puntos limpia sobre fondo transparente integrado con el tema."""
-        super().drawBackground(painter, rect)
+        """Cuadrícula de puntos limpia adaptada al tema actual."""
+        theme = getattr(self, "theme_mode", None)
+        p = get_theme_palette(theme)
+        bg_col = QColor(p["GRAPH_CANVAS_BG"])
+        painter.fillRect(rect, bg_col)
 
         grid_size = 28
         left = int(rect.left()) - (int(rect.left()) % grid_size)
         top = int(rect.top()) - (int(rect.top()) % grid_size)
 
-        painter.setPen(QPen(QColor(255, 255, 255, 12), 1.0))
+        dot_color = QColor(15, 23, 42, 28) if is_light_theme(theme) else QColor(255, 255, 255, 14)
+        painter.setPen(QPen(dot_color, 1.0))
         x = left
         while x < rect.right():
             y = top
@@ -1369,32 +1389,29 @@ class LumenHorizontalGitGraphView(QGraphicsView):
         return branches
 
     def _get_git_commits(self, path: str, limit: int, branches: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """Obtiene la lista estructurada de commits mediante git log para las ramas especificadas."""
+        """Obtiene la lista estructurada de commits mediante git log para las ramas especificadas (Optimizado O(1))."""
         commits = []
         SEP = "@@LUMEN_GRAPH_SEP@@"
         branch_targets = []
         if branches:
+            # Validación en memoria mediante ramas ya indexadas sin subprocesos redundantes
+            known_branches = self._get_git_branches(path)
+            known_refs = {}
+            for b in known_branches:
+                known_refs[b["name"]] = b.get("ref", b["name"])
+                if "ref" in b:
+                    known_refs[b["ref"]] = b["ref"]
+
             for b in branches:
                 clean_b = b.strip()
                 if not clean_b:
                     continue
-                # Validar si existe localmente
-                try:
-                    subprocess.check_output(
-                        ["git", "rev-parse", "--verify", "--quiet", clean_b],
-                        cwd=path, stderr=subprocess.DEVNULL
-                    )
+                if clean_b in known_refs:
+                    branch_targets.append(known_refs[clean_b])
+                elif f"origin/{clean_b}" in known_refs:
+                    branch_targets.append(known_refs[f"origin/{clean_b}"])
+                else:
                     branch_targets.append(clean_b)
-                except Exception:
-                    # Validar si existe como rama remota origin/
-                    try:
-                        subprocess.check_output(
-                            ["git", "rev-parse", "--verify", "--quiet", f"origin/{clean_b}"],
-                            cwd=path, stderr=subprocess.DEVNULL
-                        )
-                        branch_targets.append(f"origin/{clean_b}")
-                    except Exception:
-                        pass
         if not branch_targets:
             branch_targets = ["--all"]
 
@@ -1577,29 +1594,45 @@ class LumenHorizontalGitGraphView(QGraphicsView):
         vp = self.viewport().rect()
         pw = self.pinned_header_width
         palette = self.get_palette()
+        p = get_theme_palette()
+        is_light = is_light_theme()
 
-        # 1. Fondo translúcido glass oscuro
+        # 1. Fondo translúcido glass adaptado al tema
         bg_rect = QRectF(0, 0, pw, vp.height())
-        painter.fillRect(bg_rect, QColor(9, 13, 24, 240))
+        if is_light:
+            painter.fillRect(bg_rect, QColor(241, 245, 249, 245))
+            shadow_rect = QRectF(pw, 0, 18, vp.height())
+            shadow_grad = QLinearGradient(pw, 0, pw + 18, 0)
+            shadow_grad.setColorAt(0.0, QColor(100, 116, 139, 45))
+            shadow_grad.setColorAt(1.0, QColor(100, 116, 139, 0))
+            painter.fillRect(shadow_rect, shadow_grad)
 
-        # 2. Sombra difuminada a la derecha del panel
-        shadow_rect = QRectF(pw, 0, 18, vp.height())
-        shadow_grad = QLinearGradient(pw, 0, pw + 18, 0)
-        shadow_grad.setColorAt(0.0, QColor(0, 0, 0, 120))
-        shadow_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
-        painter.fillRect(shadow_rect, shadow_grad)
+            border_pen = QPen(QColor(203, 213, 225, 200), 1.2)
+            painter.setPen(border_pen)
+            painter.drawLine(QPointF(pw, 0), QPointF(pw, vp.height()))
 
-        # 3. Borde divisor vertical sutil
-        border_pen = QPen(QColor(56, 189, 248, 60), 1.2)
-        painter.setPen(border_pen)
-        painter.drawLine(QPointF(pw, 0), QPointF(pw, vp.height()))
+            f_header = QFont("Inter, sans-serif", 7, QFont.Bold)
+            f_header.setLetterSpacing(QFont.AbsoluteSpacing, 0.6)
+            painter.setFont(f_header)
+            painter.setPen(QColor("#475569"))
+            painter.drawText(QRectF(10, 8, pw - 20, 16), Qt.AlignLeft | Qt.AlignVCenter, "📌 RAMAS FIJAS")
+        else:
+            painter.fillRect(bg_rect, QColor(9, 13, 24, 240))
+            shadow_rect = QRectF(pw, 0, 18, vp.height())
+            shadow_grad = QLinearGradient(pw, 0, pw + 18, 0)
+            shadow_grad.setColorAt(0.0, QColor(0, 0, 0, 120))
+            shadow_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+            painter.fillRect(shadow_rect, shadow_grad)
 
-        # 4. Etiqueta superior del encabezado
-        f_header = QFont("Inter, sans-serif", 7, QFont.Bold)
-        f_header.setLetterSpacing(QFont.AbsoluteSpacing, 0.6)
-        painter.setFont(f_header)
-        painter.setPen(QColor("#64748b"))
-        painter.drawText(QRectF(10, 8, pw - 20, 16), Qt.AlignLeft | Qt.AlignVCenter, "📌 RAMAS FIJAS")
+            border_pen = QPen(QColor(56, 189, 248, 60), 1.2)
+            painter.setPen(border_pen)
+            painter.drawLine(QPointF(pw, 0), QPointF(pw, vp.height()))
+
+            f_header = QFont("Inter, sans-serif", 7, QFont.Bold)
+            f_header.setLetterSpacing(QFont.AbsoluteSpacing, 0.6)
+            painter.setFont(f_header)
+            painter.setPen(QColor("#64748b"))
+            painter.drawText(QRectF(10, 8, pw - 20, 16), Qt.AlignLeft | Qt.AlignVCenter, "📌 RAMAS FIJAS")
 
         # 5. Píldoras fijadas para cada carril visible
         for lane_idx in self.used_lanes:
@@ -1636,7 +1669,8 @@ class LumenHorizontalGitGraphView(QGraphicsView):
                 # Nombre de la rama con texto elidido
                 f_branch = QFont("JetBrains Mono, monospace", 8, QFont.Bold)
                 painter.setFont(f_branch)
-                painter.setPen(color if is_hovered else QColor("#f1f5f9"))
+                default_text_color = QColor("#0f172a") if is_light else QColor("#f1f5f9")
+                painter.setPen(color if is_hovered else default_text_color)
 
                 text_rect = QRectF(25, lane_vp_y - 11, pw - 38, 22)
                 fm = painter.fontMetrics()

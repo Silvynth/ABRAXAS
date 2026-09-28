@@ -52,7 +52,8 @@ def run_command(
     cwd: Optional[Union[str, Path]] = None,
     env: Optional[Mapping[str, str]] = None,
     timeout: Optional[float] = 30.0,
-    check: bool = False
+    check: bool = False,
+    input: Optional[Union[str, bytes]] = None
 ) -> CommandResult:
     """
     Ejecuta un comando en el sistema operativo de forma síncrona y segura.
@@ -63,6 +64,7 @@ def run_command(
         env: Variables de entorno adicionales o reemplazo.
         timeout: Límite de tiempo en segundos (por defecto 30s).
         check: Si es True, lanza ProcessError si returncode != 0.
+        input: Cadena o bytes suministrados de forma segura por stdin al proceso.
 
     Returns:
         CommandResult con el código de salida, stdout, stderr y duración en ms.
@@ -83,11 +85,12 @@ def run_command(
     try:
         proc = subprocess.run(
             args,
+            input=input,
             cwd=str(work_dir) if work_dir else None,
             env=merged_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            text=True if (input is None or isinstance(input, str)) else False,
             timeout=timeout
         )
         duration_ms = (time.perf_counter() - start_time) * 1000.0

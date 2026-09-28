@@ -8,13 +8,20 @@ from PySide6.QtCore import QThread, Signal
 from umbra.services.telemetry import UmbraHardwareCollector, UmbraStatusRibbonCollector
 
 class UmbraTelemetryWorker(QThread):
-    """Worker asíncrono para telemetría de hardware en tiempo real."""
+    """Worker asíncrono para telemetría de hardware en tiempo real con frecuencia adaptativa."""
     data_updated = Signal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.collector = UmbraHardwareCollector()
         self.running = True
+        self.is_visible = True
+        self._interval = 0.8
+
+    def set_active_visibility(self, visible: bool):
+        """Ajusta dinámicamente la cadencia: 0.8s cuando está visible, 5.0s en segundo plano."""
+        self.is_visible = visible
+        self._interval = 0.8 if visible else 5.0
 
     def stop(self):
         self.running = False
@@ -33,10 +40,10 @@ class UmbraTelemetryWorker(QThread):
                 self.data_updated.emit(snapshot)
             except Exception:
                 pass
-            self._sleep_interruptible(0.8)
+            self._sleep_interruptible(self._interval)
 
 class UmbraRibbonWorker(QThread):
-    """Worker asíncrono para métricas de Obsidian, Pacman y Btrfs."""
+    """Worker asíncrono para métricas de Obsidian, Pacman y Btrfs con cadencia adaptativa."""
     ribbon_updated = Signal(dict)
 
     def __init__(self, parent=None, vault_dir=None):
@@ -59,6 +66,13 @@ class UmbraRibbonWorker(QThread):
 
         self.collector = UmbraStatusRibbonCollector(vault_dir=vault_dir)
         self.running = True
+        self.is_visible = True
+        self._interval = 2.5
+
+    def set_active_visibility(self, visible: bool):
+        """Ajusta dinámicamente la cadencia del ribbon: 2.5s visible, 8.0s en segundo plano."""
+        self.is_visible = visible
+        self._interval = 2.5 if visible else 8.0
 
     def stop(self):
         self.running = False
@@ -79,4 +93,4 @@ class UmbraRibbonWorker(QThread):
                 self.ribbon_updated.emit(snapshot)
             except Exception:
                 pass
-            self._sleep_interruptible(2.5)
+            self._sleep_interruptible(self._interval)

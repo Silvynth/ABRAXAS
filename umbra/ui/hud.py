@@ -20,13 +20,25 @@ class FilamentBar(QProgressBar):
         self.setFixedHeight(3)
         self.setRange(0, 100)
         super().setValue(value)
+        self.setProperty("class", "filament_bar")
         
-        c_start = color_start or P["TEXT_TITLES"]
-        c_end = color_end or P["TEXT_MUTED"]
+        self.color_start = color_start
+        self.color_end = color_end
+        if color_start or color_end:
+            self._apply_custom_colors(color_start, color_end)
 
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(750)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim.valueChanged.connect(self._apply_val)
+
+    def _apply_custom_colors(self, c_start, c_end):
+        from core.theme import get_theme_palette
+        p = get_theme_palette()
+        bg = p.get("PROGRESS_BG", "rgba(255, 255, 255, 0.06)")
         self.setStyleSheet(f"""
             QProgressBar {{
-                background-color: {P["BG_HIGHLIGHT"]};
+                background-color: {bg};
                 border: none;
                 border-radius: 1px;
             }}
@@ -35,10 +47,15 @@ class FilamentBar(QProgressBar):
                 border-radius: 1px;
             }}
         """)
-        self._anim = QVariantAnimation(self)
-        self._anim.setDuration(750)
-        self._anim.setEasingCurve(QEasingCurve.OutCubic)
-        self._anim.valueChanged.connect(self._apply_val)
+
+    def refresh_theme(self):
+        if self.color_start or self.color_end:
+            self._apply_custom_colors(self.color_start, self.color_end)
+        else:
+            self.setStyleSheet("")
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.update()
 
     def _apply_val(self, val):
         super().setValue(int(val))
@@ -58,13 +75,15 @@ class TelemetryInstrument(QWidget):
                  is_dual: bool = False, bar_temp_pct: int = 0, parent=None):
         super().__init__(parent)
         self.is_dual = is_dual
+        self.c_start = c_start
+        self.c_end = c_end
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(2)
 
         # 1. Micro-etiqueta superior
-        lbl_tag = QLabel(label)
-        lbl_tag.setStyleSheet(f"""
+        self.lbl_tag = QLabel(label)
+        self.lbl_tag.setStyleSheet(f"""
             font-size: 9px;
             font-weight: 700;
             letter-spacing: 1.5px;
@@ -72,7 +91,7 @@ class TelemetryInstrument(QWidget):
             text-transform: uppercase;
             font-family: 'JetBrains Mono', monospace;
         """)
-        layout.addWidget(lbl_tag)
+        layout.addWidget(self.lbl_tag)
 
         # 2. Cifra principal destacada
         val_box = QHBoxLayout()
@@ -102,9 +121,12 @@ class TelemetryInstrument(QWidget):
             bars_layout.setContentsMargins(0, 0, 0, 0)
             bars_layout.setSpacing(2)
 
-            self.bar_use = FilamentBar(bar_pct, c_start or P["TEXT_TITLES"], c_end or P["TEXT_MUTED"])
+            self.bar_use = FilamentBar(bar_pct, c_start, c_end)
             self.bar_use.setToolTip("Filamento 1: Uso (%)")
-            self.bar_temp = FilamentBar(bar_temp_pct, "rgba(255, 255, 255, 0.70)", "rgba(255, 255, 255, 0.20)")
+            
+            from core.theme import get_theme_palette
+            p = get_theme_palette()
+            self.bar_temp = FilamentBar(bar_temp_pct, p["PROGRESS_START"], p["PROGRESS_BG"])
             self.bar_temp.setToolTip("Filamento 2: Temperatura (°C)")
 
             bars_layout.addWidget(self.bar_use)
@@ -123,6 +145,39 @@ class TelemetryInstrument(QWidget):
             margin-top: 2px;
         """)
         layout.addWidget(self.lbl_sub)
+
+    def refresh_theme(self):
+        from core.theme import get_theme_palette
+        p = get_theme_palette()
+        if hasattr(self, "lbl_tag"):
+            self.lbl_tag.setStyleSheet(f"""
+                font-size: 9px;
+                font-weight: 700;
+                letter-spacing: 1.5px;
+                color: {p["TEXT_MICRO"]};
+                text-transform: uppercase;
+                font-family: 'JetBrains Mono', monospace;
+            """)
+        if hasattr(self, "lbl_val"):
+            self.lbl_val.setStyleSheet(f"""
+                font-size: 16px;
+                font-weight: 800;
+                color: {p["TEXT_TITLES"]};
+                font-family: 'JetBrains Mono', monospace;
+            """)
+        if hasattr(self, "lbl_suf") and self.lbl_suf is not None:
+            self.lbl_suf.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {p['TEXT_MUTED']}; padding-bottom: 2px;")
+        if hasattr(self, "lbl_sub"):
+            self.lbl_sub.setStyleSheet(f"""
+                font-size: 10px;
+                font-weight: 500;
+                color: {p["TEXT_MUTED"]};
+                margin-top: 2px;
+            """)
+        if hasattr(self, "bar_use"):
+            self.bar_use.refresh_theme()
+        if self.is_dual and hasattr(self, "bar_temp"):
+            self.bar_temp._apply_custom_colors(p["PROGRESS_START"], p["PROGRESS_BG"])
 
     def set_metric(self, value: str = None, subtext: str = None, bar_pct: int = None, 
                    val_suffix: str = None, bar_temp_pct: int = None):
@@ -150,13 +205,7 @@ class UmbraTopTelemetryHUD(QFrame):
 
     def init_ui(self):
         self.setObjectName("umbra_top_telemetry_hud")
-        self.setStyleSheet(f"""
-            QFrame#umbra_top_telemetry_hud {{
-                background-color: {P["BG_SURFACE"]};
-                border: 1px solid {P["BORDER_SUBTLE"]};
-                border-radius: 10px;
-            }}
-        """)
+        self.setProperty("class", "top_hud_ribbon")
 
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(20)
@@ -192,8 +241,6 @@ class UmbraTopTelemetryHUD(QFrame):
             value="-- GB",
             subtext="Muestreando RAM...",
             bar_pct=0,
-            c_start=P["TEXT_TITLES"],
-            c_end=P["TEXT_MUTED"]
         )
         main_layout.addWidget(self.inst_ram)
         main_layout.addWidget(make_divider())
@@ -217,8 +264,6 @@ class UmbraTopTelemetryHUD(QFrame):
             val_suffix="Libre",
             subtext="Btrfs Root",
             bar_pct=0,
-            c_start=P["TEXT_TITLES"],
-            c_end=P["TEXT_MUTED"]
         )
         main_layout.addWidget(self.inst_disk)
         main_layout.addWidget(make_divider())
@@ -229,8 +274,6 @@ class UmbraTopTelemetryHUD(QFrame):
             value="-- MB/s",
             subtext="Muestreando Enlace...",
             bar_pct=0,
-            c_start=P["TEXT_TITLES"],
-            c_end=P["TEXT_MUTED"]
         )
         main_layout.addWidget(self.inst_net)
         main_layout.addWidget(make_divider())
@@ -273,6 +316,21 @@ class UmbraTopTelemetryHUD(QFrame):
         pod_layout.addWidget(self.btn_snap)
 
         main_layout.addWidget(pod_op)
+
+    def refresh_theme(self):
+        """Propaga la actualización estética y reactiva de colores al HUD y todas sus barras."""
+        from core.theme import get_theme_palette
+        p = get_theme_palette()
+        for inst in [self.inst_cpu, self.inst_ram, self.inst_gpu, self.inst_disk, self.inst_net]:
+            if hasattr(inst, "refresh_theme"):
+                inst.refresh_theme()
+        if hasattr(self, "lbl_op"):
+            self.lbl_op.setStyleSheet(f"font-size: 13px; font-weight: 800; color: {p['TEXT_TITLES']}; letter-spacing: 0.8px;")
+        if hasattr(self, "lbl_distro"):
+            self.lbl_distro.setStyleSheet(f"font-size: 10.5px; font-weight: 600; color: {p['TEXT_MUTED']}; font-family: 'JetBrains Mono', monospace;")
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
 
     def update_telemetry(self, data: dict):
         """Actualiza los instrumentos del HUD (CPU y GPU actualizan doble barrita de Uso y Temp)."""

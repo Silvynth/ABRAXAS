@@ -13,6 +13,7 @@ from PySide6.QtCore import Qt, Signal
 from core.config import AppConfig, load_config
 from core.semver import detect_project_semver
 from core.process import run_command
+from core.theme import MONOCHROME_PALETTE as P, get_theme_palette
 from lumen.models.project import Project
 from lumen.ui.selector.project_row import ProjectSelectorRow
 
@@ -66,10 +67,19 @@ class LumenSelectorView(QWidget):
 
         self.txt_search = QLineEdit()
         self.txt_search.setPlaceholderText("🔍 Filtrar repositorios por nombre o ruta...")
-        self.txt_search.setStyleSheet(
-            "background-color: #0c0d10; border: 1px solid rgba(255, 255, 255, 0.08); "
-            "border-radius: 8px; padding: 10px 14px; color: #ffffff; font-size: 13px;"
-        )
+        self.txt_search.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {P['BG_INPUT']};
+                border: 1px solid {P['BORDER_SUBTLE']};
+                border-radius: 8px;
+                padding: 10px 14px;
+                color: {P['TEXT_TITLES']};
+                font-size: 13px;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {P['BORDER_STRONG']};
+            }}
+        """)
         self.txt_search.textChanged.connect(self.filter_projects)
         filter_bar.addWidget(self.txt_search, 1)
 
@@ -79,10 +89,15 @@ class LumenSelectorView(QWidget):
         filter_bar.addWidget(self.btn_refresh)
 
         self.lbl_count = QLabel("0 proyectos")
-        self.lbl_count.setStyleSheet(
-            "background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); "
-            "border-radius: 6px; padding: 6px 12px; color: #94a3b8; font-family: 'JetBrains Mono', monospace; font-size: 11px;"
-        )
+        self.lbl_count.setStyleSheet(f"""
+            background: {P['BG_HIGHLIGHT']};
+            border: 1px solid {P['BORDER_SUBTLE']};
+            border-radius: 6px;
+            padding: 6px 12px;
+            color: {P['TEXT_MUTED']};
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+        """)
         filter_bar.addWidget(self.lbl_count)
 
         layout.addLayout(filter_bar)
@@ -199,3 +214,34 @@ class LumenSelectorView(QWidget):
     def _on_open_clicked(self):
         if self.selected_project:
             self.project_opened.emit(self.selected_project)
+
+    def set_theme(self, theme_key: str = None):
+        """Actualiza los estilos del selector y sus filas al cambiar de tema."""
+        p = get_theme_palette(theme_key)
+        if hasattr(self, "txt_search"):
+            self.txt_search.setStyleSheet(f"""
+                QLineEdit {{
+                    background-color: {p['BG_INPUT']};
+                    border: 1px solid {p['BORDER_SUBTLE']};
+                    border-radius: 8px;
+                    padding: 10px 14px;
+                    color: {p['TEXT_TITLES']};
+                    font-size: 13px;
+                }}
+                QLineEdit:focus {{
+                    border: 1px solid {p['BORDER_STRONG']};
+                }}
+            """)
+        if hasattr(self, "lbl_count"):
+            self.lbl_count.setStyleSheet(f"""
+                background: {p['BG_HIGHLIGHT']};
+                border: 1px solid {p['BORDER_SUBTLE']};
+                border-radius: 6px;
+                padding: 6px 12px;
+                color: {p['TEXT_MUTED']};
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 11px;
+            """)
+        for _, row in self.rows:
+            if hasattr(row, "refresh_theme"):
+                row.refresh_theme()

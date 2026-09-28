@@ -128,32 +128,7 @@ class ConfigView(QWidget):
         # Detectar modelos de Ollama
         detected_models = self._fetch_local_ollama_models()
 
-        # 1. Conversational Model
-        l_ai.addWidget(QLabel("Modelo Conversacional (Chatbox & Obsidian):"))
-        row_ai_chat = QHBoxLayout()
-        row_ai_chat.setSpacing(10)
-        self.cmb_cfg_chat_model = QComboBox()
-        self.cmb_cfg_chat_model.setItemDelegate(QStyledItemDelegate())
-        chat_default = self.cfg.get("ai", {}).get("chat_model", "")
-        presets_chat = list(detected_models) if detected_models else ["deepseek-r1:8b", "qwen2.5:7b", "llama3.1:8b"]
-        if chat_default and chat_default not in presets_chat:
-            presets_chat.insert(0, chat_default)
-        if "Personalizado..." not in presets_chat:
-            presets_chat.append("Personalizado...")
-        self.cmb_cfg_chat_model.addItems(presets_chat)
-        if chat_default and chat_default in presets_chat:
-            self.cmb_cfg_chat_model.setCurrentText(chat_default)
-
-        self.txt_cfg_chat_model = QLineEdit(chat_default)
-        self.txt_cfg_chat_model.setPlaceholderText("Nombre del modelo...")
-        self.cmb_cfg_chat_model.currentTextChanged.connect(
-            lambda t: self.txt_cfg_chat_model.setText(t) if t != "Personalizado..." else None
-        )
-        row_ai_chat.addWidget(self.cmb_cfg_chat_model, 1)
-        row_ai_chat.addWidget(self.txt_cfg_chat_model, 1)
-        l_ai.addLayout(row_ai_chat)
-
-        # 2. Heavy Dev Model
+        # 1. Heavy Dev Model
         l_ai.addWidget(QLabel("Modelo Pesado Dev (Refactor & Auditoría Profunda):"))
         row_ai_heavy = QHBoxLayout()
         row_ai_heavy.setSpacing(10)
@@ -270,19 +245,7 @@ class ConfigView(QWidget):
         lbl_sk_sub.setWordWrap(True)
         l_sk.addWidget(lbl_sk_sub)
 
-        # 1. Skill Conversacional
-        lbl_sk_chat = QLabel("💬 Skill: Modelo Conversacional (Chatbox & Obsidian):")
-        lbl_sk_chat.setStyleSheet("font-weight: 700; color: #fbbf24; font-size: 12px;")
-        l_sk.addWidget(lbl_sk_chat)
-
-        self.txt_sk_chat = QTextEdit()
-        self.txt_sk_chat.setMinimumHeight(65)
-        self.txt_sk_chat.setMaximumHeight(85)
-        self.txt_sk_chat.setPlaceholderText("Instrucciones personalizadas del sistema (opcional)...")
-        self.txt_sk_chat.setPlainText(get_model_skill("chat", self.config_target))
-        l_sk.addWidget(self.txt_sk_chat)
-
-        # 2. Skill Modelo Pesado
+        # 1. Skill Modelo Pesado
         lbl_sk_heavy = QLabel("🧠 Skill: Modelo Pesado Dev (Auditoría Profunda & Refactor):")
         lbl_sk_heavy.setStyleSheet("font-weight: 700; color: #c084fc; font-size: 12px;")
         l_sk.addWidget(lbl_sk_heavy)
@@ -395,20 +358,35 @@ class ConfigView(QWidget):
         self.cmb_cfg_theme = QComboBox()
         self.cmb_cfg_theme.setItemDelegate(QStyledItemDelegate())
         self.cmb_cfg_theme.addItems([
-            "🔄 Sincronizar con Sistema (Auto / Noctalia)",
-            "Noctalia Minimal", 
-            "Dark Cyberpunk", 
-            "Monocromo Puro"
+            "Oscuro (Monocromo Haute Horlogerie)",
+            "Cyberpunk (Asfalto Neón & Cian)",
+            "Lavanda (Violeta Noche Profunda)",
+            "Nord (Azul Ártico Polar & Frost)",
+            "Esmeralda (Obsidiana Táctica & Jade)",
+            "Claro / Blanco (Titanio & Slate Puro Técnico)",
+            "Pergamino (Sepia Cálido & Marfil Clásico)",
+            "Nieve (Titanio Glacial Frost Ultra Nítido)",
+            "Sakura (Cuarzo & Flor de Cerezo Refinado)",
+            "Menta (Salvia & Menta Fresca Zen)"
         ])
-        curr_th = self.cfg.get("abraxas", {}).get("theme", "dark_cyberpunk")
-        if curr_th == "system_sync" or "sync" in curr_th or "auto" in curr_th:
-            self.cmb_cfg_theme.setCurrentIndex(0)
-        elif "cyberpunk" in curr_th:
-            self.cmb_cfg_theme.setCurrentIndex(2)
-        elif "monochrome" in curr_th:
-            self.cmb_cfg_theme.setCurrentIndex(3)
-        else:
-            self.cmb_cfg_theme.setCurrentIndex(1)
+        curr_th = self.cfg.get("abraxas", {}).get("theme", "oscuro").lower().strip()
+        theme_indices = {
+            "oscuro": 0, "monochrome": 0, "default": 0,
+            "cyberpunk": 1, "dark_cyberpunk": 1,
+            "lavanda": 2, "lavender": 2,
+            "nord": 3,
+            "esmeralda": 4, "emerald": 4,
+            "claro": 5, "blanco": 5, "light": 5, "white": 5,
+            "pergamino": 6, "sepia": 6,
+            "nieve": 7, "snow": 7, "frost": 7,
+            "sakura": 8, "pink": 8, "rose": 8,
+            "menta": 9, "mint": 9, "sage": 9,
+        }
+        self.cmb_cfg_theme.setCurrentIndex(theme_indices.get(curr_th, 0))
+
+        # Previsualización reactiva instantánea al cambiar el combo
+        self.cmb_cfg_theme.currentIndexChanged.connect(self._preview_theme)
+
         row_app1.addWidget(self.cmb_cfg_theme, 1)
         l_app.addLayout(row_app1)
 
@@ -442,7 +420,6 @@ class ConfigView(QWidget):
         """Limpia el contenido de los campos de texto de skills."""
         self.txt_sk_heavy.clear()
         self.txt_sk_light.clear()
-        self.txt_sk_chat.clear()
         self.lbl_cfg_status.setText("ℹ Directivas de skills vaciadas (presiona Guardar para aplicar).")
 
     def save_config_file(self):
@@ -455,10 +432,7 @@ class ConfigView(QWidget):
         if "ai" not in self.cfg: self.cfg["ai"] = {}
         self.cfg["ai"]["enabled"] = self.chk_cfg_ai.isChecked()
         self.cfg["ai"]["provider"] = self.cmb_cfg_provider.currentText().split()[0]
-        
-        chat_final = self.txt_cfg_chat_model.text().strip() or self.cmb_cfg_chat_model.currentText()
-        if chat_final == "Personalizado...": chat_final = ""
-        self.cfg["ai"]["chat_model"] = chat_final
+        self.cfg["ai"].pop("chat_model", None)
 
         heavy_final = self.txt_cfg_heavy_model.text().strip() or self.cmb_cfg_heavy_model.currentText()
         if heavy_final == "Personalizado...": heavy_final = ""
@@ -473,13 +447,10 @@ class ConfigView(QWidget):
 
         # 2.1 AI Skills (Persistencia en archivos y config)
         os.makedirs(SKILLS_DIR, exist_ok=True)
-        sk_chat_path = os.path.join(SKILLS_DIR, "chat_skill.txt")
         sk_heavy_path = os.path.join(SKILLS_DIR, "heavy_skill.txt")
         sk_light_path = os.path.join(SKILLS_DIR, "light_skill.txt")
 
         try:
-            with open(sk_chat_path, "w", encoding="utf-8") as f:
-                f.write(self.txt_sk_chat.toPlainText().strip())
             with open(sk_heavy_path, "w", encoding="utf-8") as f:
                 f.write(self.txt_sk_heavy.toPlainText().strip())
             with open(sk_light_path, "w", encoding="utf-8") as f:
@@ -488,7 +459,7 @@ class ConfigView(QWidget):
             print(f"Error al guardar archivos de skills: {e}")
 
         if "skills" not in self.cfg["ai"]: self.cfg["ai"]["skills"] = {}
-        self.cfg["ai"]["skills"]["chat_skill_path"] = "skills/chat_skill.txt"
+        self.cfg["ai"]["skills"].pop("chat_skill_path", None)
         self.cfg["ai"]["skills"]["heavy_skill_path"] = "skills/heavy_skill.txt"
         self.cfg["ai"]["skills"]["light_skill_path"] = "skills/light_skill.txt"
 
@@ -511,23 +482,34 @@ class ConfigView(QWidget):
 
         # 5. Abraxas Theme
         if "abraxas" not in self.cfg: self.cfg["abraxas"] = {}
-        theme_raw = self.cmb_cfg_theme.currentText().lower()
-        if "sincronizar" in theme_raw or "auto" in theme_raw:
-            theme_key = "system_sync"
-        elif "cyberpunk" in theme_raw: 
-            theme_key = "dark_cyberpunk"
-        elif "monocromo" in theme_raw: 
-            theme_key = "monochrome"
-        else: 
-            theme_key = "noctalia"
-        
+        theme_key = self._get_selected_theme_key()
         self.cfg["abraxas"]["theme"] = theme_key
 
         write_toml_dict(self.config_target, self.cfg)
-        self.lbl_cfg_status.setText(f"✔ Configuración actualizada con éxito en {self.config_target}")
+        self.lbl_cfg_status.setText(f"✔ Configuración actualizada. Reiniciando ABRAXAS (Reset completo)...")
 
         self.theme_changed.emit(theme_key)
         self.config_saved.emit(self.cfg)
+
+    def _get_selected_theme_key(self) -> str:
+        idx = self.cmb_cfg_theme.currentIndex()
+        theme_map = {
+            0: "oscuro",
+            1: "cyberpunk",
+            2: "lavanda",
+            3: "nord",
+            4: "esmeralda",
+            5: "claro",
+            6: "pergamino",
+            7: "nieve",
+            8: "sakura",
+            9: "menta"
+        }
+        return theme_map.get(idx, "oscuro")
+
+    def _preview_theme(self):
+        theme_key = self._get_selected_theme_key()
+        self.theme_changed.emit(theme_key)
 
     def auto_detect_git_identity(self):
         name, email = detect_git_identity()

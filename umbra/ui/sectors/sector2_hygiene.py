@@ -69,10 +69,13 @@ class SegmentedStorageBar(QWidget):
         h = self.height()
         radius = 4.0
 
-        # 1. Canal base fresado (fondo ranurado de reloj de precisión)
+        from core.theme import get_theme_palette
+        p = get_theme_palette()
+
+        # 1. Canal base fresado (fondo ranurado de precisión táctica)
         base_path = QPainterPath()
         base_path.addRoundedRect(QRectF(0, 0, w, h), radius, radius)
-        painter.fillPath(base_path, QColor(P["BG_INPUT"]))
+        painter.fillPath(base_path, QColor(p["BG_INPUT"]))
 
         if not self.segments:
             return
@@ -92,59 +95,63 @@ class SegmentedStorageBar(QWidget):
             self._rects.append(r)
             cur_x += seg_w + gap
 
-        # 2. Renderizado de precisión con micro-gradientes monocromáticos
+        # 2. Renderizado de precisión con gradientes dinámicos del tema
         painter.save()
         painter.setClipPath(base_path)
+
+        is_light = p.get("IS_LIGHT") == "true"
 
         for i, (seg, rect) in enumerate(zip(self.segments, self._rects)):
             raw_c = seg.get("color", QColor("#666666"))
             base_color = QColor(raw_c) if not isinstance(raw_c, QColor) else raw_c
             is_free = seg.get("is_free", False)
 
-            # Gradiente vertical de titanio pulido (luz superior -> sombra base)
+            # Gradiente vertical
             grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
 
             if self.selected_index is not None:
                 if i == self.selected_index:
-                    # Enfoque puro: Blanco polar / Titanio con luz de zafiro
+                    # Enfoque puro: Brillo pleno
                     c_top = QColor(min(255, base_color.red() + 30), min(255, base_color.green() + 30), min(255, base_color.blue() + 30), 255)
                     c_bot = QColor(base_color.red(), base_color.green(), base_color.blue(), 255)
                 else:
-                    # Atenuación extrema a carbón translúcido
-                    alpha = 18 if is_free else 35
-                    c_top = QColor(255, 255, 255, alpha)
-                    c_bot = QColor(100, 100, 100, alpha)
+                    # Atenuación a translúcido
+                    alpha = 25 if is_free else 45
+                    c_top = QColor(base_color.red(), base_color.green(), base_color.blue(), alpha)
+                    c_bot = QColor(base_color.red(), base_color.green(), base_color.blue(), alpha)
             else:
                 if is_free:
-                    # Espacio libre: Carbón mate técnico con borde de respiración
-                    c_top = QColor(P["BG_SURFACE_HOVER"])
-                    c_bot = QColor(P["BG_SURFACE"])
+                    # Espacio libre: Color de superficie técnica del tema
+                    c_top = QColor(p["BG_SURFACE_HOVER"])
+                    c_bot = QColor(p["BG_SURFACE"])
                 else:
-                    # Reposo: Titanio natural calibrado
-                    c_top = QColor(min(255, base_color.red() + 20), min(255, base_color.green() + 20), min(255, base_color.blue() + 20), 235)
-                    c_bot = QColor(base_color.red(), base_color.green(), base_color.blue(), 215)
+                    # Reposo: Calibrado según color de segmento del tema
+                    c_top = QColor(min(255, base_color.red() + 20), min(255, base_color.green() + 20), min(255, base_color.blue() + 20), 240)
+                    c_bot = QColor(base_color.red(), base_color.green(), base_color.blue(), 220)
 
             grad.setColorAt(0.0, c_top)
             grad.setColorAt(1.0, c_bot)
             painter.fillRect(rect, grad)
 
-            # Micro-filamento de luz superior (0.5px) para dar aspecto de bisel de reloj
+            # Micro-filamento de luz superior
             if (self.selected_index is None and not is_free) or (i == self.selected_index):
-                painter.setPen(QPen(QColor(255, 255, 255, 90 if i != self.selected_index else 180), 1))
+                highlight_alpha = 180 if i == self.selected_index else 75
+                line_color = QColor(0, 0, 0, 40) if is_light else QColor(255, 255, 255, highlight_alpha)
+                painter.setPen(QPen(line_color, 1))
                 painter.drawLine(rect.topLeft() + QRectF(0, 0.5, 0, 0).topLeft(), rect.topRight() + QRectF(0, 0.5, 0, 0).topRight())
 
-            # Borde de zafiro para el segmento enfocado
+            # Borde para el segmento enfocado o en hover
             if i == self.selected_index:
-                painter.setPen(QPen(QColor(P["BORDER_STRONG"]), 1.5))
+                painter.setPen(QPen(QColor(p["BORDER_STRONG"]), 1.5))
                 painter.drawRect(rect.adjusted(0.75, 0.75, -0.75, -0.75))
             elif i == self.hover_index and self.selected_index is None:
-                painter.setPen(QPen(QColor(255, 255, 255, 80), 1))
+                painter.setPen(QPen(QColor(p["BORDER_MEDIUM"]), 1))
                 painter.drawRect(rect.adjusted(0.5, 0.5, -0.5, -0.5))
 
         painter.restore()
 
         # Marco exterior del canal
-        painter.setPen(QPen(QColor(P["BORDER_SUBTLE"]), 1))
+        painter.setPen(QPen(QColor(p["BORDER_SUBTLE"]), 1))
         painter.drawRoundedRect(QRectF(0.5, 0.5, w - 1, h - 1), radius, radius)
 
     def mousePressEvent(self, event):
@@ -230,11 +237,11 @@ class StorageInspectorBox(QFrame):
         layout.addLayout(v_metric)
 
         # Separador vertical fino
-        sep = QFrame()
-        sep.setFixedWidth(1)
-        sep.setFixedHeight(26)
-        sep.setStyleSheet(f"background-color: {P['BORDER_SUBTLE']};")
-        layout.addWidget(sep)
+        self.sep = QFrame()
+        self.sep.setFixedWidth(1)
+        self.sep.setFixedHeight(26)
+        self.sep.setStyleSheet(f"background-color: {P['BORDER_SUBTLE']};")
+        layout.addWidget(self.sep)
 
         # Columna 2: Identidad & Ubicación
         v_desc = QVBoxLayout()
@@ -255,6 +262,33 @@ class StorageInspectorBox(QFrame):
         self.btn_action.setVisible(False)
         self.btn_action.clicked.connect(self._on_action_clicked)
         layout.addWidget(self.btn_action)
+
+    def refresh_theme(self):
+        from core.theme import get_theme_palette
+        p = get_theme_palette()
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {p["BG_HIGHLIGHT"]};
+                border: 1px solid {p["BORDER_SUBTLE"]};
+                border-radius: 6px;
+            }}
+        """)
+        if hasattr(self, "lbl_tag"):
+            self.lbl_tag.setStyleSheet(f"color: {p['TEXT_MICRO']}; font-size: 8.5px; font-weight: 700; letter-spacing: 1.2px; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "lbl_metric"):
+            self.lbl_metric.setStyleSheet(f"color: {p['TEXT_TITLES']}; font-size: 13px; font-weight: 800; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "lbl_cat"):
+            self.lbl_cat.setStyleSheet(f"color: {p['TEXT_MUTED']}; font-size: 11px;")
+        if hasattr(self, "lbl_path"):
+            self.lbl_path.setStyleSheet(f"color: {p['TEXT_MICRO']}; font-size: 10px; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "sep"):
+            self.sep.setStyleSheet(f"background-color: {p['BORDER_SUBTLE']};")
+        if self.current_seg is None and hasattr(self, "indicator_bar"):
+            self.indicator_bar.setStyleSheet(f"background-color: {p['BORDER_MEDIUM']}; border-radius: 1px;")
+        elif self.current_seg is not None and hasattr(self, "indicator_bar"):
+            raw_c = self.current_seg.get("color", QColor("#ffffff"))
+            color = QColor(raw_c) if not isinstance(raw_c, QColor) else raw_c
+            self.indicator_bar.setStyleSheet(f"background-color: {color.name()}; border-radius: 1px;")
 
     def _on_action_clicked(self):
         if not self.current_seg:
@@ -336,13 +370,6 @@ class DiskCard(QFrame):
 
     def init_ui(self, model_name: str):
         self.setProperty("class", "sector_card")
-        self.setStyleSheet(f"""
-            QFrame.sector_card {{
-                background-color: {P["BG_SURFACE"]};
-                border: 1px solid {P["BORDER_SUBTLE"]};
-                border-radius: 8px;
-            }}
-        """)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
         layout.setSpacing(10)
@@ -356,29 +383,30 @@ class DiskCard(QFrame):
         v_title.setSpacing(1)
 
         bus_label = "NVME GEN4 // SISTEMA" if self.disk_type == "nvme" else ("USB EXTRAÍBLE" if self.disk_type == "usb" else "SATA BUS // SECUNDARIO")
-        lbl_micro = QLabel(f"◈ DISCO // {self.disk_id.upper()}  ·  {bus_label}")
-        lbl_micro.setStyleSheet(f"color: {P['TEXT_MICRO']}; font-size: 8.5px; font-weight: 700; letter-spacing: 1.2px; font-family: 'JetBrains Mono', monospace;")
+        self.lbl_micro = QLabel(f"◈ DISCO // {self.disk_id.upper()}  ·  {bus_label}")
+        self.lbl_micro.setStyleSheet(f"color: {P['TEXT_MICRO']}; font-size: 8.5px; font-weight: 700; letter-spacing: 1.2px; font-family: 'JetBrains Mono', monospace;")
 
-        lbl_name = QLabel(model_name)
-        lbl_name.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-weight: 700; font-size: 13px; font-family: 'JetBrains Mono', monospace;")
+        self.lbl_name = QLabel(model_name)
+        self.lbl_name.setStyleSheet(f"color: {P['TEXT_TITLES']}; font-weight: 700; font-size: 13px; font-family: 'JetBrains Mono', monospace;")
 
-        v_title.addWidget(lbl_micro)
-        v_title.addWidget(lbl_name)
+        v_title.addWidget(self.lbl_micro)
+        v_title.addWidget(self.lbl_name)
         h_box.addLayout(v_title)
 
+        self.badge = None
         if self.badge_text:
-            badge = QLabel(self.badge_text)
-            badge.setStyleSheet(f"color: {P['TEXT_BODY']}; font-size: 9px; font-weight: 700; background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_MEDIUM']}; padding: 2px 7px; border-radius: 4px; font-family: 'JetBrains Mono', monospace;")
-            h_box.addWidget(badge)
+            self.badge = QLabel(self.badge_text)
+            self.badge.setStyleSheet(f"color: {P['TEXT_BODY']}; font-size: 9px; font-weight: 700; background: {P['BG_HIGHLIGHT']}; border: 1px solid {P['BORDER_MEDIUM']}; padding: 2px 7px; border-radius: 4px; font-family: 'JetBrains Mono', monospace;")
+            h_box.addWidget(self.badge)
 
         h_box.addStretch()
 
         # Telemetría de capacidad compacta
         free_bytes = max(0, self.total_bytes - self.used_bytes)
         pct_used = (self.used_bytes / max(1, self.total_bytes)) * 100
-        lbl_stats = QLabel(f"<span style='color:{P['TEXT_TITLES']}; font-weight:800;'>{_fmt_size(self.used_bytes)}</span> <span style='color:{P['TEXT_MICRO']};'>({pct_used:.1f}%)</span>  ·  <span style='color:{P['TEXT_MUTED']};'>{_fmt_size(free_bytes)} Libre</span>")
-        lbl_stats.setStyleSheet("font-size: 11px; font-family: 'JetBrains Mono', monospace;")
-        h_box.addWidget(lbl_stats)
+        self.lbl_stats = QLabel(f"<span style='color:{P['TEXT_TITLES']}; font-weight:800;'>{_fmt_size(self.used_bytes)}</span> <span style='color:{P['TEXT_MICRO']};'>({pct_used:.1f}%)</span>  ·  <span style='color:{P['TEXT_MUTED']};'>{_fmt_size(free_bytes)} Libre</span>")
+        self.lbl_stats.setStyleSheet("font-size: 11px; font-family: 'JetBrains Mono', monospace;")
+        h_box.addWidget(self.lbl_stats)
 
         layout.addLayout(h_box)
 
@@ -433,9 +461,12 @@ class DiskCard(QFrame):
     def _on_segment_selected(self, seg: dict | None):
         self.inspector.set_segment(seg, self.total_bytes)
         sel_idx = self.bar.selected_index
+        from core.theme import get_theme_palette
+        p = get_theme_palette()
+
         for i, btn in enumerate(self.pill_buttons):
             seg_i = self.segments[i]
-            raw_c = seg_i.get("color", QColor(P["TEXT_TITLES"]))
+            raw_c = seg_i.get("color", QColor(p["TEXT_TITLES"]))
             color = QColor(raw_c) if not isinstance(raw_c, QColor) else raw_c
             c_hex = color.name()
 
@@ -443,10 +474,10 @@ class DiskCard(QFrame):
                 if i == sel_idx:
                     btn.setStyleSheet(f"""
                         QPushButton {{
-                            background: {P["ACCENT_PILL"]};
-                            border: 1px solid {P["BORDER_STRONG"]};
+                            background: {p["ACCENT_PILL"]};
+                            border: 1px solid {p["BORDER_STRONG"]};
                             border-radius: 3px;
-                            color: {P["TEXT_TITLES"]};
+                            color: {p["TEXT_TITLES"]};
                             font-size: 9.5px;
                             font-family: 'JetBrains Mono', monospace;
                             font-weight: 800;
@@ -458,7 +489,7 @@ class DiskCard(QFrame):
                         QPushButton {{
                             background: transparent;
                             border: 1px solid transparent;
-                            color: rgba(255, 255, 255, 0.20);
+                            color: {p.get("BORDER_MEDIUM", "rgba(255, 255, 255, 0.20)")};
                             font-size: 9.5px;
                             font-family: 'JetBrains Mono', monospace;
                             font-weight: 500;
@@ -469,7 +500,7 @@ class DiskCard(QFrame):
                 btn.setStyleSheet(f"""
                     QPushButton {{
                         background: transparent;
-                        border: 1px solid {P["BORDER_SUBTLE"]};
+                        border: 1px solid {p["BORDER_SUBTLE"]};
                         border-radius: 3px;
                         color: {c_hex};
                         font-size: 9.5px;
@@ -478,11 +509,70 @@ class DiskCard(QFrame):
                         padding: 2px 7px;
                     }}
                     QPushButton:hover {{
-                        border-color: {P["BORDER_STRONG"]};
-                        background: {P["BG_HIGHLIGHT"]};
-                        color: {P["TEXT_TITLES"]};
+                        border-color: {p["BORDER_STRONG"]};
+                        background: {p["BG_HIGHLIGHT"]};
+                        color: {p["TEXT_TITLES"]};
                     }}
                 """)
+
+    def set_theme(self, theme_key=None):
+        """Actualiza la barra de almacenamiento y componentes al cambiar de tema."""
+        from core.theme import get_theme_palette, get_theme_storage_palette
+        p = get_theme_palette(theme_key)
+        storage_palette = get_theme_storage_palette(theme_key)
+
+        # 1. Re-colorear los segmentos con la paleta de almacenamiento del nuevo tema
+        c_idx = 0
+        for seg in self.segments:
+            if not seg.get("is_free", False):
+                seg["color"] = QColor(storage_palette[c_idx % len(storage_palette)])
+                c_idx += 1
+            else:
+                seg["color"] = QColor(p["BG_SURFACE_HOVER"])
+        self.bar.set_data(self.segments, self.total_bytes)
+
+        # 2. Actualizar etiquetas de texto
+        if hasattr(self, "lbl_micro"):
+            self.lbl_micro.setStyleSheet(f"color: {p['TEXT_MICRO']}; font-size: 8.5px; font-weight: 700; letter-spacing: 1.2px; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "lbl_name"):
+            self.lbl_name.setStyleSheet(f"color: {p['TEXT_TITLES']}; font-weight: 700; font-size: 13px; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "badge") and self.badge:
+            self.badge.setStyleSheet(f"color: {p['TEXT_BODY']}; font-size: 9px; font-weight: 700; background: {p['BG_HIGHLIGHT']}; border: 1px solid {p['BORDER_MEDIUM']}; padding: 2px 7px; border-radius: 4px; font-family: 'JetBrains Mono', monospace;")
+        if hasattr(self, "lbl_stats"):
+            free_bytes = max(0, self.total_bytes - self.used_bytes)
+            pct_used = (self.used_bytes / max(1, self.total_bytes)) * 100
+            self.lbl_stats.setText(f"<span style='color:{p['TEXT_TITLES']}; font-weight:800;'>{_fmt_size(self.used_bytes)}</span> <span style='color:{p['TEXT_MICRO']};'>({pct_used:.1f}%)</span>  ·  <span style='color:{p['TEXT_MUTED']};'>{_fmt_size(free_bytes)} Libre</span>")
+
+        # 3. Actualizar botones pills de segmentos
+        for i, btn in enumerate(self.pill_buttons):
+            if i < len(self.segments):
+                seg = self.segments[i]
+                c_hex = seg["color"].name()
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background: transparent;
+                        border: 1px solid {p["BORDER_SUBTLE"]};
+                        border-radius: 3px;
+                        color: {c_hex};
+                        font-size: 9.5px;
+                        font-family: 'JetBrains Mono', monospace;
+                        font-weight: 600;
+                        padding: 2px 7px;
+                    }}
+                    QPushButton:hover {{
+                        border-color: {p["BORDER_STRONG"]};
+                        background: {p["BG_HIGHLIGHT"]};
+                        color: {p["TEXT_TITLES"]};
+                    }}
+                """)
+
+        # 4. Actualizar inspector
+        if hasattr(self, "inspector"):
+            self.inspector.refresh_theme()
+
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
 
 
 class DiskScanWorker(QThread):
@@ -525,14 +615,6 @@ class Sector2HygieneView(QWidget):
         # 1. Cabecera Táctica del Sector
         top_card = QFrame()
         top_card.setProperty("class", "sector_card")
-        top_card.setStyleSheet(f"""
-            QFrame {{
-                background-color: {P["BG_SURFACE"]};
-                border: 1px solid {P["BORDER_SUBTLE"]};
-                border-radius: 8px;
-                padding: 10px 14px;
-            }}
-        """)
         top_l = QHBoxLayout(top_card)
         top_l.setContentsMargins(10, 8, 10, 8)
         top_l.setSpacing(12)
@@ -543,11 +625,11 @@ class Sector2HygieneView(QWidget):
         tag.setProperty("class", "sector_micro_tag")
         title = QLabel("Higienización de Almacenamiento & Auditoría de Masa Crítica")
         title.setProperty("class", "sector_title")
-        desc = QLabel("Inspección continua de bloques físicos (NVMe, SATA y USB). Selecciona cualquier segmento para aislar su volumen.")
-        desc.setStyleSheet(f"color: {P['TEXT_MUTED']}; font-size: 11px;")
+        self.desc = QLabel("Inspección continua de bloques físicos (NVMe, SATA y USB). Selecciona cualquier segmento para aislar su volumen.")
+        self.desc.setStyleSheet(f"color: {P['TEXT_MUTED']}; font-size: 11px;")
         v_head.addWidget(tag)
         v_head.addWidget(title)
-        v_head.addWidget(desc)
+        v_head.addWidget(self.desc)
         top_l.addLayout(v_head, 1)
 
         # Acciones de Auditoría
@@ -579,6 +661,20 @@ class Sector2HygieneView(QWidget):
         main_layout.addWidget(scroll, 1)
 
         self.refresh_disks()
+
+    def set_theme(self, theme_key: str = None):
+        """Propaga el tema activo a todas las tarjetas de disco y barras de almacenamiento."""
+        from core.theme import get_theme_palette
+        p = get_theme_palette(theme_key)
+        if hasattr(self, "desc"):
+            self.desc.setStyleSheet(f"color: {p['TEXT_MUTED']}; font-size: 11px;")
+        for i in range(self.l_disks.count()):
+            item = self.l_disks.itemAt(i)
+            if item and item.widget() and hasattr(item.widget(), "set_theme"):
+                item.widget().set_theme(theme_key)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
 
     def refresh_disks(self):
         """Escanea todos los discos del sistema y puebla la UI de forma asíncrona."""

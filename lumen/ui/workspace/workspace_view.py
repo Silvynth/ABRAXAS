@@ -285,6 +285,21 @@ class LumenWorkspaceView(QWidget):
     def _on_action_requested(self, action: str, data: dict):
         self.terminal.log_info("ACTION", f"Comando disparado: <b>{action}</b> {data if data else ''}")
 
+    def set_theme(self, theme_key: str = None):
+        """Propaga el cambio de tema al HUD, barra de navegación, sectores y terminal."""
+        if hasattr(self, "hud") and self.hud and hasattr(self.hud, "set_theme"):
+            self.hud.set_theme(theme_key)
+        if hasattr(self, "pill_nav") and hasattr(self.pill_nav, "refresh_theme"):
+            self.pill_nav.refresh_theme()
+        for s in [self.sector0, self.sector1, self.sector2, self.sector3]:
+            if s:
+                if hasattr(s, "set_theme"):
+                    s.set_theme(theme_key)
+                elif hasattr(s, "git_graph") and hasattr(s.git_graph, "set_theme"):
+                    s.git_graph.set_theme(theme_key)
+        if hasattr(self, "terminal") and hasattr(self.terminal, "refresh_theme"):
+            self.terminal.refresh_theme()
+
     def teardown(self):
         """Finaliza todos los procesos en segundo plano, hilos, watchers y timers al salir del proyecto."""
         # 1. Detener timer de sincronización

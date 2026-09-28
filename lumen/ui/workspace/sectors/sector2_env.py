@@ -25,6 +25,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCursor, QTextCursor
 
 from lumen.models.project import Project
+from core.theme import MONOCHROME_PALETTE as P
 from core.environments import (
     detect_installed_editors, get_preferred_editor, set_preferred_editor, launch_project_in_editor,
     inspect_python_venv, activate_python_venv, deactivate_python_venv, create_python_venv,
@@ -680,7 +681,7 @@ class Sector2EnvView(QWidget):
             ports_str = c.get("ports", "").strip()
             if ports_str:
                 p_lbl = QLabel(f"Puertos: {ports_str}")
-                p_lbl.setStyleSheet("font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #cbd5e1;")
+                p_lbl.setStyleSheet(f"font-family: 'JetBrains Mono', monospace; font-size: 10px; color: {P['TEXT_BODY']};")
                 r_layout.addWidget(p_lbl)
 
             # Fila de acciones por contenedor
@@ -1259,7 +1260,7 @@ class Sector2EnvView(QWidget):
 
             # Badge de puerto
             lbl_port = QLabel(f":{port_num}")
-            lbl_port.setStyleSheet("font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 800; color: #ffffff;")
+            lbl_port.setStyleSheet(f"font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 800; color: {P['TEXT_TITLES']};")
             r_l.addWidget(lbl_port)
 
             # Proceso y comando
@@ -1379,7 +1380,7 @@ class Sector2EnvView(QWidget):
 
             # Fila 2: Tipo y Binario
             desc_lbl = QLabel(f"{e_type.upper()} // <code>{e_bin}</code>")
-            desc_lbl.setStyleSheet("font-size: 9.5px; color: #94a3b8; font-family: 'JetBrains Mono', monospace;")
+            desc_lbl.setStyleSheet(f"font-size: 9.5px; color: {P['TEXT_MUTED']}; font-family: 'JetBrains Mono', monospace;")
             c_l.addWidget(desc_lbl)
 
             # Fila 3: Botonera
