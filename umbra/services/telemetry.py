@@ -326,6 +326,15 @@ class UmbraStatusRibbonCollector:
         self.last_pkg_count = 0
         self.last_pkg_summary = "Sistema sincronizado"
         self.last_pkg_time = 0.0
+        self._active_proc = None
+
+    def cancel_active_proc(self):
+        """Cancela cualquier subproceso activo de comprobación de paquetes para salida inmediata."""
+        if self._active_proc and self._active_proc.poll() is None:
+            try:
+                self._active_proc.kill()
+            except Exception:
+                pass
 
     def collect_vault_metrics(self) -> tuple[int, int]:
         total = 0
@@ -358,27 +367,41 @@ class UmbraStatusRibbonCollector:
         count = 0
         summary = "Todos los paquetes sincronizados"
         try:
-            res = subprocess.run(["checkupdates"], capture_output=True, text=True, timeout=4)
-            if res.returncode == 0 and res.stdout.strip():
-                lines = [l.strip() for l in res.stdout.strip().split("\n") if l.strip()]
-                count = len(lines)
-                if count > 0:
-                    summary = f"{lines[0].split()[0]} · CachyOS / Arch al día"
-            elif res.returncode == 2:
-                count = 0
-                summary = "Sistema al 100% sincronizado"
+            self._active_proc = subprocess.Popen(["checkupdates"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                stdout, _ = self._active_proc.communicate(timeout=4)
+                if self._active_proc.returncode == 0 and stdout.strip():
+                    lines = [l.strip() for l in stdout.strip().split("\n") if l.strip()]
+                    count = len(lines)
+                    if count > 0:
+                        summary = f"{lines[0].split()[0]} · CachyOS / Arch al día"
+                elif self._active_proc.returncode == 2:
+                    count = 0
+                    summary = "Sistema al 100% sincronizado"
+            except subprocess.TimeoutExpired:
+                self._active_proc.kill()
+                self._active_proc.communicate()
         except Exception:
             pass
+        finally:
+            self._active_proc = None
 
         try:
-            aur_res = subprocess.run(["yay", "-Qua"], capture_output=True, text=True, timeout=2)
-            if aur_res.returncode == 0 and aur_res.stdout.strip():
-                aur_lines = [l.strip() for l in aur_res.stdout.strip().split("\n") if l.strip()]
-                count += len(aur_lines)
-                if aur_lines and count == len(aur_lines):
-                    summary = f"{aur_lines[0].split()[0]} · AUR al día"
+            self._active_proc = subprocess.Popen(["yay", "-Qua"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                aur_out, _ = self._active_proc.communicate(timeout=2)
+                if self._active_proc.returncode == 0 and aur_out.strip():
+                    aur_lines = [l.strip() for l in aur_out.strip().split("\n") if l.strip()]
+                    count += len(aur_lines)
+                    if aur_lines and count == len(aur_lines):
+                        summary = f"{aur_lines[0].split()[0]} · AUR al día"
+            except subprocess.TimeoutExpired:
+                self._active_proc.kill()
+                self._active_proc.communicate()
         except Exception:
             pass
+        finally:
+            self._active_proc = None
 
         self.last_pkg_count = count
         self.last_pkg_summary = summary

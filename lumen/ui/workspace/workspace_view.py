@@ -56,33 +56,28 @@ class LumenWorkspaceView(QWidget):
         root_layout.addWidget(self.pill_nav)
 
         # -------------------------------------------------------------
-        # 3. ZONA DINÁMICA DE SECTORES (QStackedWidget)
+        # 3. ZONA DINÁMICA DE SECTORES (QStackedWidget con Lazy Loading)
         # -------------------------------------------------------------
         self.main_stack = QStackedWidget()
 
-        # Sector 00: Panorama Ejecutivo (Grafo vertical + Commits/Autores + Archivos)
+        # Sector 00: Panorama Ejecutivo (inmediato)
         self.sector0 = Sector0OverviewView(self.project)
         self.sector0.log_emitted.connect(self._on_log_emitted)
         self.sector0.action_requested.connect(self._on_action_requested)
         self.main_stack.addWidget(self.sector0)
 
-        # Sector 01: Protocolo Git y Operaciones
-        self.sector1 = Sector1GitView(self.project)
-        self.sector1.log_emitted.connect(self._on_log_emitted)
-        self.sector1.action_requested.connect(self._on_action_requested)
-        self.main_stack.addWidget(self.sector1)
+        # Placeholders diferidos para Sectores 01, 02 y 03
+        self.sector1 = None
+        self.sector2 = None
+        self.sector3 = None
 
-        # Sector 02: Entornos & Runtime
-        self.sector2 = Sector2EnvView(self.project)
-        self.sector2.log_emitted.connect(self._on_log_emitted)
-        self.sector2.action_requested.connect(self._on_action_requested)
-        self.main_stack.addWidget(self.sector2)
+        self.placeholder1 = QWidget()
+        self.placeholder2 = QWidget()
+        self.placeholder3 = QWidget()
 
-        # Sector 03: Herramientas & IA Local
-        self.sector3 = Sector3AiView(self.project)
-        self.sector3.log_emitted.connect(self._on_log_emitted)
-        self.sector3.action_requested.connect(self._on_action_requested)
-        self.main_stack.addWidget(self.sector3)
+        self.main_stack.addWidget(self.placeholder1)
+        self.main_stack.addWidget(self.placeholder2)
+        self.main_stack.addWidget(self.placeholder3)
 
         root_layout.addWidget(self.main_stack, 1)
 
@@ -189,24 +184,36 @@ class LumenWorkspaceView(QWidget):
         self.project.unstaged_count = unstaged
         self.project.untracked_count = untracked
 
-        # Re-sincronizar sectores y HUD
+        # Re-sincronizar HUD
         self.hud.update_project(self.project)
-        self.sector0.update_project(self.project)
-        self.sector1.update_project(self.project)
-        self.sector2.update_project(self.project)
-        self.sector3.update_project(self.project)
+
+        # Re-sincronizar ÚNICAMENTE el sector actualmente visible en pantalla
+        active_idx = self.main_stack.currentIndex()
+        if active_idx == 0 and hasattr(self, "sector0") and self.sector0:
+            self.sector0.update_project(self.project)
+        elif active_idx == 1 and hasattr(self, "sector1") and self.sector1:
+            self.sector1.update_project(self.project)
+        elif active_idx == 2 and hasattr(self, "sector2") and self.sector2:
+            self.sector2.update_project(self.project)
+        elif active_idx == 3 and hasattr(self, "sector3") and self.sector3:
+            self.sector3.update_project(self.project)
 
         # Re-asegurar rutas vigiladas si el FS eliminó o recreó ficheros
         self._setup_fs_watcher(path)
 
     def set_project(self, project: Project):
-        """Asigna un nuevo proyecto activo y sincroniza todos los componentes."""
+        """Asigna un nuevo proyecto activo y sincroniza el HUD y el sector activo."""
         self.project = project
         self.hud.update_project(project)
-        self.sector0.update_project(project)
-        self.sector1.update_project(project)
-        self.sector2.update_project(project)
-        self.sector3.update_project(project)
+        active_idx = self.main_stack.currentIndex()
+        if active_idx == 0 and hasattr(self, "sector0") and self.sector0:
+            self.sector0.update_project(project)
+        elif active_idx == 1 and hasattr(self, "sector1") and self.sector1:
+            self.sector1.update_project(project)
+        elif active_idx == 2 and hasattr(self, "sector2") and self.sector2:
+            self.sector2.update_project(project)
+        elif active_idx == 3 and hasattr(self, "sector3") and self.sector3:
+            self.sector3.update_project(project)
         self.terminal.set_prompt(f"lumen@{project.name}:~$")
         if project and project.path:
             self.terminal.set_working_directory(str(project.path))
@@ -214,7 +221,29 @@ class LumenWorkspaceView(QWidget):
         self.terminal.log_success("WORKSPACE", f"Espacio de trabajo montado para <b>{project.name}</b> (v{project.semver})")
 
     def switch_sector_view(self, index: int):
-        """Alterna entre el Sector 0 (Topología/Estado) y los sectores 1, 2, 3."""
+        """Alterna entre el Sector 0 (Topología/Estado) y los sectores 1, 2, 3 con instanciación bajo demanda."""
+        if index == 1 and self.sector1 is None:
+            self.sector1 = Sector1GitView(self.project)
+            self.sector1.log_emitted.connect(self._on_log_emitted)
+            self.sector1.action_requested.connect(self._on_action_requested)
+            self.main_stack.removeWidget(self.placeholder1)
+            self.placeholder1.deleteLater()
+            self.main_stack.insertWidget(1, self.sector1)
+        elif index == 2 and self.sector2 is None:
+            self.sector2 = Sector2EnvView(self.project)
+            self.sector2.log_emitted.connect(self._on_log_emitted)
+            self.sector2.action_requested.connect(self._on_action_requested)
+            self.main_stack.removeWidget(self.placeholder2)
+            self.placeholder2.deleteLater()
+            self.main_stack.insertWidget(2, self.sector2)
+        elif index == 3 and self.sector3 is None:
+            self.sector3 = Sector3AiView(self.project)
+            self.sector3.log_emitted.connect(self._on_log_emitted)
+            self.sector3.action_requested.connect(self._on_action_requested)
+            self.main_stack.removeWidget(self.placeholder3)
+            self.placeholder3.deleteLater()
+            self.main_stack.insertWidget(3, self.sector3)
+
         self.main_stack.setCurrentIndex(index)
         sector_names = [
             "SECTOR 00: TOPOLOGÍA & ESTADO",
@@ -224,6 +253,16 @@ class LumenWorkspaceView(QWidget):
         ]
         if 0 <= index < len(sector_names):
             self.terminal.log_info("NAV", f"Navegando a: {sector_names[index]}")
+
+        # Sincronizar el sector al activarlo
+        if index == 0 and hasattr(self, "sector0") and self.sector0:
+            self.sector0.update_project(self.project)
+        elif index == 1 and hasattr(self, "sector1") and self.sector1:
+            self.sector1.update_project(self.project)
+        elif index == 2 and hasattr(self, "sector2") and self.sector2:
+            self.sector2.update_project(self.project)
+        elif index == 3 and hasattr(self, "sector3") and self.sector3:
+            self.sector3.update_project(self.project)
 
     def refresh_project(self):
         """Refresco manual disparado por el botón Sincronizar del HUD."""

@@ -16,7 +16,7 @@ from PySide6.QtCore import Qt, Signal, QTimer, QThread, QVariantAnimation, QEasi
 from PySide6.QtGui import QDesktopServices, QCursor
 
 from lumen.models.project import Project
-from core.lumen_sync import get_full_project_sync
+from core.process import run_command
 from core.umbra_backend import UmbraHardwareCollector
 
 
@@ -428,41 +428,52 @@ class ProjectHud(QFrame):
         self.lbl_current_time.setText(datetime.now().strftime("%H:%M:%S"))
 
     def update_project(self, project: Project):
-        """Actualiza el sub-panel izquierdo con la telemetría real del proyecto."""
+        """Actualiza el sub-panel izquierdo con la telemetría real del proyecto de forma instantánea y local."""
         self.project = project
-        p_path = str(project.path) if project and project.path else ""
+        if not project or not project.path:
+            return
 
-        try:
-            sync = get_full_project_sync(p_path) if p_path else {}
-        except Exception:
-            sync = {}
-
-        # 1. Proyecto | Rama | Remoto
-        name = sync.get("name") or (project.name if project else "Sin Proyecto")
-        ver = sync.get("version") or (f"v{project.semver}" if project else "v0.0.0")
+        name = project.name or "Sin Proyecto"
+        ver = f"v{project.semver}" if project.semver else "v0.0.0"
         self.lbl_proj_title.setText(f"{name} ({ver})")
 
-        git_info = sync.get("git_info", {})
-        branch = git_info.get("branch") or (project.current_branch if project else "(Sin Git)")
+        branch = project.current_branch or "(Sin Git)"
         self.lbl_proj_branch.setText(branch)
 
-        remote = git_info.get("remote") or "Local"
-        self.lbl_proj_remote.setText(remote)
+        # 1. Remoto local ultrarrápido (desde .git/config sin latencia de red)
+        remote_display = "Solo Local [🔒]"
+        if project.is_git:
+            try:
+                res = run_command(["git", "config", "--get", "remote.origin.url"], cwd=project.path)
+                if res.success and res.stdout.strip():
+                    url = res.stdout.strip()
+                    repo_n = url.split("/")[-1].replace(".git", "") if "/" in url else "origin"
+                    remote_display = f"{repo_n} [Remoto]"
+            except Exception:
+                pass
+        self.lbl_proj_remote.setText(remote_display)
 
-        # 2. Entorno | Docker
-        env_info = sync.get("env_info")
-        env_text = env_info.get("text", "Sin Entorno") if isinstance(env_info, dict) else "Sin Entorno"
+        # 2. Entorno virtual ultrarrápido (verificación directa del filesystem)
+        env_text = "Sin Entorno"
+        p_path = Path(project.path)
+        for vname in [".venv", "venv", "env"]:
+            if (p_path / vname).is_dir():
+                env_text = f"● Python ({vname})"
+                break
         self.lbl_env_status.setText(env_text)
 
-        docker_info = sync.get("docker_info")
-        docker_text = docker_info.get("text", "0 activos") if isinstance(docker_info, dict) else "0 activos"
+        # 3. Docker (detección ligera de compose/dockerfile)
+        has_docker = (p_path / "Dockerfile").exists() or (p_path / "docker-compose.yml").exists() or (p_path / "compose.yaml").exists()
+        docker_text = "Compose listo" if has_docker else "0 activos"
         self.lbl_docker_status.setText(docker_text)
 
-        # 3. Git HUD
-        git_hud = sync.get("git_hud", {})
-        self.lbl_git_mod.setText(git_hud.get("mod_str", "0 modificados"))
-        self.lbl_git_untracked.setText(git_hud.get("untracked_str", "0 no rastreados"))
-        self.lbl_git_deleted.setText(str(git_hud.get("deleted_str", "0")))
+        # 4. Git HUD (usando las métricas ya calculadas del proyecto)
+        unstaged = getattr(project, "unstaged_count", 0)
+        untracked = getattr(project, "untracked_count", 0)
+        staged = getattr(project, "staged_count", 0)
+        self.lbl_git_mod.setText(f"{unstaged} modificados" if unstaged else "0 modificados")
+        self.lbl_git_untracked.setText(f"{untracked} no rastreados" if untracked else "0 no rastreados")
+        self.lbl_git_deleted.setText(f"{staged} preparados" if staged else "0 preparados")
 
     def update_telemetry(self, snap: dict):
         """Actualiza el sub-panel derecho con los datos vivos de hardware."""

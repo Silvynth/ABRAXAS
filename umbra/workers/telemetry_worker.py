@@ -19,6 +19,13 @@ class UmbraTelemetryWorker(QThread):
     def stop(self):
         self.running = False
 
+    def _sleep_interruptible(self, seconds: float):
+        steps = int(seconds / 0.05)
+        for _ in range(max(1, steps)):
+            if not self.running:
+                break
+            time.sleep(0.05)
+
     def run(self):
         while self.running:
             try:
@@ -26,7 +33,7 @@ class UmbraTelemetryWorker(QThread):
                 self.data_updated.emit(snapshot)
             except Exception:
                 pass
-            time.sleep(0.8)
+            self._sleep_interruptible(0.8)
 
 class UmbraRibbonWorker(QThread):
     """Worker asíncrono para métricas de Obsidian, Pacman y Btrfs."""
@@ -55,6 +62,15 @@ class UmbraRibbonWorker(QThread):
 
     def stop(self):
         self.running = False
+        if hasattr(self.collector, "cancel_active_proc"):
+            self.collector.cancel_active_proc()
+
+    def _sleep_interruptible(self, seconds: float):
+        steps = int(seconds / 0.05)
+        for _ in range(max(1, steps)):
+            if not self.running:
+                break
+            time.sleep(0.05)
 
     def run(self):
         while self.running:
@@ -63,4 +79,4 @@ class UmbraRibbonWorker(QThread):
                 self.ribbon_updated.emit(snapshot)
             except Exception:
                 pass
-            time.sleep(2.5)
+            self._sleep_interruptible(2.5)

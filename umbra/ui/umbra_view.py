@@ -73,12 +73,16 @@ class UmbraView(QWidget):
         self.sector0.action_requested.connect(self._on_action_requested)
         self.main_stack.addWidget(self.sector0)
 
-        # Sector 01: Software (Placeholder en preparación)
+        # Sector 01: Software & Auditoría de Updates (HABILITADO)
         self.sector1 = Sector1SoftwareView(self)
+        self.sector1.log_emitted.connect(self._on_log_emitted)
+        self.sector1.action_requested.connect(self._on_action_requested)
         self.main_stack.addWidget(self.sector1)
 
-        # Sector 02: Higiene (Placeholder en preparación)
+        # Sector 02: Higiene & Auditoría de Almacenamiento (HABILITADO)
         self.sector2 = Sector2HygieneView(self)
+        self.sector2.log_emitted.connect(self._on_log_emitted)
+        self.sector2.action_requested.connect(self._on_action_requested)
         self.main_stack.addWidget(self.sector2)
 
         layout.addWidget(self.main_stack, 1)
@@ -126,8 +130,16 @@ class UmbraView(QWidget):
         """Detención limpia de hilos."""
         if hasattr(self, "telemetry_worker") and self.telemetry_worker.isRunning():
             self.telemetry_worker.stop()
-            self.telemetry_worker.wait(500)
+            if not self.telemetry_worker.wait(100):
+                self.telemetry_worker.terminate()
+                self.telemetry_worker.wait(50)
         if hasattr(self, "ribbon_worker") and self.ribbon_worker.isRunning():
             self.ribbon_worker.stop()
-            self.ribbon_worker.wait(500)
+            if not self.ribbon_worker.wait(100):
+                self.ribbon_worker.terminate()
+                self.ribbon_worker.wait(50)
+        if hasattr(self, "sector1") and hasattr(self.sector1, "teardown"):
+            self.sector1.teardown()
+        if hasattr(self, "sector2") and hasattr(self.sector2, "teardown"):
+            self.sector2.teardown()
         super().closeEvent(event)

@@ -2452,13 +2452,13 @@ class Sector13SyncView(QWidget):
     def _refresh_telemetry(self):
         """Disparador manual de refresco."""
         if self.project and self.project.path:
-            self._refresh_all_telemetry(Path(self.project.path))
+            self._refresh_all_telemetry(Path(self.project.path), force_refresh=True)
             self.log_emitted.emit("Super Git Status y topología actualizados.")
 
-    def _refresh_all_telemetry(self, p_path: Path):
+    def _refresh_all_telemetry(self, p_path: Path, force_refresh: bool = False):
         """Calcula el estado de Git, divergencia, stashes, visibilidad en GitHub y proyecta el grafo."""
-        # 1. Visibilidad en GitHub & Datos de Identidad
-        vis_data = get_repo_visibility(str(p_path), force_refresh=True)
+        # 1. Visibilidad en GitHub & Datos de Identidad (usa caché TTL salvo refresco manual)
+        vis_data = get_repo_visibility(str(p_path), force_refresh=force_refresh)
 
         res_url = run_command(["git", "config", "--get", "remote.origin.url"], cwd=p_path)
         remote_url = res_url.stdout.strip() if res_url.success else "Sin remoto configurado"
@@ -2972,16 +2972,659 @@ class Sector13SyncView(QWidget):
 
 
 # =============================================================
-# SECTOR 01: ORQUESTADOR PRINCIPAL (3 NODOS MAESTROS)
+# SUB-SECTOR 1.4: CONTROL DE HISTORIAL Y RESET TÁCTICO
+# =============================================================
+
+class Sector14ResetView(QWidget):
+    """
+    Sub-sector 1.4: Rebobinado Táctico de Versiones y Git Reset.
+    Permite visualizar el grafo temporal del repositorio, seleccionar cualquier
+    nodo / commit destino (o usar el selector de commits recientes), inspeccionar
+    sus diferencias y distancia con HEAD, y ejecutar de forma segura las modalidades:
+    - --soft: Mantiene los cambios en Staging Area (index).
+    - --mixed: Mantiene los cambios en Working Directory (Git Default).
+    - --hard: Descarta cambios por completo y vuelve al estado exacto del commit.
+    """
+
+    action_requested = Signal(str, dict)
+    log_emitted = Signal(str)
+
+    def __init__(self, project: Project = None, parent=None):
+        super().__init__(parent)
+        self.project = project
+        self.selected_commit: Optional[str] = None
+        self.head_commit: Optional[str] = None
+        self.head_branch: str = "-"
+        self.selected_mode: str = "mixed"
+        self._recent_commits = []
+
+        self.init_ui()
+        if self.project:
+            self.update_project(self.project)
+
+    def init_ui(self):
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(8)
+
+        # Splitter principal horizontal (50% Grafo & Historial | 50% Inspector & Reset)
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
+
+        # =============================================================
+        # 1. PANEL IZQUIERDO: GRAFO & HISTORIAL TOPOLÓGICO (50%)
+        # =============================================================
+        left_card = QFrame()
+        left_card.setProperty("class", "sector_card")
+        left_layout = QVBoxLayout(left_card)
+        left_layout.setContentsMargins(14, 12, 14, 12)
+        left_layout.setSpacing(8)
+
+        # Encabezado del Grafo
+        g_header = QHBoxLayout()
+        g_box = QVBoxLayout()
+        g_box.setSpacing(2)
+        lbl_g_tag = QLabel("HISTORIAL TOPOLÓGICO // PUNTO DE RETORNO")
+        lbl_g_tag.setProperty("class", "sector_micro_tag")
+        lbl_g_title = QLabel("⏪ Grafo & Nodos Temporales")
+        lbl_g_title.setProperty("class", "sector_title")
+        g_box.addWidget(lbl_g_tag)
+        g_box.addWidget(lbl_g_title)
+        g_header.addLayout(g_box)
+
+        g_header.addStretch()
+
+        # Botones de Zoom y Refresco
+        self.btn_refresh_graph = QPushButton("🔄")
+        self.btn_refresh_graph.setProperty("class", "cyber_btn_compact")
+        self.btn_refresh_graph.setFixedSize(28, 28)
+        self.btn_refresh_graph.setCursor(Qt.PointingHandCursor)
+        self.btn_refresh_graph.setToolTip("Recargar Grafo e Historial")
+        self.btn_refresh_graph.clicked.connect(self._reload_view)
+        g_header.addWidget(self.btn_refresh_graph)
+
+        btn_zoom_in = QPushButton("➕")
+        btn_zoom_in.setProperty("class", "cyber_btn_compact")
+        btn_zoom_in.setFixedSize(28, 28)
+        btn_zoom_in.setToolTip("Acercar Zoom")
+        btn_zoom_in.clicked.connect(self._zoom_in)
+        g_header.addWidget(btn_zoom_in)
+
+        btn_zoom_out = QPushButton("➖")
+        btn_zoom_out.setProperty("class", "cyber_btn_compact")
+        btn_zoom_out.setFixedSize(28, 28)
+        btn_zoom_out.setToolTip("Alejar Zoom")
+        btn_zoom_out.clicked.connect(self._zoom_out)
+        g_header.addWidget(btn_zoom_out)
+
+        btn_zoom_reset = QPushButton("⊙")
+        btn_zoom_reset.setProperty("class", "cyber_btn_compact")
+        btn_zoom_reset.setFixedSize(28, 28)
+        btn_zoom_reset.setToolTip("Restablecer Vista")
+        btn_zoom_reset.clicked.connect(self._zoom_reset)
+        g_header.addWidget(btn_zoom_reset)
+
+        left_layout.addLayout(g_header)
+
+        # HUD Strip de diagnóstico
+        hud_row = QHBoxLayout()
+        hud_row.setSpacing(6)
+
+        self.lbl_hud_head = QLabel("📍 HEAD: -")
+        self.lbl_hud_head.setProperty("class", "badge_staged")
+        hud_row.addWidget(self.lbl_hud_head)
+
+        self.lbl_hud_target = QLabel("🎯 Destino: Ninguno")
+        self.lbl_hud_target.setProperty("class", "badge_telemetry")
+        hud_row.addWidget(self.lbl_hud_target)
+
+        self.lbl_hud_distance = QLabel("📏 Distancia: -")
+        self.lbl_hud_distance.setProperty("class", "badge_pending")
+        hud_row.addWidget(self.lbl_hud_distance)
+
+        hud_row.addStretch()
+        left_layout.addLayout(hud_row)
+
+        # Splitter vertical izquierdo (Grafo arriba | Lista rápida de commits abajo)
+        left_v_splitter = QSplitter(Qt.Vertical)
+        left_v_splitter.setChildrenCollapsible(False)
+
+        # Lienzo del Grafo Lumen
+        self.git_graph = LumenHorizontalGitGraphView(left_card)
+        self.git_graph.set_orientation("vertical")
+        self.git_graph.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.git_graph.commit_selected.connect(self._on_graph_commit_selected)
+        left_v_splitter.addWidget(self.git_graph)
+
+        # Lista scrolleable de commits recientes
+        recent_card = QFrame()
+        recent_layout = QVBoxLayout(recent_card)
+        recent_layout.setContentsMargins(0, 6, 0, 0)
+        recent_layout.setSpacing(4)
+
+        lbl_recent_title = QLabel("📜 Historial Reciente (Clic para seleccionar objetivo):")
+        lbl_recent_title.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 600;")
+        recent_layout.addWidget(lbl_recent_title)
+
+        scroll_recent = QScrollArea()
+        scroll_recent.setProperty("class", "clean_scroll")
+        scroll_recent.setWidgetResizable(True)
+        scroll_recent.setMinimumHeight(110)
+
+        self.recent_commits_container = QWidget()
+        self.recent_commits_layout = QVBoxLayout(self.recent_commits_container)
+        self.recent_commits_layout.setContentsMargins(2, 2, 2, 2)
+        self.recent_commits_layout.setSpacing(3)
+        scroll_recent.setWidget(self.recent_commits_container)
+        recent_layout.addWidget(scroll_recent, 1)
+
+        left_v_splitter.addWidget(recent_card)
+        left_v_splitter.setSizes([380, 160])
+
+        left_layout.addWidget(left_v_splitter, 1)
+        self.main_splitter.addWidget(left_card)
+
+        # =============================================================
+        # 2. PANEL DERECHO: INSPECTOR DE COMMIT & MANIOBRA DE RESET (50%)
+        # =============================================================
+        right_container = QWidget()
+        right_layout = QVBoxLayout(right_container)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(8)
+
+        # -------------------------------------------------------------
+        # 2.1 CARD INSPECTOR DE COMMIT DESTINO
+        # -------------------------------------------------------------
+        card_target = QFrame()
+        card_target.setProperty("class", "sector_card")
+        target_layout = QVBoxLayout(card_target)
+        target_layout.setContentsMargins(14, 12, 14, 12)
+        target_layout.setSpacing(8)
+
+        target_h = QHBoxLayout()
+        target_box = QVBoxLayout()
+        target_box.setSpacing(2)
+        lbl_t_tag = QLabel("INSPECTOR DEL PUNTO DE RESET")
+        lbl_t_tag.setProperty("class", "sector_micro_tag")
+        lbl_t_title = QLabel("🎯 Commit Objetivo")
+        lbl_t_title.setProperty("class", "sector_title")
+        target_box.addWidget(lbl_t_tag)
+        target_box.addWidget(lbl_t_title)
+        target_h.addLayout(target_box)
+        target_h.addStretch()
+
+        self.lbl_badge_mode = QLabel("MODO: MIXED")
+        self.lbl_badge_mode.setProperty("class", "badge_telemetry")
+        target_h.addWidget(self.lbl_badge_mode)
+        target_layout.addLayout(target_h)
+
+        # Metadatos del commit seleccionado
+        meta_grid = QVBoxLayout()
+        meta_grid.setSpacing(4)
+
+        self.lbl_target_hash = QLabel("<b>Hash:</b> -")
+        self.lbl_target_hash.setStyleSheet("color: #e2e8f0; font-size: 11px;")
+        meta_grid.addWidget(self.lbl_target_hash)
+
+        self.lbl_target_dist = QLabel("<b>Posición:</b> -")
+        self.lbl_target_dist.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 600;")
+        meta_grid.addWidget(self.lbl_target_dist)
+
+        self.lbl_target_author = QLabel("<b>Autor:</b> -")
+        self.lbl_target_author.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        meta_grid.addWidget(self.lbl_target_author)
+
+        self.lbl_target_date = QLabel("<b>Fecha:</b> -")
+        self.lbl_target_date.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        meta_grid.addWidget(self.lbl_target_date)
+
+        target_layout.addLayout(meta_grid)
+
+        # Mensaje del commit
+        lbl_msg_tag = QLabel("Mensaje del Commit:")
+        lbl_msg_tag.setStyleSheet("color: #94a3b8; font-size: 10px; font-weight: 700; text-transform: uppercase;")
+        target_layout.addWidget(lbl_msg_tag)
+
+        self.txt_commit_message = QTextEdit()
+        self.txt_commit_message.setReadOnly(True)
+        self.txt_commit_message.setProperty("class", "cyber_terminal")
+        self.txt_commit_message.setMinimumHeight(75)
+        self.txt_commit_message.setMaximumHeight(110)
+        self.txt_commit_message.setPlaceholderText("Selecciona un nodo del grafo o un commit de la lista para ver su mensaje...")
+        target_layout.addWidget(self.txt_commit_message)
+
+        right_layout.addWidget(card_target)
+
+        # -------------------------------------------------------------
+        # 2.2 CARD ESTRATEGIA DE RESET & EJECUCIÓN
+        # -------------------------------------------------------------
+        card_strategy = QFrame()
+        card_strategy.setProperty("class", "sector_card")
+        strat_layout = QVBoxLayout(card_strategy)
+        strat_layout.setContentsMargins(14, 12, 14, 12)
+        strat_layout.setSpacing(10)
+
+        strat_h = QHBoxLayout()
+        strat_box = QVBoxLayout()
+        strat_box.setSpacing(2)
+        lbl_s_tag = QLabel("PARÁMETROS DE REBOBINADO")
+        lbl_s_tag.setProperty("class", "sector_micro_tag")
+        lbl_s_title = QLabel("⚙️ Modalidad de Git Reset")
+        lbl_s_title.setProperty("class", "sector_title")
+        strat_box.addWidget(lbl_s_tag)
+        strat_box.addWidget(lbl_s_title)
+        strat_h.addLayout(strat_box)
+        strat_h.addStretch()
+        strat_layout.addLayout(strat_h)
+
+        # Radio Buttons
+        self.rb_group = QButtonGroup(self)
+
+        self.rb_mixed = QRadioButton("🟡 --mixed  (Git Default: Conserva cambios en Working Directory unstaged)")
+        self.rb_mixed.setCursor(Qt.PointingHandCursor)
+        self.rb_mixed.setChecked(True)
+        self.rb_group.addButton(self.rb_mixed)
+        strat_layout.addWidget(self.rb_mixed)
+
+        self.rb_soft = QRadioButton("🟢 --soft   (Rebobinado Seguro: Conserva cambios en Staging Area / Index)")
+        self.rb_soft.setCursor(Qt.PointingHandCursor)
+        self.rb_group.addButton(self.rb_soft)
+        strat_layout.addWidget(self.rb_soft)
+
+        self.rb_hard = QRadioButton("🔴 --hard   (¡Destructivo! Descarta cualquier cambio no comiteado)")
+        self.rb_hard.setCursor(Qt.PointingHandCursor)
+        self.rb_group.addButton(self.rb_hard)
+        strat_layout.addWidget(self.rb_hard)
+
+        self.rb_mixed.toggled.connect(self._on_mode_changed)
+        self.rb_soft.toggled.connect(self._on_mode_changed)
+        self.rb_hard.toggled.connect(self._on_mode_changed)
+
+        # Cuadro explicativo de impacto
+        self.card_info = QFrame()
+        self.card_info.setStyleSheet("background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; padding: 8px;")
+        info_layout = QVBoxLayout(self.card_info)
+        info_layout.setContentsMargins(6, 6, 6, 6)
+        info_layout.setSpacing(4)
+
+        self.lbl_mode_explanation = QLabel(
+            "<b>--mixed (Git Default):</b> Mueve HEAD al commit objetivo y desmarca el Staging Area. "
+            "Tus archivos modificados permanecen intactos en disco como cambios pendientes (unstaged)."
+        )
+        self.lbl_mode_explanation.setWordWrap(True)
+        self.lbl_mode_explanation.setStyleSheet("color: #cbd5e1; font-size: 11px;")
+        info_layout.addWidget(self.lbl_mode_explanation)
+
+        self.lbl_mode_warning = QLabel(
+            "⚠️ <b>ALERTA DE SEGURIDAD:</b> Esta maniobra es destructiva. Se perderán permanentemente todos los cambios no guardados en el directorio de trabajo."
+        )
+        self.lbl_mode_warning.setWordWrap(True)
+        self.lbl_mode_warning.setStyleSheet("color: #f87171; font-size: 11px; font-weight: 600;")
+        self.lbl_mode_warning.setVisible(False)
+        info_layout.addWidget(self.lbl_mode_warning)
+
+        strat_layout.addWidget(self.card_info)
+
+        strat_layout.addStretch()
+
+        # Botón de Acción de Reset
+        self.btn_execute = QPushButton("⏪ Selecciona un commit para resetear")
+        self.btn_execute.setProperty("class", "cyber_btn_primary")
+        self.btn_execute.setEnabled(False)
+        self.btn_execute.setFixedHeight(36)
+        self.btn_execute.setCursor(Qt.PointingHandCursor)
+        self.btn_execute.clicked.connect(self._confirm_and_execute_reset)
+        strat_layout.addWidget(self.btn_execute)
+
+        right_layout.addWidget(card_strategy, 1)
+
+        self.main_splitter.addWidget(right_container)
+        self.main_splitter.setSizes([500, 500])
+
+        root_layout.addWidget(self.main_splitter, 1)
+
+    # -------------------------------------------------------------
+    # CONTROL DE ZOOM Y VISTA
+    # -------------------------------------------------------------
+    def _zoom_in(self):
+        self.git_graph.zoom_in()
+
+    def _zoom_out(self):
+        self.git_graph.zoom_out()
+
+    def _zoom_reset(self):
+        self.git_graph.resetTransform()
+
+    def _reload_view(self):
+        if self.project:
+            self.update_project(self.project)
+
+    # -------------------------------------------------------------
+    # SELECCIÓN E INSPECCIÓN DE COMMITS
+    # -------------------------------------------------------------
+    def _on_graph_commit_selected(self, commit_hash: str):
+        """Disparado al hacer clic en un nodo del lienzo de grafo."""
+        self._inspect_commit(commit_hash)
+
+    def _inspect_commit(self, commit_hash: str):
+        """Inspecciona a fondo un commit seleccionado y calcula su distancia a HEAD."""
+        if not self.project or not self.project.path:
+            return
+
+        self.selected_commit = commit_hash.strip()
+        p_path = str(self.project.path)
+
+        # 1. Obtener detalles completos del commit
+        res = run_command(
+            ["git", "log", "-1", "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%ad%x1f%s%x1f%b", "--date=iso", self.selected_commit],
+            cwd=p_path
+        )
+        if not res.success or not res.output.strip():
+            return
+
+        parts = res.output.strip().split("\x1f")
+        full_hash = parts[0] if len(parts) > 0 else self.selected_commit
+        short_hash = parts[1] if len(parts) > 1 else self.selected_commit[:7]
+        author = parts[2] if len(parts) > 2 else "-"
+        email = parts[3] if len(parts) > 3 else ""
+        date_str = parts[4] if len(parts) > 4 else "-"
+        subject = parts[5] if len(parts) > 5 else ""
+        body = parts[6] if len(parts) > 6 else ""
+
+        # 2. Calcular distancia a HEAD
+        dist_res = run_command(["git", "rev-list", "--count", f"{self.selected_commit}..HEAD"], cwd=p_path)
+        dist_text = "-"
+        if dist_res.success:
+            try:
+                count = int(dist_res.output.strip())
+                if count == 0:
+                    head_check = run_command(["git", "rev-parse", "HEAD"], cwd=p_path)
+                    if head_check.success and head_check.output.strip() == full_hash:
+                        dist_text = "📍 Commit actual (HEAD)"
+                    else:
+                        dist_text = "Divergente / Ahead respecto a HEAD"
+                elif count == 1:
+                    dist_text = "⏪ HEAD~1 (1 commit atrás)"
+                else:
+                    dist_text = f"⏪ HEAD~{count} ({count} commits atrás)"
+            except ValueError:
+                dist_text = "-"
+
+        # 3. Actualizar UI del Inspector
+        self.lbl_target_hash.setText(f"<b>Hash:</b> <code>{short_hash}</code> ({full_hash[:16]}...)")
+        self.lbl_target_dist.setText(f"<b>Posición:</b> {dist_text}")
+        self.lbl_target_author.setText(f"<b>Autor:</b> {author} &lt;{email}&gt;")
+        self.lbl_target_date.setText(f"<b>Fecha:</b> {date_str}")
+
+        msg_content = f"{subject}\n\n{body}".strip() if body.strip() else subject
+        self.txt_commit_message.setPlainText(msg_content)
+
+        self.lbl_hud_target.setText(f"🎯 Destino: {short_hash}")
+        self.lbl_hud_distance.setText(f"📏 {dist_text}")
+
+        self._update_execute_button()
+
+    def _on_mode_changed(self):
+        """Maneja el cambio de modalidad de reset actualizando advertencias y estilos."""
+        if self.rb_soft.isChecked():
+            self.selected_mode = "soft"
+            self.lbl_badge_mode.setText("MODO: SOFT")
+            self.lbl_mode_explanation.setText(
+                "<b>--soft:</b> Conserva los cambios en el Staging Area (index). Tus archivos modificados siguen preparados y no se pierde ningún cambio. Ideal para reempaquetar commits o corregir mensajes."
+            )
+            self.lbl_mode_warning.setVisible(False)
+            self.card_info.setStyleSheet("background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 6px; padding: 8px;")
+        elif self.rb_hard.isChecked():
+            self.selected_mode = "hard"
+            self.lbl_badge_mode.setText("MODO: HARD (DESTRUCTIVO)")
+            self.lbl_mode_explanation.setText(
+                "<b>--hard:</b> Descarta cualquier cambio no comiteado tanto del Working Directory como del Staging Area. El código vuelve de forma exacta y pura al commit seleccionado."
+            )
+            self.lbl_mode_warning.setText(
+                "⚠️ <b>ALERTA DE SEGURIDAD:</b> Esta maniobra es destructiva. Se perderán de manera irreversible todos los cambios locales no guardados."
+            )
+            self.lbl_mode_warning.setVisible(True)
+            self.card_info.setStyleSheet("background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 6px; padding: 8px;")
+        else:
+            self.selected_mode = "mixed"
+            self.lbl_badge_mode.setText("MODO: MIXED")
+            self.lbl_mode_explanation.setText(
+                "<b>--mixed (Git Default):</b> Conserva las modificaciones en tu directorio de trabajo (Working Directory), pero limpia el Staging Area. Tus archivos quedan listos como cambios no preparados (unstaged)."
+            )
+            self.lbl_mode_warning.setVisible(False)
+            self.card_info.setStyleSheet("background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; padding: 8px;")
+
+        self._update_execute_button()
+
+    def _update_execute_button(self):
+        """Actualiza el texto y apariencia del botón de ejecución según el commit y modo."""
+        if not self.selected_commit:
+            self.btn_execute.setEnabled(False)
+            self.btn_execute.setText("⏪ Selecciona un commit para resetear")
+            return
+
+        short = self.selected_commit[:7]
+        self.btn_execute.setEnabled(True)
+        if self.selected_mode == "hard":
+            self.btn_execute.setText(f"⚠️ Ejecutar HARD Reset a {short}")
+            self.btn_execute.setProperty("class", "cyber_btn_danger")
+        elif self.selected_mode == "soft":
+            self.btn_execute.setText(f"⏪ Ejecutar SOFT Reset a {short}")
+            self.btn_execute.setProperty("class", "cyber_btn_primary")
+        else:
+            self.btn_execute.setText(f"⏪ Ejecutar MIXED Reset a {short}")
+            self.btn_execute.setProperty("class", "cyber_btn_primary")
+
+        self.btn_execute.style().unpolish(self.btn_execute)
+        self.btn_execute.style().polish(self.btn_execute)
+
+    # -------------------------------------------------------------
+    # CONFIRMACIÓN Y EJECUCIÓN
+    # -------------------------------------------------------------
+    def _confirm_and_execute_reset(self):
+        """Abre un diálogo de confirmación táctico y ejecuta el comando git reset."""
+        if not self.project or not self.project.path or not self.selected_commit:
+            return
+
+        mode = self.selected_mode
+        target_hash = self.selected_commit
+        short_hash = target_hash[:7]
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Confirmar Rebobinado Táctico (Git Reset)")
+        dialog.setMinimumWidth(460)
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #0b1120;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 8px;
+            }
+        """)
+        d_layout = QVBoxLayout(dialog)
+        d_layout.setSpacing(12)
+        d_layout.setContentsMargins(18, 18, 18, 18)
+
+        title_lbl = QLabel(f"⏪ Confirmar Git Reset (--{mode})")
+        title_lbl.setStyleSheet("color: #38bdf8; font-size: 14px; font-weight: bold;")
+        d_layout.addWidget(title_lbl)
+
+        msg_info = QLabel(
+            f"Se ejecutará la siguiente maniobra en <b>{self.project.name}</b>:<br><br>"
+            f"<code style='color: #a5b4fc; font-size: 12px; background: rgba(0,0,0,0.45); padding: 5px 8px; border-radius: 4px;'>"
+            f"git reset --{mode} {short_hash}</code><br><br>"
+            f"<b>Commit Destino:</b> <code>{target_hash}</code><br>"
+            f"<b>Efecto:</b> HEAD se moverá hacia este commit."
+        )
+        msg_info.setWordWrap(True)
+        msg_info.setStyleSheet("color: #e2e8f0; font-size: 12px;")
+        d_layout.addWidget(msg_info)
+
+        chk_confirm = None
+        if mode == "hard":
+            warn_card = QFrame()
+            warn_card.setStyleSheet("background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 6px; padding: 10px;")
+            warn_layout = QVBoxLayout(warn_card)
+            warn_lbl = QLabel("⚠️ ATENCIÓN CRÍTICA: Se perderán todos los cambios locales no confirmados.")
+            warn_lbl.setStyleSheet("color: #fca5a5; font-size: 11px; font-weight: bold;")
+            warn_layout.addWidget(warn_lbl)
+            d_layout.addWidget(warn_card)
+
+            chk_confirm = QCheckBox("Entiendo que los cambios locales sin guardar se descartarán irreversiblemente.")
+            chk_confirm.setStyleSheet("color: #f8fafc; font-size: 11px;")
+            d_layout.addWidget(chk_confirm)
+
+        btn_row = QHBoxLayout()
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.setProperty("class", "cyber_btn")
+        btn_cancel.clicked.connect(dialog.reject)
+        btn_row.addWidget(btn_cancel)
+
+        btn_confirm = QPushButton(f"Ejecutar Reset (--{mode})")
+        if mode == "hard":
+            btn_confirm.setProperty("class", "cyber_btn_danger")
+            if chk_confirm:
+                btn_confirm.setEnabled(False)
+                chk_confirm.toggled.connect(btn_confirm.setEnabled)
+        else:
+            btn_confirm.setProperty("class", "cyber_btn_primary")
+
+        btn_confirm.clicked.connect(dialog.accept)
+        btn_row.addWidget(btn_confirm)
+        d_layout.addLayout(btn_row)
+
+        if dialog.exec() == QDialog.Accepted:
+            cmd = ["git", "reset", f"--{mode}", target_hash]
+            res = run_command(cmd, cwd=self.project.path)
+            if res.success:
+                self.log_emitted.emit(f"⏪ <b>Git Reset (--{mode})</b> completado exitosamente hacia <code>{short_hash}</code>.")
+                self.action_requested.emit("git_reset", {
+                    "mode": mode,
+                    "commit": target_hash,
+                    "project": self.project.name
+                })
+            else:
+                self.log_emitted.emit(f"⚠️ Error al ejecutar git reset: {res.output.strip()}")
+
+            self.update_project(self.project)
+
+    # -------------------------------------------------------------
+    # CARGA DE COMMITS RECIENTES Y CICLO DE VIDA
+    # -------------------------------------------------------------
+    def _load_recent_commits(self):
+        """Carga la lista rápida de commits recientes en el panel inferior izquierdo."""
+        if not self.project or not self.project.path:
+            return
+
+        while self.recent_commits_layout.count():
+            item = self.recent_commits_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        self._recent_commits = []
+        res = run_command(
+            ["git", "log", "-n", "20", "--format=%h%x1f%s%x1f%ar%x1f%an", "HEAD"],
+            cwd=self.project.path
+        )
+        if not res.success or not res.output.strip():
+            empty_lbl = QLabel("Sin historial de commits disponible.")
+            empty_lbl.setStyleSheet("color: #64748b; font-size: 11px;")
+            self.recent_commits_layout.addWidget(empty_lbl)
+            return
+
+        for line in res.output.strip().split("\n"):
+            parts = line.split("\x1f")
+            if len(parts) >= 4:
+                h, s, r, a = parts[0], parts[1], parts[2], parts[3]
+                self._recent_commits.append({"hash": h, "subject": s, "relative": r, "author": a})
+
+                btn_item = QPushButton()
+                btn_item.setCursor(Qt.PointingHandCursor)
+                btn_item.setStyleSheet("""
+                    QPushButton {
+                        background: rgba(255, 255, 255, 0.03);
+                        border: 1px solid rgba(255, 255, 255, 0.06);
+                        border-radius: 6px;
+                        padding: 5px 8px;
+                        text-align: left;
+                    }
+                    QPushButton:hover {
+                        background: rgba(255, 255, 255, 0.08);
+                        border-color: rgba(56, 189, 248, 0.4);
+                    }
+                """)
+                btn_layout = QHBoxLayout(btn_item)
+                btn_layout.setContentsMargins(4, 2, 4, 2)
+                btn_layout.setSpacing(8)
+
+                lbl_h = QLabel(h)
+                lbl_h.setProperty("class", "badge_telemetry")
+                lbl_h.setFixedWidth(65)
+                btn_layout.addWidget(lbl_h)
+
+                lbl_s = QLabel(s)
+                lbl_s.setStyleSheet("color: #e2e8f0; font-weight: 600; font-size: 11px;")
+                btn_layout.addWidget(lbl_s, 1)
+
+                lbl_meta = QLabel(f"{r} · {a}")
+                lbl_meta.setStyleSheet("color: #94a3b8; font-size: 10px;")
+                btn_layout.addWidget(lbl_meta)
+
+                btn_item.clicked.connect(lambda checked=False, commit_h=h: self._inspect_commit(commit_h))
+                self.recent_commits_layout.addWidget(btn_item)
+
+        self.recent_commits_layout.addStretch()
+
+    def update_project(self, project: Project):
+        """Actualiza el estado topológico y visual del sub-sector."""
+        self.project = project
+        if not self.project or not self.project.path:
+            return
+        p_path = str(self.project.path)
+
+        # 1. Obtener HEAD y rama activa
+        head_res = run_command(["git", "rev-parse", "--short", "HEAD"], cwd=p_path)
+        branch_res = run_command(["git", "branch", "--show-current"], cwd=p_path)
+        self.head_commit = head_res.output.strip() if head_res.success else "-"
+        self.head_branch = branch_res.output.strip() if branch_res.success else "detached"
+
+        self.lbl_hud_head.setText(f"📍 HEAD: {self.head_commit} ({self.head_branch})")
+
+        # 2. Cargar grafo visual
+        try:
+            self.git_graph.load_project_graph(p_path)
+        except Exception as e:
+            self.log_emitted.emit(f"Error cargando grafo en Reset: {e}")
+
+        # 3. Cargar lista de commits recientes
+        self._load_recent_commits()
+
+        # 4. Refrescar o preseleccionar commit objetivo
+        if self.selected_commit:
+            self._inspect_commit(self.selected_commit)
+        else:
+            if self._recent_commits and len(self._recent_commits) > 1:
+                self._inspect_commit(self._recent_commits[1]["hash"])
+            elif self.head_commit and self.head_commit != "-":
+                self._inspect_commit(self.head_commit)
+
+    def teardown(self):
+        """Detiene timers y hilos activos en el subsector."""
+        pass
+
+
+# =============================================================
+# SECTOR 01: ORQUESTADOR PRINCIPAL (4 NODOS MAESTROS)
 # =============================================================
 
 class Sector1GitView(QWidget):
     """
     Sector 01: Protocolo GitOps y Control de Versiones.
-    Orquestador de los 3 Nodos Maestros con navegación por píldora:
+    Orquestador de los 4 Nodos Maestros con navegación por píldora:
     - 1.1 Ciclo de trabajo (git add, git commit, git push)
     - 1.2 Gestor de ramas (visibilidad, creación, eliminación, fusión)
     - 1.3 Estado y sincronización (status, fetch, pull, visibilidad)
+    - 1.4 Reset táctico e historial (rebobinado --soft, --mixed, --hard con grafo interactivo)
     """
 
     action_requested = Signal(str, dict)
@@ -3003,7 +3646,8 @@ class Sector1GitView(QWidget):
         sub_sectors = [
             ("⚡  1.1 CICLO DE TRABAJO", "Flujo operativo: git add, archivos del workspace, git push y redactor IA"),
             ("🌿  1.2 GESTOR DE RAMAS", "Control de bifurcaciones, visibilidad, creación, eliminación y fusión"),
-            ("🔄  1.3 ESTADO & SINCRONIZACIÓN", "Status del árbol de trabajo, fetch, pull y visibilidad del repositorio")
+            ("🔄  1.3 ESTADO & SINCRONIZACIÓN", "Status del árbol de trabajo, fetch, pull y visibilidad del repositorio"),
+            ("⏪  1.4 RESET & HISTORIAL", "Rebobinado táctico de commits (--soft, --mixed, --hard) con visualización de grafo")
         ]
         self.sub_pill = SectorSwitcherPill(sectors=sub_sectors)
         self.sub_pill.sector_changed.connect(self.switch_sub_sector)
@@ -3014,23 +3658,22 @@ class Sector1GitView(QWidget):
         # -------------------------------------------------------------
         self.sub_stack = QStackedWidget()
 
-        # 1.1 Ciclo de Trabajo
+        # 1.1 Ciclo de Trabajo (inmediato)
         self.workflow_view = Sector11WorkflowView(self.project)
         self.workflow_view.log_emitted.connect(self.log_emitted.emit)
         self.workflow_view.action_requested.connect(self.action_requested.emit)
         self.sub_stack.addWidget(self.workflow_view)
 
-        # 1.2 Gestor de Ramas
-        self.branches_view = Sector12BranchesView(self.project)
-        self.branches_view.log_emitted.connect(self.log_emitted.emit)
-        self.branches_view.action_requested.connect(self.action_requested.emit)
-        self.sub_stack.addWidget(self.branches_view)
-
-        # 1.3 Estado y Sincronización
-        self.sync_view = Sector13SyncView(self.project)
-        self.sync_view.log_emitted.connect(self.log_emitted.emit)
-        self.sync_view.action_requested.connect(self.action_requested.emit)
-        self.sub_stack.addWidget(self.sync_view)
+        # Placeholders diferidos para 1.2, 1.3 y 1.4
+        self.branches_view = None
+        self.sync_view = None
+        self.reset_view = None
+        self.placeholder_branches = QWidget()
+        self.placeholder_sync = QWidget()
+        self.placeholder_reset = QWidget()
+        self.sub_stack.addWidget(self.placeholder_branches)
+        self.sub_stack.addWidget(self.placeholder_sync)
+        self.sub_stack.addWidget(self.placeholder_reset)
 
         root_layout.addWidget(self.sub_stack, 1)
 
@@ -3039,30 +3682,59 @@ class Sector1GitView(QWidget):
         self.sub_pill.select_sector(0)
 
     def switch_sub_sector(self, index: int):
-        """Cambia fluidamente entre los 3 sub-sectores tácticos."""
+        """Cambia fluidamente entre los 4 sub-sectores tácticos con instanciación bajo demanda."""
+        if index == 1 and self.branches_view is None:
+            self.branches_view = Sector12BranchesView(self.project)
+            self.branches_view.log_emitted.connect(self.log_emitted.emit)
+            self.branches_view.action_requested.connect(self.action_requested.emit)
+            self.sub_stack.removeWidget(self.placeholder_branches)
+            self.placeholder_branches.deleteLater()
+            self.sub_stack.insertWidget(1, self.branches_view)
+        elif index == 2 and self.sync_view is None:
+            self.sync_view = Sector13SyncView(self.project)
+            self.sync_view.log_emitted.connect(self.log_emitted.emit)
+            self.sync_view.action_requested.connect(self.action_requested.emit)
+            self.sub_stack.removeWidget(self.placeholder_sync)
+            self.placeholder_sync.deleteLater()
+            self.sub_stack.insertWidget(2, self.sync_view)
+        elif index == 3 and self.reset_view is None:
+            self.reset_view = Sector14ResetView(self.project)
+            self.reset_view.log_emitted.connect(self.log_emitted.emit)
+            self.reset_view.action_requested.connect(self.action_requested.emit)
+            self.sub_stack.removeWidget(self.placeholder_reset)
+            self.placeholder_reset.deleteLater()
+            self.sub_stack.insertWidget(3, self.reset_view)
+
         self.sub_stack.setCurrentIndex(index)
-        names = ["1.1 Ciclo de Trabajo", "1.2 Gestor de Ramas", "1.3 Estado & Sincronización"]
+        names = ["1.1 Ciclo de Trabajo", "1.2 Gestor de Ramas", "1.3 Estado & Sincronización", "1.4 Reset & Historial"]
         if 0 <= index < len(names):
             self.log_emitted.emit(f"Sub-sector activo: <b>{names[index]}</b>")
-        if index == 0 and hasattr(self, "workflow_view"):
+        if index == 0 and hasattr(self, "workflow_view") and self.workflow_view:
             self.workflow_view.update_project(self.project)
-        elif index == 1 and hasattr(self, "branches_view"):
+        elif index == 1 and hasattr(self, "branches_view") and self.branches_view:
             self.branches_view.update_project(self.project)
-        elif index == 2 and hasattr(self, "sync_view"):
+        elif index == 2 and hasattr(self, "sync_view") and self.sync_view:
             self.sync_view.update_project(self.project)
+        elif index == 3 and hasattr(self, "reset_view") and self.reset_view:
+            self.reset_view.update_project(self.project)
 
     def update_project(self, project: Project):
-        """Propaga la actualización del proyecto a las sub-vistas."""
+        """Propaga la actualización del proyecto solo al sub-sector activo."""
         self.project = project
-        if hasattr(self, "workflow_view"):
+        curr = self.sub_stack.currentIndex()
+        if curr == 0 and hasattr(self, "workflow_view") and self.workflow_view:
             self.workflow_view.update_project(project)
-        if hasattr(self, "branches_view"):
+        elif curr == 1 and hasattr(self, "branches_view") and self.branches_view:
             self.branches_view.update_project(project)
-        if hasattr(self, "sync_view"):
+        elif curr == 2 and hasattr(self, "sync_view") and self.sync_view:
             self.sync_view.update_project(project)
+        elif curr == 3 and hasattr(self, "reset_view") and self.reset_view:
+            self.reset_view.update_project(project)
 
     def teardown(self):
         """Detiene timers y hilos activos en los subsectores."""
         if hasattr(self, "workflow_view") and hasattr(self.workflow_view, "teardown"):
             self.workflow_view.teardown()
+        if hasattr(self, "reset_view") and hasattr(self.reset_view, "teardown"):
+            self.reset_view.teardown()
 

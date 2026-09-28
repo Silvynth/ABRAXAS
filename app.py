@@ -52,15 +52,17 @@ class NeosShellWindow(QWidget):
 
     def closeEvent(self, event):
         """Limpieza y detención ordenada de hilos en segundo plano."""
-        if hasattr(self, "page_umbra"):
+        if hasattr(self, "page_umbra") and self.page_umbra:
             self.page_umbra.close()
-        if hasattr(self, "page_lumen"):
+        if hasattr(self, "page_lumen") and self.page_lumen:
             self.page_lumen.close()
-        if hasattr(self, "page_proyectos") and hasattr(self.page_proyectos, "sync_page"):
+        if hasattr(self, "page_proyectos") and self.page_proyectos and hasattr(self.page_proyectos, "sync_page"):
             sp = self.page_proyectos.sync_page
             if hasattr(sp, "detect_worker") and sp.detect_worker and sp.detect_worker.isRunning():
                 sp.detect_worker.quit()
-                sp.detect_worker.wait(500)
+                if not sp.detect_worker.wait(100):
+                    sp.detect_worker.terminate()
+                    sp.detect_worker.wait(50)
         super().closeEvent(event)
 
     def center_window(self):
@@ -135,18 +137,20 @@ class NeosShellWindow(QWidget):
 
         self.stacked = QStackedWidget()
 
-        # Construir páginas del sistema
+        # Construir páginas del sistema con carga bajo demanda (Lazy Loading)
         self.page_umbra = UmbraView()
-        self.page_lumen = LumenView(self.cfg)
-        self.page_proyectos = ProjectsView(str(get_active_config_path()))
-        self.page_proyectos.set_theme("monochrome")
-        self.page_config = ConfigView(str(get_active_config_path()))
-        self.page_config.config_saved.connect(self._on_config_saved)
+        self.page_lumen = None
+        self.page_proyectos = None
+        self.page_config = None
+
+        self.placeholder_lumen = QWidget()
+        self.placeholder_proyectos = QWidget()
+        self.placeholder_config = QWidget()
 
         self.stacked.addWidget(self.page_umbra)
-        self.stacked.addWidget(self.page_lumen)
-        self.stacked.addWidget(self.page_proyectos)
-        self.stacked.addWidget(self.page_config)
+        self.stacked.addWidget(self.placeholder_lumen)
+        self.stacked.addWidget(self.placeholder_proyectos)
+        self.stacked.addWidget(self.placeholder_config)
 
         c_layout.addWidget(self.stacked)
         root_layout.addWidget(content_area)
@@ -155,12 +159,31 @@ class NeosShellWindow(QWidget):
         self.switch_tab(0)
 
     def switch_tab(self, index: int):
+        # Instanciar en caliente bajo demanda para velocidad cero fricción al inicio
+        if index == 1 and self.page_lumen is None:
+            self.page_lumen = LumenView(self.cfg)
+            self.stacked.removeWidget(self.placeholder_lumen)
+            self.placeholder_lumen.deleteLater()
+            self.stacked.insertWidget(1, self.page_lumen)
+        elif index == 2 and self.page_proyectos is None:
+            self.page_proyectos = ProjectsView(str(get_active_config_path()))
+            self.page_proyectos.set_theme("monochrome")
+            self.stacked.removeWidget(self.placeholder_proyectos)
+            self.placeholder_proyectos.deleteLater()
+            self.stacked.insertWidget(2, self.page_proyectos)
+        elif index == 3 and self.page_config is None:
+            self.page_config = ConfigView(str(get_active_config_path()))
+            self.page_config.config_saved.connect(self._on_config_saved)
+            self.stacked.removeWidget(self.placeholder_config)
+            self.placeholder_config.deleteLater()
+            self.stacked.insertWidget(3, self.page_config)
+
         self.stacked.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
-        if index == 1 and hasattr(self, "page_lumen"):
+        if index == 1 and hasattr(self, "page_lumen") and self.page_lumen:
             self.page_lumen.reload()
-        elif index == 2 and hasattr(self, "page_proyectos"):
+        elif index == 2 and hasattr(self, "page_proyectos") and self.page_proyectos:
             self.page_proyectos.load_projects()
 
     def _on_config_saved(self, new_cfg_dict=None):

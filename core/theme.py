@@ -27,6 +27,18 @@ MONOCHROME_PALETTE = {
     "ACCENT_PILL": "rgba(255, 255, 255, 0.08)", # Fondo de botones seleccionados
 }
 
+# Paleta táctica Haute Horlogerie: escala de grises puros de alto contraste para almacenamiento
+STORAGE_PALETTE = [
+    "#ffffff",  # Blanco Polar (Elemento Principal / Mayor masa de datos)
+    "#d1d5db",  # Platino Claro
+    "#9ca3af",  # Titanio / Gris Medio
+    "#6b7280",  # Acero Mate
+    "#4b5563",  # Grafito Técnico
+    "#374151",  # Carbón Medio
+    "#282c37",  # Obsidiana Mate
+    "#1e222b",  # Carbón Profundo
+]
+
 def generate_monochrome_stylesheet() -> str:
     """Genera la hoja de estilos QSS puramente monocromática para Abraxas 2.0."""
     p = MONOCHROME_PALETTE
