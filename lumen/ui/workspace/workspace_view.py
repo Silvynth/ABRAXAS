@@ -284,6 +284,8 @@ class LumenWorkspaceView(QWidget):
 
     def _on_action_requested(self, action: str, data: dict):
         self.terminal.log_info("ACTION", f"Comando disparado: <b>{action}</b> {data if data else ''}")
+        if action.startswith("git_branch_"):
+            self.sync_workspace()
 
     def set_theme(self, theme_key: str = None):
         """Propaga el cambio de tema al HUD, barra de navegación, sectores y terminal."""

@@ -979,6 +979,7 @@ class BranchListItemWidget(QFrame):
     checkout_requested = Signal(str)
     push_requested = Signal(str)
     delete_requested = Signal(str)
+    rename_requested = Signal(str)
 
     def __init__(
         self,
@@ -1054,6 +1055,13 @@ class BranchListItemWidget(QFrame):
                     btn_push.setToolTip(f"Subir / publicar rama actual '{branch_name}' al repositorio remoto")
                     btn_push.clicked.connect(lambda: self.push_requested.emit(self.branch_name))
                     layout.addWidget(btn_push)
+
+                btn_rename = QPushButton("✏")
+                btn_rename.setProperty("class", "cyber_btn_compact")
+                btn_rename.setCursor(Qt.PointingHandCursor)
+                btn_rename.setToolTip(f"Renombrar rama activa '{branch_name}'")
+                btn_rename.clicked.connect(lambda: self.rename_requested.emit(self.branch_name))
+                layout.addWidget(btn_rename)
             elif is_remote:
                 # Rama Remota no descargada
                 lbl_tag = QLabel("REMOTA")
@@ -1090,6 +1098,13 @@ class BranchListItemWidget(QFrame):
                     btn_push.setToolTip(f"Subir / publicar rama local '{branch_name}' al repositorio remoto")
                     btn_push.clicked.connect(lambda: self.push_requested.emit(self.branch_name))
                     layout.addWidget(btn_push)
+
+                btn_rename = QPushButton("✏")
+                btn_rename.setProperty("class", "cyber_btn_compact")
+                btn_rename.setCursor(Qt.PointingHandCursor)
+                btn_rename.setToolTip(f"Renombrar rama local '{branch_name}'")
+                btn_rename.clicked.connect(lambda: self.rename_requested.emit(self.branch_name))
+                layout.addWidget(btn_rename)
 
                 # Botón rápido para eliminar con confirmación crítica escrita
                 btn_del = QPushButton("🗑")
@@ -1522,6 +1537,7 @@ class Sector12BranchesView(QWidget):
             ctrl_item.checkout_requested.connect(self._checkout_branch)
             ctrl_item.push_requested.connect(self._push_branch)
             ctrl_item.delete_requested.connect(self._delete_branch)
+            ctrl_item.rename_requested.connect(self._rename_branch)
             self._ctrl_branch_widgets[b_name] = ctrl_item
             self.ctrl_branch_layout.addWidget(ctrl_item)
 
@@ -1805,6 +1821,165 @@ class Sector12BranchesView(QWidget):
                     self.action_requested.emit("git_branch_deleted", {"branch": branch_name})
                 else:
                     self.log_emitted.emit(f"Error al eliminar rama: {res_force.output}")
+
+    def _rename_branch(self, branch_name: str):
+        """
+        Permite renombrar una rama local (activa o inactiva).
+        Abre un diálogo modal para ingresar el nuevo nombre, valida las reglas de git
+        y opcionalmente sincroniza con el repositorio remoto si la rama ya estaba publicada.
+        """
+        if not self.project or not self.project.path or not branch_name:
+            return
+
+        is_remote = branch_name.startswith("origin/")
+        if is_remote:
+            self.log_emitted.emit("Operación denegada: Solo se pueden renombrar ramas locales directamente.")
+            return
+
+        # Verificar si es la rama activa actual
+        res_active = run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=self.project.path)
+        active_b = res_active.stdout.strip() if res_active.success else ""
+        is_active = (branch_name == active_b)
+
+        # Verificar si tiene upstream o si existe en origin
+        res_upstream = run_command(["git", "rev-parse", "--abbrev-ref", f"{branch_name}@{{upstream}}"], cwd=self.project.path)
+        is_published = res_upstream.success and bool(res_upstream.stdout.strip())
+        if not is_published:
+            res_origin = run_command(["git", "rev-parse", "--verify", f"refs/remotes/origin/{branch_name}"], cwd=self.project.path)
+            is_published = res_origin.success
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Renombrar Rama")
+        dialog.setModal(True)
+        dialog.setFixedWidth(460)
+        dialog.setProperty("class", "cyber_dialog")
+
+        d_layout = QVBoxLayout(dialog)
+        d_layout.setContentsMargins(20, 18, 20, 18)
+        d_layout.setSpacing(12)
+
+        lbl_tag = QLabel("CONTROL DE RAMAS // RENOMBRAR")
+        lbl_tag.setProperty("class", "sector_micro_tag")
+        d_layout.addWidget(lbl_tag)
+
+        active_str = " (rama activa actual)" if is_active else ""
+        lbl_msg = QLabel(f"Ingresa el nuevo nombre para la rama <b>{branch_name}</b>{active_str}:")
+        lbl_msg.setProperty("class", "sector_desc")
+        lbl_msg.setWordWrap(True)
+        d_layout.addWidget(lbl_msg)
+
+        txt_new_name = QLineEdit()
+        txt_new_name.setProperty("class", "cyber_input")
+        txt_new_name.setText(branch_name)
+        txt_new_name.selectAll()
+        d_layout.addWidget(txt_new_name)
+
+        lbl_status = QLabel("")
+        lbl_status.setProperty("class", "badge_pending")
+        lbl_status.setVisible(False)
+        d_layout.addWidget(lbl_status)
+
+        chk_remote = None
+        if is_published:
+            chk_remote = QCheckBox("Actualizar también en el repositorio remoto (origin)")
+            chk_remote.setToolTip("Publicará la rama con el nuevo nombre y eliminará la rama anterior en origin.")
+            d_layout.addWidget(chk_remote)
+
+            lbl_note = QLabel("ℹ Esta rama está publicada en origin. Si marcas esta opción, se creará la rama con el nuevo nombre en origin y se eliminará la anterior.")
+            lbl_note.setProperty("class", "sector_desc")
+            lbl_note.setWordWrap(True)
+            d_layout.addWidget(lbl_note)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.setProperty("class", "cyber_btn")
+        btn_cancel.setCursor(Qt.PointingHandCursor)
+        btn_cancel.clicked.connect(dialog.reject)
+        btn_row.addWidget(btn_cancel)
+
+        btn_confirm = QPushButton("✏ Renombrar")
+        btn_confirm.setProperty("class", "cyber_btn_primary")
+        btn_confirm.setCursor(Qt.PointingHandCursor)
+        btn_confirm.setEnabled(False)
+        btn_row.addWidget(btn_confirm)
+        d_layout.addLayout(btn_row)
+
+        def _validate(text: str):
+            clean = text.strip()
+            if not clean:
+                lbl_status.setText("El nombre no puede estar vacío.")
+                lbl_status.setVisible(True)
+                btn_confirm.setEnabled(False)
+                return
+            if clean == branch_name:
+                lbl_status.setText("El nuevo nombre debe ser diferente al actual.")
+                lbl_status.setVisible(True)
+                btn_confirm.setEnabled(False)
+                return
+
+            chk_fmt = run_command(["git", "check-ref-format", "--branch", clean], cwd=self.project.path)
+            if not chk_fmt.success:
+                lbl_status.setText("Nombre de rama no válido para Git.")
+                lbl_status.setVisible(True)
+                btn_confirm.setEnabled(False)
+                return
+
+            chk_exists = run_command(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{clean}"], cwd=self.project.path)
+            if chk_exists.returncode == 0:
+                lbl_status.setText("Ya existe una rama local con este nombre.")
+                lbl_status.setVisible(True)
+                btn_confirm.setEnabled(False)
+                return
+
+            lbl_status.setVisible(False)
+            btn_confirm.setEnabled(True)
+
+        txt_new_name.textChanged.connect(_validate)
+        txt_new_name.returnPressed.connect(lambda: btn_confirm.click() if btn_confirm.isEnabled() else None)
+        btn_confirm.clicked.connect(dialog.accept)
+
+        _validate(txt_new_name.text())
+
+        if dialog.exec() != QDialog.Accepted:
+            self.log_emitted.emit(f"Renombrado de rama <b>{branch_name}</b> cancelado por el usuario.")
+            return
+
+        new_name = txt_new_name.text().strip()
+        update_remote = chk_remote.isChecked() if chk_remote else False
+
+        self.log_emitted.emit(f"Renombrando rama <b>{branch_name}</b> ➔ <b>{new_name}</b>...")
+
+        res = run_command(["git", "branch", "-m", branch_name, new_name], cwd=self.project.path)
+        if not res.success:
+            self.log_emitted.emit(f"Error al renombrar rama: {res.output}")
+            return
+
+        self.log_emitted.emit(f"✨ Rama renombrada con éxito: <b>{branch_name}</b> ➔ <b>{new_name}</b>.")
+
+        if update_remote:
+            self.log_emitted.emit(f"Desplegando nueva rama <b>{new_name}</b> en origin (-u)...")
+            res_push = run_command(["git", "push", "-u", "origin", new_name], cwd=self.project.path)
+            if res_push.success:
+                self.log_emitted.emit(f"Eliminando rama antigua <b>{branch_name}</b> de origin...")
+                res_del_rem = run_command(["git", "push", "origin", "--delete", branch_name], cwd=self.project.path)
+                if res_del_rem.success:
+                    self.log_emitted.emit(f"🌐 Rama remota origin/<b>{branch_name}</b> reemplazada por origin/<b>{new_name}</b>.")
+                else:
+                    self.log_emitted.emit(f"Alerta al eliminar rama antigua en remoto: {res_del_rem.output}")
+            else:
+                self.log_emitted.emit(f"Alerta al desplegar nueva rama en remoto: {res_push.output}")
+
+        if is_active:
+            self.project.current_branch = new_name
+
+        self.update_project(self.project)
+        self.action_requested.emit("git_branch_renamed", {
+            "old_branch": branch_name,
+            "new_branch": new_name,
+            "remote_updated": update_remote
+        })
 
     def _refresh_branches(self):
         """Recarga manualmente el estado de las ramas y el grafo."""
